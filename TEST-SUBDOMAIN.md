@@ -1,4 +1,4 @@
-# Test copy at test.boss.freedomlifex.in
+# Test copy at test.freedomlifex.co.in
 
 A second, fully separate CRM on the **same VPS** as production
 (boss.freedomlifex.in), for trying changes safely. It shares nothing with
@@ -23,12 +23,12 @@ Run everything as root on the VPS (`ssh root@187.127.179.203`, or hPanel's
 
 ## 1. DNS
 
-hPanel → **Domains** → freedomlifex.in → **DNS / Nameservers** (or wherever
-the domain's DNS lives). Add an **A record**: name `test.boss`, points to
+hPanel → **Domains** → freedomlifex.co.in → **DNS / Nameservers** (or wherever
+the domain's DNS lives). Add an **A record**: name `test`, points to
 `187.127.179.203`, TTL default. Check it before step 6:
 
 ```bash
-dig +short test.boss.freedomlifex.in     # must print 187.127.179.203
+dig +short test.freedomlifex.co.in     # must print 187.127.179.203
 ```
 
 ## 2. Make sure port 3001 is free
@@ -83,15 +83,15 @@ cp /home/finowise-test/app/deploy/test-subdomain/nginx.conf /etc/nginx/sites-ava
 ln -s /etc/nginx/sites-available/finowise-test /etc/nginx/sites-enabled/
 nginx -t                        # must say "syntax is ok" before going on
 systemctl reload nginx          # reload, not restart: production keeps serving
-certbot --nginx -d test.boss.freedomlifex.in --redirect
+certbot --nginx -d test.freedomlifex.co.in --redirect
 ```
 
-`-d test.boss.freedomlifex.in` makes certbot issue a separate certificate and
+`-d test.freedomlifex.co.in` makes certbot issue a separate certificate and
 edit only the test site; production's certificate is untouched. If `nginx -t`
 fails, fix or remove the new file before reloading. Production keeps running
 on the old config until a reload succeeds.
 
-Open https://test.boss.freedomlifex.in and sign in with the test login.
+Open https://test.freedomlifex.co.in and sign in with the test login.
 
 ## Updating the test copy
 
@@ -119,8 +119,8 @@ systemctl start finowise-test
 systemctl disable --now finowise-test
 rm /etc/systemd/system/finowise-test.service /etc/nginx/sites-enabled/finowise-test /etc/nginx/sites-available/finowise-test
 nginx -t && systemctl reload nginx
-certbot delete --cert-name test.boss.freedomlifex.in
+certbot delete --cert-name test.freedomlifex.co.in
 deluser --remove-home finowise-test
 ```
 
-Then delete the `test.boss` DNS record.
+Then delete the `test` DNS record on freedomlifex.co.in.
