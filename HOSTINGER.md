@@ -7,6 +7,9 @@ cannot run it.
 
 Ready-made config files are in [`deploy/hostinger/`](deploy/hostinger/).
 
+To run a separate **test copy beside production** on the existing VPS
+(test.boss.freedomlifex.in), follow [TEST-SUBDOMAIN.md](TEST-SUBDOMAIN.md) instead.
+
 ---
 
 ## Option A: Hostinger VPS (Ubuntu) — recommended
