@@ -5,7 +5,7 @@
 # Safe to re-run: later runs pull the latest code and restart the test copy.
 set -euo pipefail
 
-DOMAIN="${DOMAIN:-test.freedomlifex.co.in}"
+DOMAIN="${DOMAIN:-test.freedomlifex.in}"
 PORT="${PORT:-3001}"
 BRANCH="${BRANCH:-main}"
 REPO="https://github.com/fflxplc-lang/test-finolifex-crm.git"
