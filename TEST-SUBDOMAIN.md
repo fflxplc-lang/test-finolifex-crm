@@ -18,6 +18,19 @@ The production deploy timer only watches the production checkout, so it never
 touches the test copy, and the test copy never touches it. Config files are in
 [`deploy/test-subdomain/`](deploy/test-subdomain/).
 
+## Quick way: one command
+
+After the DNS record in step 1 exists, run this as root on the VPS. It does
+steps 2 to 6 for you, asks for a test admin email and password, and stops
+without touching anything if a check fails:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/fflxplc-lang/test-finolifex-crm/main/deploy/test-subdomain/setup.sh -o /root/finowise-test-setup.sh && bash /root/finowise-test-setup.sh
+```
+
+Run the same command again later to update the test copy to the latest code.
+The manual steps below do the same thing by hand.
+
 Run everything as root on the VPS (`ssh root@187.127.179.203`, or hPanel's
 **Browser terminal**).
 
