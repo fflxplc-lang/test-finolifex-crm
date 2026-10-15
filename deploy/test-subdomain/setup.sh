@@ -6,7 +6,9 @@
 set -euo pipefail
 
 DOMAIN="${DOMAIN:-test.freedomlifex.in}"
-PORT="${PORT:-3001}"
+# A re-run keeps the port chosen the first time (it is saved in app.env).
+SAVED_PORT=$(sed -n 's/^PORT=//p' /home/finowise-test/app.env 2>/dev/null || true)
+PORT="${PORT:-${SAVED_PORT:-3001}}"
 BRANCH="${BRANCH:-main}"
 REPO="https://github.com/fflxplc-lang/test-finolifex-crm.git"
 U=finowise-test
