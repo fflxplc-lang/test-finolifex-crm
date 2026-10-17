@@ -2312,6 +2312,9 @@ tr.alloc-sub td{font-weight:700;background:var(--soft)}
   background:var(--card);border-left:1px solid var(--line);box-shadow:-10px 0 34px rgba(10,20,30,.14)}
 .ai-head{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;padding:12px 14px;border-bottom:1px solid var(--line)}
 .ai-head b{font-size:14px}
+/* Clear and close stay side by side however long the line about the open record runs. */
+.ai-head > div:first-child{min-width:0}
+.ai-head > .row{flex-wrap:nowrap;flex-shrink:0}
 .ai-sub{font-size:11.5px;color:var(--muted);margin-top:2px;line-height:1.4}
 .ai-where{padding:8px 14px;border-bottom:1px solid var(--line);background:var(--bg)}
 .ai-blocked{margin:10px 14px 0;padding:9px 11px;border:1px solid var(--gold-deep);border-radius:8px;
