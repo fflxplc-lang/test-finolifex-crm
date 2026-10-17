@@ -20,8 +20,13 @@ const mock = http.createServer((req, res) => {
     const j = JSON.parse(body || '{}');
     seen.push(j);
     const sys = ((j.messages||[]).find(m=>m.role==='system')||{}).content || '';
+    const u = ((j.messages||[])[(j.messages||[]).length-1]||{}).content || '';
+    const idm = u.match(/"id":"(CMS[^"]+)"/);
     const text = /WHICH RECORDS/.test(sys)
       ? '{"reads":[{"source":"clients","groupBy":["branch"],"sum":["aum"]}],"client":null}'
+      : /Question: Show .* portfolio/.test(u) && idm ? 'Opening the portfolio.\nOPEN: cms ' + idm[1] + ' portfolio'
+      : /Question: Take me to the meetings/.test(u) ? 'Here are the meetings.\nOPEN: meetings'
+      : /Question: Open the fake client/.test(u) ? 'Opening.\nOPEN: cms CMS-NOT-REAL overview'
       : 'MOCK ANSWER';
     res.end(JSON.stringify({choices:[{message:{role:'assistant', content:text}}]}));
   });
@@ -150,6 +155,28 @@ suite(async t => {
     if(seen.length !== before + 1) throw new Error((seen.length - before) + ' model calls');
     if(!lastUser().includes('Pending Approval')) throw new Error('mandate status not in data');
     return 'found by name';
+  });
+  t.section('taking you to the screen');
+  await t.step('"show me X portfolio" opens that client on the Portfolio tab', async () => {
+    const r = await t.eval(async () => { aiCloseP(); navigate('dashboard'); ai.turns = []; aiTogglePanel(); await aiRefreshStatus(true);
+      document.getElementById('aiInput').value = 'Show Ramesh Kumar Bossbot portfolio'; await aiSend();
+      const last = [...document.querySelectorAll('#aiTurns .ai-bot .ai-bubble')].pop().textContent;
+      return {view: currentView, rec: clientDetailId, tab: window._clientTab, last, opened: document.querySelector('#aiTurns').textContent.includes('Opened:'),
+              ctx: ai.context && ai.context.recordId}; }, null);
+    if(r.view !== 'cms' || r.rec !== id || r.tab !== 'portfolio') throw new Error(JSON.stringify(r));
+    if(/OPEN:/.test(r.last)) throw new Error('the OPEN line showed: ' + r.last);
+    if(!r.opened || r.ctx !== id) throw new Error(JSON.stringify(r));
+    return 'cms › portfolio, line hidden';
+  });
+  await t.step('a page by name opens that page', async () => {
+    const v = await t.eval(async () => { document.getElementById('aiInput').value = 'Take me to the meetings page'; await aiSend(); return currentView; });
+    if(v !== 'meetings') throw new Error(v);
+    return 'meetings';
+  });
+  await t.step('an id the model made up opens nothing', async () => {
+    const v = await t.eval(async () => { document.getElementById('aiInput').value = 'Open the fake client'; await aiSend(); return currentView; });
+    if(v !== 'meetings') throw new Error('moved to ' + v);
+    return 'stayed put';
   });
   } finally { mock.close(); }
 });
