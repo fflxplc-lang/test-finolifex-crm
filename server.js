@@ -876,10 +876,70 @@ app.get('/api/storage/:key', checkApiKey, (req, res) => {
   res.json({ key: req.params.key, value });
 });
 
+/* AN ATTENDANCE ROW IS WRITTEN ONCE AND NOT EDITED.
+
+   Everything else in BOSS is a whole-array PUT, which means the browser
+   decides what the store holds. For attendance that is not good enough:
+   a punch is a claim about where somebody was and when, and the one
+   thing it must not be is adjustable afterwards by whoever has the page
+   open. Nothing in the UI offers to edit one, but "the UI does not offer
+   it" is not the same as "it cannot happen".
+
+   So this is append-only, checked here rather than in the browser. A
+   write may add a day, add a session to a day, and close an open session
+   by setting its punch-out and that punch-out's location. It may not
+   change a punch-in, change a punch-out that is already set, change or
+   add a location to a punch already recorded, drop a session, or drop a
+   day. Anything else comes back 409 naming what it tried to move.
+
+   One exception, deliberate and narrow: an empty array is allowed
+   through, because Reset System wipes every store and an administrator
+   clearing the system is not the thing this is guarding against. What it
+   guards against is a quiet edit to one timestamp among hundreds. */
+const ATT_FIXED = ['in', 'inBy', 'inLoc', 'out', 'outBy', 'outLoc'];
+function attendanceGuard(before, after) {
+  let old;
+  try { old = JSON.parse(before || '[]'); } catch (e) { return null; }
+  let next;
+  try { next = JSON.parse(after); } catch (e) { return 'that is not valid JSON'; }
+  if (!Array.isArray(old) || !Array.isArray(next)) return null;
+  if (!next.length) return null;                       // a full wipe: see above
+  const byId = new Map(old.filter((r) => r && r.id).map((r) => [r.id, r]));
+  const seen = new Set();
+  for (const row of next) {
+    if (!row || !row.id) continue;
+    seen.add(row.id);
+    const was = byId.get(row.id);
+    if (!was) continue;                                // a new day
+    if (row.userId !== was.userId || row.date !== was.date)
+      return 'attendance ' + row.id + ' tried to move to another person or another date';
+    const oldS = Array.isArray(was.sessions) ? was.sessions : [];
+    const newS = Array.isArray(row.sessions) ? row.sessions : [];
+    if (newS.length < oldS.length)
+      return 'attendance ' + row.id + ' tried to drop a session';
+    for (let i = 0; i < oldS.length; i++) {
+      const a = oldS[i] || {}, b = newS[i] || {};
+      for (const k of ATT_FIXED) {
+        const had = a[k] !== undefined && a[k] !== null;
+        if (!had) continue;                            // not set yet: may be set now
+        if (JSON.stringify(a[k]) !== JSON.stringify(b[k]))
+          return 'attendance ' + row.id + ' tried to change a recorded ' + k;
+      }
+    }
+  }
+  for (const r of old) if (r && r.id && !seen.has(r.id))
+    return 'attendance ' + r.id + ' was dropped';
+  return null;
+}
+
 // PUT /api/storage/:key  body: { value: "..." } -> { key, value }
 app.put('/api/storage/:key', checkApiKey, (req, res) => {
   const { value } = req.body || {};
   if (typeof value !== 'string') return res.status(400).json({ error: 'body.value must be a string (the CRM already JSON.stringifies before sending)' });
+  if (req.params.key === 'hrAttendance') {
+    const wrong = attendanceGuard(store.hrAttendance, value);
+    if (wrong) return res.status(409).json({ error: 'attendance is append-only: ' + wrong });
+  }
   store[req.params.key] = value;
   writeToDisk();
   publishChange([req.params.key], req.get('X-Client-Id') || '');

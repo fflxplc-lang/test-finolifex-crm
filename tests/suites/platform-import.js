@@ -156,16 +156,24 @@ suite(async t => {
   t.section('the reader opens a real workbook');
 
   await t.step('an .xlsx is read here, with no library and nothing uploaded', async () => {
-    /* /config.js is the app's own one line of runtime config, served by
-       this server. Anything else pulled in would be a library. */
+    /* Two files the app serves itself: /config.js, its one line of
+       runtime config, and /appraisal-engine.js, the Appraisal System
+       handed over as its own module and kept that way so it stays
+       provably unmodified. Both come off this server and neither is a
+       dependency. Anything else pulled in would be a library. */
+    const OURS = /^\/(config|appraisal-engine)\.js(\?|$)/;
     const r = await t.eval(()=>({supported: xlsxSupported(),
       lib: typeof window.XLSX,
-      script: Array.from(document.querySelectorAll('script[src]'))
-        .map(s=>s.src).filter(u=>!/\/config\.js(\?|$)/.test(u))}));
+      all: Array.from(document.querySelectorAll('script[src]')).map(s=>s.src),
+      origin: location.origin}));
+    const ours = r.all.filter(u=>u.indexOf(r.origin) === 0
+      && OURS.test(u.slice(r.origin.length)));
+    const foreign = r.all.filter(u=>ours.indexOf(u) < 0);
     if(!r.supported) throw new Error('the browser reports it cannot inflate a zip');
     if(r.lib !== 'undefined') throw new Error('a spreadsheet library got loaded after all');
-    if(r.script.length) throw new Error('the page pulls in ' + r.script.join(', '));
-    return 'DecompressionStream, and no library on the page at all';
+    if(foreign.length) throw new Error('the page pulls in ' + foreign.join(', '));
+    return 'DecompressionStream, no library on the page at all, and the only two scripts are this '
+      + 'server\u2019s own';
   });
 
   await t.step('a cover line above the header does not become the header', async () => {

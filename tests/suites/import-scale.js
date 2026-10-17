@@ -120,12 +120,17 @@ suite(async t => {
     if((r.by.auditLog || 0) > 2) throw new Error('the audit log was uploaded ' + r.by.auditLog + ' times');
     if(r.clients !== ROWS) throw new Error('it created ' + r.clients + ' clients');
     if(r.sips !== ROWS) throw new Error('it wrote ' + r.sips + ' SIP registrations');
-    if(r.audit !== ROWS) throw new Error('it wrote ' + r.audit + ' audit lines for ' + ROWS + ' clients');
+    /* One line per client, plus exactly one for the run itself: the
+       month's AUM total, written once however many rows the file had.
+       A fixed overhead is the opposite of growing with the file. */
+    if(r.audit !== ROWS + 1)
+      throw new Error('it wrote ' + r.audit + ' audit lines for ' + ROWS + ' clients, expected '
+        + (ROWS + 1) + ' (one each, plus one for the month)');
     if(r.batch.created !== ROWS || r.batch.written !== ROWS)
       throw new Error('the batch says created ' + r.batch.created + ', written ' + r.batch.written);
     return ROWS + ' rows in ' + r.ms + 'ms and ' + r.puts + ' write(s) — '
       + Object.keys(r.by).map(k=>k + '×' + r.by[k]).join(', ')
-      + '; ' + r.audit + ' audit lines, all of them kept';
+      + '; ' + r.audit + ' audit lines (one per client, plus one for the month), all of them kept';
   });
 
   await t.step('and everything it wrote is on the server, not only in the tab', async () => {

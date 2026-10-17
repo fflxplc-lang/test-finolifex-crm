@@ -264,15 +264,26 @@ suite(async t => {
                 rows:a.rows.map(x=>({name:x.clientName, ok:x.ok, how:x.match.how, errs:x.errs}))}; })()}));
     if(!r.guessed.length) throw new Error('nothing was worked out from the values');
     const g = r.guessed[0];
-    if(g.forCol !== 'Client Name') throw new Error('it guessed at ' + g.forCol);
+    /* NJ calls that column "Investor" on the report it writes today and
+       left it unheaded on the one this fixture came from; what is being
+       tested is that the column feeding the client's name is found from
+       its values, whatever the heading above it is called. */
+    if(g.to !== 'client.cmsName') throw new Error('it guessed at ' + g.forCol + ' → ' + g.to);
     if(!/Aalok/.test(g.sample)) throw new Error('its sample reads ' + g.sample);
-    if(r.a.missing.length) throw new Error('it still thinks a column is missing: ' + r.a.missing.join(', '));
+    /* This export predates the Partner/Employee and Group columns NJ
+       writes today, so the preview names them as not in the file. That
+       is information, not a refusal: neither is required, and the rows
+       still import. What must not be missing is anything required. */
+    const shouldHave = ['Partner/Employee', 'Group'];
+    const odd = r.a.missing.filter(m=>shouldHave.indexOf(m) < 0);
+    if(odd.length) throw new Error('it thinks a column is missing: ' + odd.join(', '));
     if(r.a.bad) throw new Error('rows failed: ' + JSON.stringify(r.a.rows));
     if(r.a.rows[0].name !== 'Aalok Ambika Singh')
       throw new Error('the client reads "' + r.a.rows[0].name + '"');
     if(r.a.rows[0].how !== 'new' && r.a.rows[0].how !== 'name')
       throw new Error('matched by ' + r.a.rows[0].how + ' on a report with no PAN');
-    return '"' + g.header + '" read as Client Name from "' + g.sample + '"';
+    return '"' + g.header + '" read as the client\u2019s name from "' + g.sample + '" — and the two '
+      + 'columns this older export does not carry are named rather than refused';
   });
 
   await t.step('and the money lands in the right sleeves', async () => {

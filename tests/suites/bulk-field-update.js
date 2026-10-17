@@ -182,21 +182,31 @@ suite(async t => {
       [['rmName','team'],['clientCategory','select'],['dob','date'],['cmsName','text']].forEach(([k, want])=>{
         bulkEditPick(0, k);
         const el = document.getElementById('f_' + k);
-        kinds[k] = el ? (el.tagName.toLowerCase() === 'select' ? 'select' : el.type) : 'missing';
+        kinds[k] = el ? (el.tagName.toLowerCase() === 'select' ? 'select'
+          : (el.type === 'hidden' && document.getElementById('pickbox_f_' + k)) ? 'typeahead'
+          : el.type) : 'missing';
       });
       bulkEditPick(0, 'rmName');
-      const teamEl = document.getElementById('f_rmName');
-      const hasNewRm = teamEl && Array.from(teamEl.options).some(o=>o.value === 'ZZRM');
+      /* A person is picked by typing their name now, so the people on
+         offer are the picker's rows rather than a select's options —
+         but they must still be there, which is what this ever asked. */
+      const hasNewRm = (window._pickRows['f_rmName'] || []).some(o=>o.value === 'ZZRM');
+      const el = document.getElementById('f_rmName');
+      const reads = !!el && el.type === 'hidden';
       closeModal();
       bulkSelection.CMS.clear();
-      return {kinds, hasNewRm};
+      return {kinds, hasNewRm, reads};
     });
-    if(r.kinds.rmName !== 'select') throw new Error('an owner rendered as ' + r.kinds.rmName);
-    if(r.kinds.clientCategory !== 'select') throw new Error('a dropdown rendered as ' + r.kinds.clientCategory);
+    /* Anything picked from a list is typed into now, an owner and a
+       configured vocabulary alike; a date and a text box are not. */
+    if(r.kinds.rmName !== 'typeahead') throw new Error('an owner rendered as ' + r.kinds.rmName);
+    if(!r.reads) throw new Error('the owner field no longer carries a value the save can read');
+    if(r.kinds.clientCategory !== 'typeahead')
+      throw new Error('a dropdown rendered as ' + r.kinds.clientCategory);
     if(r.kinds.dob !== 'date') throw new Error('a date rendered as ' + r.kinds.dob);
     if(r.kinds.cmsName !== 'text') throw new Error('a text field rendered as ' + r.kinds.cmsName);
-    if(!r.hasNewRm) throw new Error('the owner picker does not list the team');
-    return 'team → select of people, dropdown → its configured options, date → date, text → text';
+    if(!r.hasNewRm) throw new Error('the owner picker does not offer the team');
+    return 'owner and category \u2192 a name you type, date \u2192 date, text \u2192 text';
   });
 
   t.section('what it refuses, and what it writes down');
