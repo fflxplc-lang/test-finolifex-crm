@@ -104,6 +104,7 @@ suite(async t => {
     if(u.includes('123456789012')) throw new Error('account number was sent');
     if(u.includes('ABCDE1234F') || !u.includes('******234F')) throw new Error('PAN not masked');
     if(!u.includes('KYC On Hold')) throw new Error('alerts not in data');
+    if(!u.includes('[kyc-physical]')) throw new Error('the SOP for the KYC hold was not sent');
     const shown = await t.eval(() => document.querySelector('#aiTurns').textContent);
     if(!shown.includes('MOCK ANSWER') || !shown.includes('Account kholo')) throw new Error(shown.slice(-300));
     return u.length + ' chars sent, one model call';
