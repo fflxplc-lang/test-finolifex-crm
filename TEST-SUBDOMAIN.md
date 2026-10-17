@@ -106,6 +106,26 @@ on the old config until a reload succeeds.
 
 Open https://test.freedomlifex.in and sign in with the test login.
 
+## Deploy on request (auto-deploy)
+
+Turn this on once, as root on the VPS:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/fflxplc-lang/test-finolifex-crm/main/deploy/test-subdomain/install-autodeploy.sh -o /root/finowise-test-autodeploy.sh && bash /root/finowise-test-autodeploy.sh
+```
+
+From then on the test site serves whatever the `deploy` branch points at.
+Changes are made on `main`; saying "deploy" moves `deploy` to `main`, and
+within about a minute the server:
+
+1. copies `/home/finowise-test/data` to `/home/finowise-test/backups/` (last 20 kept),
+2. installs the new code, checks it, restarts, and waits for it to answer,
+3. puts the previous code back by itself if any of that fails.
+
+Check the result: `cat /home/finowise-test/deploy-status.txt`
+(`LIVE <sha>`, or `ROLLED BACK to <sha> ...`). History:
+`journalctl -u finowise-test-deploy -n 30 --no-pager`.
+
 ## Updating the test copy
 
 ```bash

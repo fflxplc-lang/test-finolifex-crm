@@ -1,5 +1,19 @@
 # Working on this repo
 
+> **This repository (fflxplc-lang/test-finolifex-crm) is the TEST copy.**
+> It runs at https://test.freedomlifex.in, not boss.freedomlifex.in, and the
+> rest of this file describes the production repo. Here:
+>
+> - Changes go to `main`. Pushing `main` does **not** deploy anything.
+> - The site serves whatever the **`deploy`** branch points at. A timer on the
+>   VPS checks it every minute, backs up the data, installs, and rolls back by
+>   itself if the new code fails (`deploy/test-subdomain/autodeploy.sh`).
+> - After changing `main`, ask the user whether to deploy. Only when they say
+>   "deploy", fast-forward `deploy` to `main` and push it:
+>   `git push origin origin/main:refs/heads/deploy`
+> - Data lives in `/home/finowise-test/data` on the server, outside the code;
+>   deploys never touch it.
+
 Finowise CRM. One Express server (`server.js`) serving a single-page app
 (`public/index.html`) plus a small JSON-file API.
 

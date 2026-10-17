@@ -9,7 +9,11 @@ DOMAIN="${DOMAIN:-test.freedomlifex.in}"
 # A re-run keeps the port chosen the first time (it is saved in app.env).
 SAVED_PORT=$(sed -n 's/^PORT=//p' /home/finowise-test/app.env 2>/dev/null || true)
 PORT="${PORT:-${SAVED_PORT:-3001}}"
-BRANCH="${BRANCH:-main}"
+# Once auto-deploy is in use, the live code is whatever the `deploy` branch says.
+if [ -z "${BRANCH:-}" ]; then
+  if git ls-remote --exit-code --heads https://github.com/fflxplc-lang/test-finolifex-crm.git deploy >/dev/null 2>&1
+  then BRANCH=deploy; else BRANCH=main; fi
+fi
 REPO="https://github.com/fflxplc-lang/test-finolifex-crm.git"
 U=finowise-test
 HOME_DIR=/home/$U
