@@ -161,11 +161,12 @@ suite(async t => {
     const r = await t.eval(async () => { aiCloseP(); navigate('dashboard'); ai.turns = []; aiTogglePanel(); await aiRefreshStatus(true);
       document.getElementById('aiInput').value = 'Show Ramesh Kumar Bossbot portfolio'; await aiSend();
       const last = [...document.querySelectorAll('#aiTurns .ai-bot .ai-bubble')].pop().textContent;
-      return {view: currentView, rec: clientDetailId, tab: window._clientTab, last, opened: document.querySelector('#aiTurns').textContent.includes('Opened:'),
+      return {view: currentView, rec: clientDetailId, tab: window._clientTab, last, opened: document.querySelector('#aiTurns').textContent.includes('Opened:'), dup: [...document.querySelectorAll('#aiTurns .ai-bot')].pop().textContent.includes('Open account'),
               ctx: ai.context && ai.context.recordId}; }, null);
     if(r.view !== 'cms' || r.rec !== id || r.tab !== 'portfolio') throw new Error(JSON.stringify(r));
     if(/OPEN:/.test(r.last)) throw new Error('the OPEN line showed: ' + r.last);
     if(!r.opened || r.ctx !== id) throw new Error(JSON.stringify(r));
+    if(r.dup) throw new Error('an Open account button sits beside the Opened one');
     return 'cms › portfolio, line hidden';
   });
   await t.step('a page by name opens that page', async () => {

@@ -50936,7 +50936,8 @@ function bossTypeOut(turn, text){
 /* Under an answer: which client accounts it read, one click away, and
    which SOPs it leaned on. */
 function bossTurnFoot(t){
-  const cl = (t.clients||[]).map(c=>`<button class="btn sm ghost" onclick="aiCloseP();navigate('cms','${esc(c.id)}')">Open account: ${esc(c.name)}</button>`).join('');
+  /* The client it already opened has its button above; a second one would say the same thing. */
+  const cl = (t.clients||[]).filter(c=>!(t.opened && t.opened.kind==='cms' && t.opened.id===c.id)).map(c=>`<button class="btn sm ghost" onclick="aiCloseP();navigate('cms','${esc(c.id)}')">Open account: ${esc(c.name)}</button>`).join('');
   const sp = (t.sops||[]).length ? `<div class="small-note">SOP: ${t.sops.map(s=>esc(s.t)).join(' · ')}</div>` : '';
   const op = t.opened ? `<button class="btn sm" onclick="bossReopen(${ai.turns.indexOf(t)})">↗ Opened: ${esc(t.opened.label)}</button>` : '';
   return (cl || sp || op) ? `<div class="ai-acts" style="flex-wrap:wrap">${op}${cl}</div>${sp}` : '';
