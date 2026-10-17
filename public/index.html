@@ -2308,8 +2308,6 @@ tr.alloc-sub td{font-weight:700;background:var(--soft)}
 .boss-ins-row[open] summary::after{content:'▾'}
 .boss-ins-sop{margin:6px 0 2px 4px;padding:8px 10px;background:var(--card);border-radius:8px;font-size:12px}
 .boss-ins-sop ol{margin:6px 0;padding-left:18px}
-/* The firm's brand theme sets --gold-light inline to its pale tint in both modes, so after dark the card takes a tint of its own that the light lettering reads on. */
-html.dark .boss-ins{background:rgba(251,146,60,.09)}
 html.dark .boss-ins-row summary{color:var(--text)}
 .ai-panel{position:fixed;top:0;right:0;bottom:0;width:min(440px,100vw);z-index:901;display:flex;flex-direction:column;
   background:var(--card);border-left:1px solid var(--line);box-shadow:-10px 0 34px rgba(10,20,30,.14)}
@@ -30149,7 +30147,11 @@ function applyTheme(themeId){
   root.setProperty('--navy', t.navy);
   root.setProperty('--navy-2', t.navy2);
   root.setProperty('--gold', t.gold);
-  root.setProperty('--gold-light', t.goldLight);
+  // The light tint is a surface that text sits on. After dark a pale tint
+  // under light lettering cannot be read, so it becomes the accent laid
+  // thinly over the dark card instead — everywhere it is used, not one
+  // screen at a time.
+  root.setProperty('--gold-light', dark ? 'color-mix(in srgb, ' + t.gold + ' 16%, #0d2430)' : t.goldLight);
   root.setProperty('--grad', 'linear-gradient(135deg,'+t.navy+' 0%,'+t.navy2+' 50%,'+t.gold+' 100%)');
   // The deep accent exists so that white sits on it, and so that it can be
   // read as lettering. On a near-black card the deep one is the unreadable
