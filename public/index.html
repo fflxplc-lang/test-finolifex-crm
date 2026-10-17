@@ -50223,7 +50223,7 @@ function aiDrawPanel(){
           <div class="ai-sub">${esc(aiContextLine(ai.context)||'Ask about anything you can already see.')}</div>
         </div>
         <div class="row" style="gap:6px">
-          ${ai.turns.length? `<button class="btn sm ghost" onclick="aiClearTurns()">Clear</button>`:''}
+          <button class="btn sm ghost" onclick="aiClearTurns()" ${ai.busy?'disabled':''} title="Start a fresh conversation">Clear</button>
           <button class="btn sm ghost" onclick="aiCloseP()" aria-label="Close the assistant">✕</button>
         </div>
       </div>
