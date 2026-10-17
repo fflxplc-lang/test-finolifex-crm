@@ -129,6 +129,21 @@ suite(async t => {
     if(!u.includes('"groupBy":["branch"]') || !u.includes('Pune')) throw new Error(u.slice(0, 400));
     return 'plan + answer, grouped by branch';
   });
+  await t.step('while it works it shows typing, then types the answer out', async () => {
+    const r = await t.eval(async () => {
+      document.getElementById('aiInput').value = 'Which documents are needed for transmission?';
+      const p = aiSend();
+      const dots = !!document.querySelector('#aiTurns .ai-dots');
+      let caret = false;
+      const iv = setInterval(()=>{ if(document.querySelector('#aiLiveBubble.ai-caret')) caret = true; }, 5);
+      await p; clearInterval(iv);
+      return {dots, caret, after: !!document.querySelector('#aiLiveBubble'), last: [...document.querySelectorAll('#aiTurns .ai-bot .ai-bubble')].pop().textContent};
+    });
+    if(!r.dots) throw new Error('no typing dots while waiting');
+    if(!r.caret) throw new Error('the answer was not typed out');
+    if(r.after || r.last !== 'MOCK ANSWER') throw new Error(JSON.stringify(r));
+    return 'dots, then typed';
+  });
   await t.step('a client named in the question is read without a plan', async () => {
     const before = seen.length;
     await t.eval(async () => { document.getElementById('aiInput').value = 'What is the mandate status of Ramesh Kumar Bossbot?'; await aiSend(); });
