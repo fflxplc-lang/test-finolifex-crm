@@ -131,23 +131,40 @@ suite(async t => {
       const opts = sel ? effectiveOpts('LMS', sel) : [];
       const head = [req.l, sel ? sel.l : 'x'];
       const rows = [head,
-        ['', opts[0]],                               // the required one empty
+        ['', opts[0]],                               // the one the record is created under, empty
         ['Has a name', 'Not One Of The Words'],      // a word the dropdown does not take
         ['Also fine', opts[0]],                      // and one that is right
       ];
       const plan = await eval('(' + feed + ')')('leads', rows, 'checks.xlsx');
-      return {reqField: req.l, selField: sel ? sel.l : '',
-        verdicts: plan.rows.map(x=>x.verdict),
-        why: plan.rows.map(x=>x.issues[0] || x.note || ''),
-        add: plan.add, fail: plan.fail};
+      const read = p => ({verdicts: p.rows.map(x=>x.verdict),
+        why: p.rows.map(x=>x.note || x.issues[0] || ''),
+        dropped: p.rows.map(x=>x.dropped.map(d=>d.label).join(',')),
+        kept: p.rows.map(x=>x.rec[req.k] || ''),
+        sel: p.rows.map(x=>x.rec[sel ? sel.k : 'x']),
+        add: p.add, fail: p.fail, cellsOut: p.cellsOut,
+        problems: p.fieldProblems.map(x=>x.label + '/' + x.n)});
+      const partial = read(plan);
+      mapImpSetPartial(false);
+      const strict = read(mapImpBuild());
+      mapImpSetPartial(true);
+      return {reqField: req.l, selField: sel ? sel.l : '', partial, strict};
     }, FEED);
-    if(r.verdicts[0] !== 'fail' || !/required/i.test(r.why[0]))
-      throw new Error('an empty required field was accepted: ' + r.why[0]);
-    if(r.verdicts[1] !== 'fail' || !/not one of/i.test(r.why[1]))
-      throw new Error('a word the dropdown does not take was accepted: ' + r.why[1]);
-    if(r.verdicts[2] !== 'add') throw new Error('a good row was refused: ' + r.why[2]);
-    return r.fail + ' refused with the reason on the row, ' + r.add + ' accepted — and the words the '
-      + 'dropdown takes came from Setup, not from here';
+    const p = r.partial;
+    if(p.verdicts[0] !== 'fail' || !new RegExp(r.reqField, 'i').test(p.why[0]))
+      throw new Error('a row with no ' + r.reqField + ' was accepted: ' + p.why[0]);
+    if(p.verdicts[1] !== 'add')
+      throw new Error('one bad dropdown word still took the whole row down: ' + p.why[1]);
+    if(p.sel[1] !== '') throw new Error('the word the dropdown does not take was imported anyway');
+    if(p.kept[1] !== 'Has a name') throw new Error('the rest of the row went with it');
+    if(p.dropped[1].indexOf(r.selField) < 0) throw new Error('the skipped field was not named on the row');
+    if(!p.problems.some(x=>x.indexOf(r.selField + '/1') === 0))
+      throw new Error('the summary does not count it: ' + p.problems.join(' '));
+    if(p.verdicts[2] !== 'add') throw new Error('a good row was refused: ' + p.why[2]);
+    if(r.strict.verdicts[1] !== 'fail')
+      throw new Error('"Refuse the whole row" no longer refuses it');
+    return p.fail + ' refused for having no ' + r.reqField + ', ' + p.add + ' imported with '
+      + p.cellsOut + ' field skipped for correction — and the old all-or-nothing is still one '
+      + 'press away, where it refuses that row again';
   });
 
   await t.step('the pattern a mobile is checked against is the one the firm set', async () => {
@@ -157,18 +174,34 @@ suite(async t => {
       const name = f.find(x=>x.req) || f[0];
       const rows = [[name.l, mob.l], ['Test One', '12345'], ['Test Two', '9876543210']];
       const before = (await eval('(' + feed + ')')('leads', rows, 'mob.xlsx'));
-      const strict = {bad: before.rows[0].verdict, good: before.rows[1].verdict,
-        why: before.rows[0].issues[0] || ''};
+      const out = {bad: before.rows[0].verdict, good: before.rows[1].verdict,
+        why: (before.rows[0].dropped[0] || {}).why || '',
+        badMobile: before.rows[0].rec[mob.k], badName: before.rows[0].rec[name.k],
+        goodMobile: before.rows[1].rec[mob.k]};
+      /* the old all-or-nothing, still there for whoever wants it */
+      mapImpSetPartial(false);
+      out.strict = mapImpBuild().rows[0].verdict;
+      mapImpSetPartial(true);
       /* widen the firm's own rule, and the same sheet passes */
       await setCfg('validation.mobilePattern', '^[0-9]{5,}$');
       const after = (await eval('(' + feed + ')')('leads', rows, 'mob.xlsx'));
       await setCfg('validation.mobilePattern', '^[0-9]{10}$');
-      return Object.assign(strict, {loose: after.rows[0].verdict, field: mob.l});
+      out.loose = after.rows[0].verdict;
+      out.looseMobile = after.rows[0].rec[mob.k];
+      out.field = mob.l;
+      return out;
     }, FEED);
-    if(r.bad !== 'fail' || r.good !== 'add') throw new Error('the mobile pattern was not applied');
+    if(r.bad !== 'add') throw new Error('a five-digit mobile still took the whole lead down');
+    if(r.badMobile !== '') throw new Error('the five-digit mobile was imported as ' + r.badMobile);
+    if(r.badName !== 'Test One') throw new Error('the name went down with the mobile');
+    if(r.good !== 'add' || r.goodMobile !== '9876543210')
+      throw new Error('a ten-digit mobile did not land');
     if(!/mobile/i.test(r.why)) throw new Error('the message is not the firm’s own: ' + r.why);
-    if(r.loose !== 'add') throw new Error('changing the rule in Setup did not change what the import accepts');
-    return 'refused under the firm’s 10-digit rule, accepted the moment the rule was widened — one '
+    if(r.strict !== 'fail') throw new Error('"Refuse the whole row" no longer refuses it');
+    if(r.loose !== 'add' || r.looseMobile !== '12345')
+      throw new Error('changing the rule in Setup did not change what the import accepts');
+    return 'the five-digit mobile is dropped and the lead still imported, the ten-digit one lands, '
+      + '"Refuse the whole row" still refuses it, and widening the rule in Setup lets it through — one '
       + 'source of truth, not a copy';
   });
 

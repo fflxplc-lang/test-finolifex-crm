@@ -32,7 +32,9 @@ suite(async t => {
               create: /openSubUser\(\)/.test(c.innerHTML),
               lists: c.querySelector('table tbody').querySelectorAll('tr').length,
               team: DB.team.filter(x=>!x.deletedAt).length,
-              roles: /Roles describe what someone is responsible for/.test(c.textContent),
+              /* The roles section, found by its control rather than by a
+                 sentence: the words are the firm's to change. */
+              roles: /addRole\(\)/.test(c.innerHTML),
               says: /Nothing is created until/.test(c.textContent)};
     });
     if(!r.here || !r.create) throw new Error('the screen or the add button is missing');
@@ -82,7 +84,9 @@ suite(async t => {
               scopes, allScopes: SCOPES.length, name};
     });
     if(!r.name) throw new Error('the details form is not on the screen');
-    if(r.cats.length !== 6) throw new Error('categories: ' + r.cats.join(' | '));
+    /* seven now: HR carries its own, because HR access is its own */
+    if(r.cats.length !== 7) throw new Error('categories: ' + r.cats.join(' | '));
+    if(!r.cats.some(c=>/^HR/.test(c))) throw new Error('no HR category: ' + r.cats.join(' | '));
     if(r.perMod !== r.modules) throw new Error(r.perMod + ' of ' + r.modules + ' modules have a full action row');
     if(r.pageChips !== r.pages) throw new Error(r.pageChips + ' page chips for ' + r.pages + ' rail pages');
     if(r.stageChips !== r.stages) throw new Error(r.stageChips + ' stage chips for ' + r.stages + ' stages');
@@ -136,9 +140,12 @@ suite(async t => {
       /* the detail form, which only edits somebody who already exists —
          creating one is Setup's job now */
       openMemberForm((DB.team.find(x=>!x.deletedAt) || {}).id);
+      /* The field is a box you type into now, so what it offers is the
+         picker's rows rather than a select's options. */
       const el = document.getElementById('f_scope');
-      const words = el ? Array.from(el.options).map(o=>o.value + '=' + o.text) : [];
-      const values = el ? Array.from(el.options).map(o=>o.value).filter(Boolean) : [];
+      const rows = el ? (window._pickRows['f_scope'] || []) : [];
+      const words = rows.map(o=>o.value + '=' + o.label);
+      const values = rows.map(o=>o.value).filter(Boolean);
       closeModal();
       return {words, values};
     });
@@ -150,18 +157,21 @@ suite(async t => {
 
   await t.step('one press makes the account and applies the access', async () => {
     made = await t.eval(async ()=>{
-      /* the firm's own default for the role, set once in Setup */
+      /* The firm's own default for the role, set once in Setup. Which
+         role is not the point and the roles are the firm's to change,
+         so it takes whichever one is there rather than naming one. */
+      const role = roleList().find(r=>r !== ADMIN_ROLE);
       DB.config.roleTemplates = Object.assign({}, DB.config.roleTemplates || {});
       const p = fullPerms(false, {view:1});
       ['LMS','CMS','RMS','DST'].forEach(m=>['view','create','edit','changeStage'].forEach(a=>{ p[m][a] = 1; }));
-      DB.config.roleTemplates['Relationship Manager'] =
+      DB.config.roleTemplates[role] =
         {perms:p, adminFlags: fullAdminFlags(false), scope:'own', pagePerms:[], stagePerms:{}};
       await save('config');
       openSubUser();
       document.getElementById('f_name').value = 'ZZ One Screen';
       document.getElementById('f_email').value = 'zzonescreen@example.in';
       const roleBox = document.getElementById('f_role');
-      roleBox.value = 'Relationship Manager';
+      roleBox.value = role;
       roleBox.dispatchEvent(new Event('change'));
       /* narrow it further than the template, on the same screen */
       subSetScope('team');
@@ -274,7 +284,10 @@ suite(async t => {
 
   await t.step('picking a role fills the panel from the firm\u2019s own template', async () => {
     const r = await t.eval(async ()=>{
-      const role = roleList().find(x=>x !== ADMIN_ROLE && x !== 'Relationship Manager');
+      /* Not the role the account above was made on, so the two steps
+         cannot pass by sharing one template. */
+      const used = roleList().find(x=>x !== ADMIN_ROLE);
+      const role = roleList().find(x=>x !== ADMIN_ROLE && x !== used);
       const p = fullPerms(false);
       ['DST','Queries'].forEach(m=>['view','edit'].forEach(a=>{ p[m][a] = 1; }));
       DB.config.roleTemplates = Object.assign({}, DB.config.roleTemplates || {});
@@ -325,8 +338,9 @@ suite(async t => {
 
   await t.step('changing one person never changes the template, and changing the template never changes them', async () => {
     const r = await t.eval(async ()=>{
+      const used = roleList().find(x=>x !== ADMIN_ROLE);
       const role = roleList().find(x=>x !== ADMIN_ROLE && (DB.config.roleTemplates||{})[x]
-        && x !== 'Relationship Manager');
+        && x !== used);
       /* a person on that role, customised beyond the default */
       const who = {id: uid('USR'), name:'ZZ Role Holder', email:'zzrole@example.in', role,
         status:'Active', scope:'own', perms: fullPerms(false), adminFlags: fullAdminFlags(false),
@@ -572,14 +586,23 @@ suite(async t => {
       const who = DB.team.find(x=>!x.deletedAt);
       openUserProfile(who.id);
       const before = document.getElementById('userProfileCard').textContent;
-      /* somebody else saves a change to the same person */
-      const wasDept = who.department;
-      who.department = 'ZZ Moved Department';
+      /* Somebody else saves a change to the same person. A department is
+         a mapping now, not a line of text, so the probe moves them into
+         one the way the user dialog would — which is also what makes
+         this worth testing: the card has to follow the mapping, not a
+         copy of its name. */
+      const wasDepts = (who.departments || []).slice(), wasName = who.department;
+      const probe = {id:'DEP-ZZMOVED', name:'ZZ Moved Department', active:true,
+        createdAt:new Date().toISOString()};
+      DB.config.departments = deptAll().concat([probe]);
+      setUserDepartments(who, [probe.id]);
       /* the live stream's own draw, which skips every other modal */
       liveDraw();
       const after = document.getElementById('userProfileCard').textContent;
       const stillOpen = !!document.getElementById('userProfileCard');
-      who.department = wasDept;
+      setUserDepartments(who, wasDepts);
+      who.department = wasName;
+      DB.config.departments = deptAll().filter(d=>d.id !== probe.id);
       closeUserProfile();
       return {wasThere: before.indexOf('ZZ Moved Department') < 0,
         isThere: after.indexOf('ZZ Moved Department') >= 0, stillOpen};

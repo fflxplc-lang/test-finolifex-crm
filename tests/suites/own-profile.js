@@ -211,6 +211,7 @@ suite(async t => {
       out.teammembersSaid = (document.getElementById('content').textContent||'')
         .replace(/\s+/g,' ').trim().slice(0, 80);
       out.teammembersRows = document.querySelectorAll('#teamMembersTable tbody tr').length;
+      out.teammembersAsk = /Request access/.test(document.getElementById('content').innerHTML || '');
       closeModal();
       /* and the page itself offers no second editor at all — the
          administrator's member form is reached where accounts are
@@ -225,8 +226,12 @@ suite(async t => {
     if(r.setup) throw new Error('Setup is visible to him again');
     if(r.settings === 'settings') throw new Error('the Setup route opened');
     if(r.teammembersRows) throw new Error('the Team Members page listed ' + r.teammembersRows + ' people');
-    if(!/permission to view Team Members/.test(r.teammembersSaid))
+    /* The refusal is a wall with a way out now, not a grey line, so
+       what is checked is that it refuses AND offers the door. */
+    if(!/closed to you|does not have View/.test(r.teammembersSaid))
       throw new Error('Team Members said: ' + r.teammembersSaid);
+    if(!r.teammembersAsk)
+      throw new Error('Team Members refused without offering a way to ask');
     if(!r.mine) throw new Error('he cannot open his own record');
     if(r.boss) throw new Error('he can open the account above him');
     if(r.teamEdit) throw new Error('the fixture was given Team edit');

@@ -289,9 +289,13 @@ suite(async t => {
         amcs: viewAMCTracker(),
       };
       currentUser = was;
-      const refused = k => /don't have permission to view/.test(shut[k]);
+      /* A refused page draws the wall now — the permission it wants,
+         where it is granted, and a button to ask — rather than one
+         grey line. The page still refuses; it just says more. */
+      const refused = k => /closed to you|does not have View/.test(shut[k])
+        && /Request access/.test(shut[k]);
       return {shutOut: Object.keys(shut).filter(refused),
-              stillShut: Object.keys(open).filter(k=>/don't have permission to view/.test(open[k])),
+              stillShut: Object.keys(open).filter(k=>/closed to you|does not have View/.test(open[k])),
               total: Object.keys(shut).length};
     }, who);
     if(r.shutOut.length !== r.total)
@@ -333,25 +337,30 @@ suite(async t => {
       DB.config.moduleRoles = {};
       await save('config');
       navigate('settings','fields');
+      /* Whichever two roles the firm has: the roles are theirs to
+         change, so naming one here would make this a test of the
+         list rather than of the chip. */
+      const pair = roleList().filter(x=>x !== ADMIN_ROLE).slice(0, 2);
       const chip = (m, role) => Array.from(document.querySelectorAll('button.role-chip'))
         .find(b=>(b.getAttribute('onclick')||'').indexOf("toggleModuleRole('" + m + "','" + role + "'") === 0);
-      chip('CMS', 'Manager').click();
+      chip('CMS', pair[0]).click();
       await new Promise(x=>setTimeout(x, 200));
       const afterOne = moduleRoles('CMS').slice();
       const others = MODULES.filter(m=>m !== 'CMS' && moduleRoles(m).length);
-      chip('CMS', 'Operations').click();
+      chip('CMS', pair[1]).click();
       await new Promise(x=>setTimeout(x, 200));
       const afterTwo = moduleRoles('CMS').slice().sort();
-      chip('CMS', 'Manager').click();
+      chip('CMS', pair[0]).click();
       await new Promise(x=>setTimeout(x, 200));
       const afterOff = moduleRoles('CMS').slice();
       const marked = (Array.from(document.querySelectorAll('button.role-chip'))
-        .find(b=>(b.getAttribute('onclick')||'').indexOf("toggleModuleRole('CMS','Operations'") === 0) || {}).className || '';
-      return {afterOne, afterTwo, afterOff, others, marked};
+        .find(b=>(b.getAttribute('onclick')||'').indexOf("toggleModuleRole('CMS','" + pair[1] + "'") === 0) || {}).className || '';
+      return {afterOne, afterTwo, afterOff, others, marked, pair};
     });
-    if(r.afterOne.join(',') !== 'Manager') throw new Error('one click gave ' + r.afterOne.join(', '));
-    if(r.afterTwo.join(',') !== 'Manager,Operations') throw new Error('two clicks gave ' + r.afterTwo.join(', '));
-    if(r.afterOff.join(',') !== 'Operations') throw new Error('turning one off gave ' + r.afterOff.join(', '));
+    if(r.afterOne.join(',') !== r.pair[0]) throw new Error('one click gave ' + r.afterOne.join(', '));
+    if(r.afterTwo.join(',') !== r.pair.slice().sort().join(','))
+      throw new Error('two clicks gave ' + r.afterTwo.join(', '));
+    if(r.afterOff.join(',') !== r.pair[1]) throw new Error('turning one off gave ' + r.afterOff.join(', '));
     if(r.others.length) throw new Error('it also changed ' + r.others.join(', '));
     if(!/\bon\b/.test(r.marked)) throw new Error('a chosen role does not read as on: "' + r.marked + '"');
     return 'on, on again, off \u2014 one role at a time, no other module touched';

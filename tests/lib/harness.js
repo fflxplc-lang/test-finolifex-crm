@@ -57,7 +57,14 @@ async function suite(opts, body){
       await mail.ready;
     }
     browser = await launcher.launch({executablePath: CHROME});
-    const page = await browser.newPage({viewport: opts.viewport || {width:1500, height:950}});
+    /* A punch needs a location, because BOSS now refuses one without
+       it. A real browser has a device behind it; a headless one has
+       nothing, so it is given a fixed reading here. Varanasi, where
+       the firm is. A suite that wants to test the refusal turns the
+       permission off for itself. */
+    const page = await browser.newPage({viewport: opts.viewport || {width:1500, height:950},
+      permissions: ['geolocation'],
+      geolocation: {latitude: 25.317645, longitude: 82.973915, accuracy: 18}});
 
     page.on('pageerror', e => errors.push('PAGEERROR: ' + e.message));
     page.on('console', m => {
