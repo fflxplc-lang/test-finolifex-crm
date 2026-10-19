@@ -54,10 +54,12 @@ suite(async t => {
       book: bossSopSearch('top 5 clients by AUM').map(s=>s.id),
       kyc: bossSopSearch('KYC hold ho gaya to kya karein').map(s=>s.id),
     }));
-    if(got.large[0] !== 'policy-reco-equity') throw new Error('large → ' + got.large);
+    if(got.large.join() !== 'policy-reco-equity') throw new Error('large → ' + got.large);
     if(got.alloc[0] !== 'policy-risk-allocation') throw new Error('alloc → ' + got.alloc);
     if(got.market[0] !== 'policy-valuation-matrix') throw new Error('market → ' + got.market);
     if(got.tenure[0] !== 'policy-goal-tenure-mix') throw new Error('tenure → ' + got.tenure);
+    if(!got.tenure.includes('policy-reco-hybrid') || !got.tenure.includes('policy-reco-equity')) throw new Error('tenure mix came without its fund lists: ' + got.tenure);
+    if(!got.alloc.includes('policy-valuation-matrix')) throw new Error('allocation came without the valuation matrix: ' + got.alloc);
     if(got.book.length) throw new Error('book question matched ' + got.book);
     if(got.kyc.some(id=>id.startsWith('policy-'))) throw new Error('kyc → ' + got.kyc);
     return 'policy found where asked, nowhere else';
@@ -149,7 +151,7 @@ suite(async t => {
     await t.eval(async () => { document.getElementById('aiInput').value = 'Which is the best large cap fund to recommend?'; await aiSend(); });
     if(seen.length !== before + 1) throw new Error((seen.length - before) + ' model calls');
     const u = lastUser();
-    if(!u.includes('[policy-reco-equity]') || !u.includes('Large cap: most recommended Nippon, HDFC')) throw new Error(u.slice(0, 400));
+    if(!u.includes('[policy-reco-equity]') || !u.includes('Large cap: most recommended Nippon India Large Cap Fund, HDFC Large Cap Fund')) throw new Error(u.slice(0, 400));
     if(!u.includes('none read')) throw new Error('records were read for a policy question');
     return 'recommended list sent, no data';
   });
