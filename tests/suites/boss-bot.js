@@ -39,10 +39,28 @@ suite(async t => {
   await t.home();
 
   t.section('the SOP library');
-  await t.step('all 71 SOPs are in the page', async () => {
-    const n = await t.eval(() => BOSS_SOPS.length);
-    if(n !== 71) throw new Error(n + ' SOPs');
-    return n + ' SOPs';
+  await t.step('all 71 SOPs and the investment policy are in the page', async () => {
+    const n = await t.eval(() => ({ops: BOSS_SOPS.filter(s=>!bossIsPolicy(s)).length, policy: BOSS_POLICY.length}));
+    if(n.ops !== 71) throw new Error(n.ops + ' SOPs');
+    if(n.policy < 14) throw new Error(n.policy + ' policy entries');
+    return n.ops + ' SOPs + ' + n.policy + ' policy entries';
+  });
+  await t.step('a policy question finds the policy, a book question does not', async () => {
+    const got = await t.eval(() => ({
+      large: bossSopSearch('Large cap mein kaunsa fund recommend hai').map(s=>s.id),
+      alloc: bossSopSearch('conservative client ka asset allocation kya hoga').map(s=>s.id),
+      market: bossSopSearch('market expensive hai to kya karein').map(s=>s.id),
+      tenure: bossSopSearch('6 saal ke goal ke liye kaunse funds').map(s=>s.id),
+      book: bossSopSearch('top 5 clients by AUM').map(s=>s.id),
+      kyc: bossSopSearch('KYC hold ho gaya to kya karein').map(s=>s.id),
+    }));
+    if(got.large[0] !== 'policy-reco-equity') throw new Error('large → ' + got.large);
+    if(got.alloc[0] !== 'policy-risk-allocation') throw new Error('alloc → ' + got.alloc);
+    if(got.market[0] !== 'policy-valuation-matrix') throw new Error('market → ' + got.market);
+    if(got.tenure[0] !== 'policy-goal-tenure-mix') throw new Error('tenure → ' + got.tenure);
+    if(got.book.length) throw new Error('book question matched ' + got.book);
+    if(got.kyc.some(id=>id.startsWith('policy-'))) throw new Error('kyc → ' + got.kyc);
+    return 'policy found where asked, nowhere else';
   });
   await t.step('a Hinglish or English question finds the SOP it is about', async () => {
     const got = await t.eval(() => ({
@@ -125,6 +143,15 @@ suite(async t => {
     if(!u.includes('[nft-transmission]')) throw new Error('SOP not sent');
     if(!u.includes('none read')) throw new Error('records were read for a how-to');
     return 'SOP sent, no data';
+  });
+  await t.step('a fund question gets the recommended list, and no records', async () => {
+    const before = seen.length;
+    await t.eval(async () => { document.getElementById('aiInput').value = 'Which is the best large cap fund to recommend?'; await aiSend(); });
+    if(seen.length !== before + 1) throw new Error((seen.length - before) + ' model calls');
+    const u = lastUser();
+    if(!u.includes('[policy-reco-equity]') || !u.includes('Large cap: most recommended Nippon, HDFC')) throw new Error(u.slice(0, 400));
+    if(!u.includes('none read')) throw new Error('records were read for a policy question');
+    return 'recommended list sent, no data';
   });
   await t.step('a book-wide question plans a read, BOSS does it, then answers', async () => {
     const before = seen.length;
