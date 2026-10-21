@@ -73,6 +73,33 @@ suite(async t => {
     return '"' + r.field + '" charted automatically';
   });
 
+  t.section('task work by Assign To');
+  await t.step('the Tasks tab counts DST tasks per assignee', async () => {
+    const r = await t.eval(() => {
+      const d = analyticsDays(), mine = me().id;
+      const other = 'TM-AN2'; DB.team.push({id:other, name:'An Other', branch:'Pune'});
+      const T = o => DB.tasks.push(Object.assign({id: uid('DST'), taskType:'An task', overallStatus:'Not Started', assignedDate:d.today}, o));
+      T({assignTo:mine, dueDate:d.today}); T({assignTo:mine, dueDate:d.today}); T({assignTo:other, dueDate:d.today});
+      T({assignTo:mine, dueDate:d.yesterday});
+      T({assignTo:other, dueDate:d.yesterday, overallStatus:'Completed', completedAt:new Date().toISOString()});
+      T({assignTo:mine, dueDate:d.today, parentTaskId:'X'});                    // a sub-task: not counted
+      T({assignTo:mine, dueDate:d.today, deletedAt:new Date().toISOString()}); // deleted: not counted
+      setAnalyticsSource('tasks');
+      const rows = analyticsTaskRows();
+      const card = id => analyticsTaskCard(ANALYTICS_TASK_CARDS.find(c=>c.id===id), rows).rows;
+      return {mineName: teamName(mine), today: card('today'), yest: card('yesterday'), week: card('week'),
+        overdue: card('overdue'), text: document.body.innerText};
+    });
+    const sum = rows => rows.reduce((s,x)=>s+x.count, 0);
+    const mineToday = (r.today.find(x=>x.label===r.mineName)||{}).count;
+    if(mineToday !== 2 || sum(r.today) !== 3) throw new Error('today ' + JSON.stringify(r.today));
+    if(sum(r.yest) !== 2 || sum(r.overdue) !== 1 || sum(r.week) !== 1) throw new Error(JSON.stringify({y:r.yest, o:r.overdue, w:r.week}));
+    for(const h of ["Today's Work", "Yesterday's Work", 'Total Incomplete Tasks', 'Completed Tasks (This Week)', 'Assign To', 'Record Count'])
+      if(!r.text.toLowerCase().includes(h.toLowerCase())) throw new Error('page lacks ' + h);
+    await t.eval(() => setAnalyticsSource('clients'));
+    return 'today 3, yesterday 2, overdue 1, completed this week 1';
+  });
+
   t.section('Boss Bot draws charts');
   await t.step('connect the stand-in model', async () => {
     await t.eval(async (port) => {
@@ -92,6 +119,12 @@ suite(async t => {
     const r = await t.eval(() => ({svg: !!document.querySelector('#aiTurns .boss-chart svg'), text: document.querySelector('#aiTurns').innerText}));
     if(!r.svg || !r.text.includes('KYC Status (Clients)') || !r.text.includes('MOCK CHART ANSWER')) throw new Error(r.text.slice(-300));
     return 'chart drawn under the answer, one model call';
+  });
+  await t.step('"aaj ke tasks assign to wise chart" draws today\'s work per person', async () => {
+    await t.eval(async () => { document.getElementById('aiInput').value = 'aaj ke tasks assign to wise chart banao'; await aiSend(); });
+    const c = await t.eval(() => ai.turns[ai.turns.length-1].chart);
+    if(!c || c.src !== 'tasks' || !/Today's Work/.test(c.title) || c.total !== 3) throw new Error(JSON.stringify(c));
+    return c.title + ', ' + c.total + ' tasks';
   });
   await t.step('a chart nobody named is built from the read Boss plans', async () => {
     await t.eval(async () => { document.getElementById('aiInput').value = 'Show a graph of how many leads came from each referral channel'; await aiSend(); });

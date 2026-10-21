@@ -56828,7 +56828,7 @@ function bossTurnFoot(t){
       <div style="font-weight:600;font-size:13px">${esc(t.chart.title)}</div>
       <div class="small-note" style="margin:2px 0 4px">${t.chart.total} records, counted live</div>
       ${analyticsBarSvg(t.chart.rows, ANALYTICS_COLORS[0], t.chart.title)}
-      <button class="btn sm ghost" onclick="aiCloseP();navigate('analytics')">Open Analytics</button></div>` : '';
+      <button class="btn sm ghost" onclick="aiCloseP();window._anSrc='${t.chart.src||'clients'}';navigate('analytics')">Open Analytics</button></div>` : '';
   return (cl || sp || op || ch) ? `${ch}<div class="ai-acts" style="flex-wrap:wrap">${op}${cl}</div>${sp}` : '';
 }
 
@@ -56932,14 +56932,18 @@ function analyticsCard(c, i){
 function setAnalyticsSource(s){ window._anSrc = s; render(); }
 function viewAnalytics(){
   const srcs = Object.keys(ANALYTICS_SOURCES).filter(s=>can(ANALYTICS_SOURCES[s].perm, 'view'));
+  if(can('DST','view')) srcs.push('tasks');
   if(!srcs.length) return permissionWall('CMS', {title:'Analytics', subtitle:'Charts from your records'});
   const src = srcs.includes(window._anSrc) ? window._anSrc : srcs[0];
+  const label = s => s==='tasks' ? 'Tasks' : ANALYTICS_SOURCES[s].label;
+  if(src==='tasks') return viewAnalyticsTasks(`<div class="row" style="gap:8px;margin:0 0 14px;flex-wrap:wrap;align-items:center">
+      ${srcs.map(s=>`<button class="btn sm ${s===src?'':'ghost'}" onclick="setAnalyticsSource('${s}')">${esc(label(s))}</button>`).join('')}</div>`);
   const a = analyticsCharts(src);
   const shown = a.charts.filter(c=>c.rows.some(r=>r.label!==ANALYTICS_BLANK));
   const empty = a.charts.filter(c=>!shown.includes(c));
   return `${moduleHeader({title:'Analytics', subtitle:'Charts drawn from the live records you can see, refreshed every time you open this page'})}
     <div class="row" style="gap:8px;margin:0 0 14px;flex-wrap:wrap;align-items:center">
-      ${srcs.map(s=>`<button class="btn sm ${s===src?'':'ghost'}" onclick="setAnalyticsSource('${s}')">${esc(ANALYTICS_SOURCES[s].label)}</button>`).join('')}
+      ${srcs.map(s=>`<button class="btn sm ${s===src?'':'ghost'}" onclick="setAnalyticsSource('${s}')">${esc(label(s))}</button>`).join('')}
       <span class="small-note" style="margin:0 0 0 6px">${a.total} ${esc(ANALYTICS_SOURCES[src].label.toLowerCase())} counted</span>
     </div>
     ${a.total ? `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,420px),1fr));gap:14px">
@@ -56947,11 +56951,94 @@ function viewAnalytics(){
     ${empty.length && a.total ? `<p class="small-note" style="margin-top:12px">No data recorded yet for: ${empty.map(c=>esc(c.label)).join(', ')}.</p>` : ''}
     <p class="small-note">Ask Boss AI for a chart in words, for example "KYC status ka chart banao" or "branch wise clients graph".</p>`;
 }
+/* ---------------------------------------------------------------------
+   ANALYTICS — TASK WORK BY ASSIGNEE
+
+   The DST tasks, counted per person they are assigned to, the way the
+   firm's old Zoho dashboard laid it out: today's work, yesterday's, what
+   is still open, what is open this month, and what was finished this
+   week. Each card is a ranked "Assign To · Record Count" list with a bar,
+   read from the live tasks every time the page opens, and scoped by the
+   same rule as the DST list, so nobody counts a task they could not open.
+   --------------------------------------------------------------------- */
+function analyticsTaskBranch(t){
+  const c = DB.clients.find(x=>x.id===t.clientId); const l = DB.leads.find(x=>x.id===t.leadId);
+  return (c&&c.branch) || (l&&l.branch) || (DB.team.find(x=>x.id===t.assignTo)||{}).branch || '';
+}
+function analyticsTaskRows(){
+  if(!can('DST','view')) return null;
+  return visibleFor((DB.tasks||[]).filter(t=>!t.deletedAt && !t.parentTaskId), TASK_OWNER_FIELDS);
+}
+/* Local calendar days as yyyy-mm-dd (midday, so no timezone edge). */
+function analyticsDays(){
+  const iso = d => d.toISOString().slice(0,10);
+  const now = new Date(); now.setHours(12,0,0,0);
+  const yest = new Date(now); yest.setDate(now.getDate() - 1);
+  const mon = new Date(now); mon.setDate(now.getDate() - (now.getDay() + 6) % 7);
+  const sun = new Date(mon); sun.setDate(mon.getDate() + 6);
+  return {today: iso(now), yesterday: iso(yest), weekFrom: iso(mon), weekTo: iso(sun), month: iso(now).slice(0,7),
+          localDay: v => { if(!v) return ''; const d = new Date(v); if(isNaN(d)) return String(v).slice(0,10); d.setHours(12,0,0,0); return iso(d); }};
+}
+function analyticsTaskOpen(t){ return t.overallStatus!=='Completed' && t.overallStatus!=='Cancelled'; }
+const ANALYTICS_TASK_CARDS = [
+  {id:'today', label:"Today's Work", note:'Tasks due today', words:['today','aaj'],
+   test:(t,d)=>(t.dueDate||'').slice(0,10)===d.today},
+  {id:'yesterday', label:"Yesterday's Work", note:'Tasks that were due yesterday', words:['yesterday','kal'],
+   test:(t,d)=>(t.dueDate||'').slice(0,10)===d.yesterday},
+  {id:'incomplete', label:'Total Incomplete Tasks', note:'Every task not completed or cancelled', words:['incomplete','pending','open'],
+   test:t=>analyticsTaskOpen(t)},
+  {id:'month', label:'Incomplete Tasks (This Month)', note:'Not completed, due this month', words:['month','mahina','mahine'],
+   test:(t,d)=>analyticsTaskOpen(t) && (t.dueDate||'').slice(0,7)===d.month},
+  {id:'overdue', label:'Overdue Tasks', note:'Not completed, due date already passed', words:['overdue','late','delayed'],
+   test:(t,d)=>analyticsTaskOpen(t) && t.dueDate && t.dueDate.slice(0,10) < d.today},
+  {id:'week', label:'Completed Tasks (This Week)', note:'Completed Monday to Sunday this week', words:['completed','weekly','week','done'],
+   test:(t,d)=>t.overallStatus==='Completed' && (x=>x>=d.weekFrom && x<=d.weekTo)(d.localDay(t.completedAt))},
+];
+function analyticsTaskCard(card, rows){
+  const d = analyticsDays();
+  return {id:card.id, label:card.label, note:card.note,
+    rows: analyticsGroup(rows.filter(t=>card.test(t, d)), t=>t.assignTo ? teamName(t.assignTo) : '')
+      .map(r=>r.label===ANALYTICS_BLANK ? Object.assign(r, {label:'Unassigned'}) : r)};
+}
+function analyticsRankHtml(c, color){
+  const max = Math.max(1, ...c.rows.map(r=>r.count));
+  const total = c.rows.reduce((s,r)=>s+r.count, 0);
+  return `<div class="card" style="margin:0;padding:14px 16px">
+    <div style="display:flex;justify-content:space-between;gap:8px;align-items:baseline">
+      <h3 style="margin:0;font-size:15px">${esc(c.label)}</h3><b style="font-size:15px">${total}</b>
+    </div>
+    <div class="small-note" style="margin:2px 0 8px">${esc(c.note)}</div>
+    ${c.rows.length ? `<table style="width:100%;border-collapse:collapse;font-size:13px">
+      <thead><tr><th style="text-align:left;padding:6px 0;border-bottom:1px solid var(--line)">Assign To</th>
+        <th style="text-align:right;padding:6px 0;border-bottom:1px solid var(--line)">Record Count</th></tr></thead>
+      <tbody>${c.rows.map((r,i)=>`<tr><td style="padding:7px 8px 7px 0;border-bottom:1px solid var(--line)">
+          <div>${i+1}. ${esc(r.label)}</div>
+          <div style="height:5px;border-radius:3px;margin-top:4px;background:${color};width:${Math.max(3, Math.round(r.count/max*100))}%"></div></td>
+        <td style="text-align:right;padding:7px 0;border-bottom:1px solid var(--line);vertical-align:top">${r.count}</td></tr>`).join('')}</tbody>
+    </table>` : `<div class="empty" style="padding:28px 0">No data available</div>`}
+  </div>`;
+}
+function viewAnalyticsTasks(srcTabs){
+  const all = analyticsTaskRows() || [];
+  const rows = applyBranchTab(all, '_anTaskBranch', analyticsTaskBranch);
+  const cards = ANALYTICS_TASK_CARDS.map(c=>analyticsTaskCard(c, rows));
+  return `${moduleHeader({title:'Analytics', subtitle:'Charts drawn from the live records you can see, refreshed every time you open this page'})}
+    ${srcTabs}
+    ${branchTabs({rows:all, stateKey:'_anTaskBranch', branchOf:analyticsTaskBranch, note:'tasks you can see'})}
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr));gap:14px;margin-top:12px">
+      ${cards.map((c,i)=>analyticsRankHtml(c, ANALYTICS_COLORS[i % ANALYTICS_COLORS.length])).join('')}</div>
+    <p class="small-note">Counted from DST tasks (sub-tasks left out). Ask Boss AI, for example "aaj ke tasks assign to wise chart".</p>`;
+}
 /* Boss Bot: a question asking for a chart, and which grouping it names.
    Returns null when the question does not ask for a chart. */
 function bossChartIntent(q){
   const t = ' ' + String(q||'').toLowerCase().replace(/[^a-z0-9]+/g,' ') + ' ';
   if(!/ (chart|charts|graph|graphs|bar|pie|plot|visual|visualise|visualize|breakdown|distribution|graf) /.test(t)) return null;
+  if(/ (task|tasks|kaam|work|dst) /.test(t) && can('DST','view')){
+    let card = ANALYTICS_TASK_CARDS[2], score = 0;
+    ANALYTICS_TASK_CARDS.forEach(c=>{ const s = c.words.filter(w=>t.indexOf(' '+w+' ')>=0).length; if(s > score){ score = s; card = c; } });
+    return {src:'tasks', dim:card, rows: analyticsTaskRows()};
+  }
   const src = / (lead|leads) /.test(t) && can('LMS','view') ? 'leads' : 'clients';
   const rows = analyticsRecords(src);
   if(!rows) return {src, dim:null};
@@ -56966,8 +57053,12 @@ function bossChartIntent(q){
 }
 function bossChartFor(intent){
   if(!intent || !intent.dim || !intent.rows) return null;
+  if(intent.src==='tasks'){
+    const c = analyticsTaskCard(intent.dim, intent.rows);
+    return {title: c.label + ' by Assign To', total: c.rows.reduce((s,r)=>s+r.count, 0), rows: c.rows, src:'tasks'};
+  }
   return {title: intent.dim.label + ' (' + ANALYTICS_SOURCES[intent.src].label + ')', total: intent.rows.length,
-    rows: analyticsGroup(intent.rows, intent.dim.value)};
+    rows: analyticsGroup(intent.rows, intent.dim.value), src: intent.src};
 }
 /* A chart out of a read Boss planned (grouped by one column), for a chart
    question none of the named groupings matched. */
