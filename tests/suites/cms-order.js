@@ -159,16 +159,27 @@ suite(async t => {
   t.section('the one section that shows where the money is');
 
   await t.step('Investment Stage Status replaces the card stack', async () => {
-    const r = await t.eval(()=>{
+    /* It used to look for the old function's name. The name was not
+       the point — the client's profile was — and the Transaction
+       Tracker has cards of its own now, on its own page, which is not
+       this. So it reads the profile itself. */
+    const r = await t.eval(i=>{
       const s = Array.from(document.querySelectorAll('script')).map(x=>x.textContent).join('\n');
+      const c = DB.clients.find(x=>x.id === i);
+      /* The section lives on the profile's Transactions tab. */
+      window._clientTab = 'transactions';
+      const profile = JSON.stringify(viewClientDetail(c.id));
+      window._clientTab = 'overview';
       return {has: typeof window.investmentStageStatusHtml === 'function',
               title: s.indexOf('Investment Stage Status') >= 0,
-              oldCard: /function txnCardHtml\b/.test(s)};
-    });
+              onProfile: /Investment Stage Status/.test(profile),
+              stackBack: /txn-card\b|txn-cards/.test(profile)};
+    }, id);
     if(!r.has) throw new Error('investmentStageStatusHtml is gone');
     if(!r.title) throw new Error('nothing is headed Investment Stage Status');
-    if(r.oldCard) throw new Error('the old per-transaction card stack is still there');
-    return 'one section, and the stack is gone';
+    if(!r.onProfile) throw new Error('the client profile does not carry the section');
+    if(r.stackBack) throw new Error('the client profile is drawing a stack of transaction cards again');
+    return 'one section on the profile, and no stack of cards back on it';
   });
 
   await t.step('it names the scheme and the folio the way M19 asked', async () => {

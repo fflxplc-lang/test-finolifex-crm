@@ -103,6 +103,83 @@ suite(async t => {
     return 'locked where it was locked';
   });
 
+  await t.step('a blank option that means something can be chosen back', async () => {
+    const r = await t.eval(async ()=>{
+      const host = document.getElementById('modalBody');
+      host.innerHTML = `<select id="zzBlank" onchange="window._zzBlank = this.value">
+        <option value="">Untagged</option>
+        <option value="g1">Retirement</option></select>
+        <select id="zzPrompt">
+          <option value="">Select\u2026</option>
+          <option value="a">Apple</option></select>`;
+      pickPaint(host, 'test');
+      const rows = (window._pickRows['zzBlank'] || []).map(x=>x.label);
+      const prompt = (window._pickRows['zzPrompt'] || []).map(x=>x.label);
+      const says = document.getElementById('pickbox_zzBlank').placeholder;
+      const saysPrompt = document.getElementById('pickbox_zzPrompt').placeholder;
+      /* Tag it, then put it back to Untagged from the list itself. */
+      pickTake('zzBlank', 'g1');
+      const tagged = document.getElementById('zzBlank').value;
+      window._zzBlank = 'unset';
+      pickTake('zzBlank', '');
+      return {rows, prompt, says, saysPrompt, tagged,
+              untagged: document.getElementById('zzBlank').value,
+              heard: window._zzBlank,
+              shows: document.getElementById('pickbox_zzBlank').value};
+    });
+    if(r.rows.join(',') !== 'Untagged,Retirement')
+      throw new Error('the list offers: ' + r.rows.join(', '));
+    if(r.prompt.join(',') !== 'Apple')
+      throw new Error('"Select…" was offered as a choice: ' + r.prompt.join(', '));
+    if(r.says !== 'Untagged') throw new Error('the box says "' + r.says + '", not what the blank option says');
+    if(r.saysPrompt !== 'Search') throw new Error('a box whose blank is a prompt says "' + r.saysPrompt + '"');
+    if(r.tagged !== 'g1') throw new Error('choosing a goal gave "' + r.tagged + '"');
+    if(r.untagged !== '') throw new Error('choosing Untagged gave "' + r.untagged + '"');
+    if(r.heard !== '') throw new Error('the control\u2019s own onchange heard "' + r.heard + '"');
+    return 'Untagged is a row you can pick and the words the empty box shows; '
+      + '"Select…" stays a prompt and is not offered as an answer';
+  });
+
+  await t.step('the box wears what the dropdown wore, so a styled page keeps its look', async () => {
+    const r = await t.eval(()=>{
+      const host = document.getElementById('modalBody');
+      host.innerHTML = `<style>.zz-styled{border-radius:16px;padding:14px 16px}</style>
+        <select id="zzDressed" class="zz-styled">
+          <option value="" disabled selected>Select your life stage</option>
+          <option value="a">Under 25</option></select>`;
+      pickPaint(host, 'test');
+      const box = document.getElementById('pickbox_zzDressed');
+      const cs = getComputedStyle(box);
+      return {cls: box.className, radius: cs.borderRadius, pad: cs.paddingLeft,
+              says: box.placeholder,
+              rows: (window._pickRows['zzDressed'] || []).map(x=>x.label)};
+    });
+    if(!/\bzz-styled\b/.test(r.cls)) throw new Error('the box did not take the control\u2019s class: ' + r.cls);
+    if(!/pick-input/.test(r.cls)) throw new Error('the box lost its own class: ' + r.cls);
+    if(r.radius !== '16px' || r.pad !== '16px')
+      throw new Error('the page\u2019s own shape did not reach the box: ' + r.radius + ' / ' + r.pad);
+    /* A prompt the author wrote and disabled is what the empty box
+       says — better than "Search" on the first field a client meets. */
+    if(r.says !== 'Select your life stage') throw new Error('the empty box says "' + r.says + '"');
+    if(r.rows.join(',') !== 'Under 25')
+      throw new Error('the disabled prompt was offered as an answer: ' + r.rows.join(', '));
+    return 'the box is the page\u2019s box — its radius, its padding, its prompt — and the prompt is not an answer';
+  });
+
+  await t.step('and it reads as a dropdown, not as a search box', async () => {
+    const r = await t.eval(()=>{
+      const host = document.getElementById('modalBody');
+      host.innerHTML = `<select id="zzCaret"><option value="a">Apple</option></select>`;
+      pickPaint(host, 'test');
+      const box = document.getElementById('pickbox_zzCaret');
+      const css = getComputedStyle(box);
+      return {img: css.backgroundImage, pad: parseInt(css.paddingRight, 10)};
+    });
+    if(!/svg/.test(r.img)) throw new Error('there is no chevron on the field: ' + r.img);
+    if(!(r.pad >= 20)) throw new Error('the text runs under the chevron (padding ' + r.pad + 'px)');
+    return 'a chevron on the right, and room kept for it';
+  });
+
   await t.step('a grouped list keeps the group on the row', async () => {
     const r = await t.eval(()=>{
       const host = document.getElementById('modalBody');

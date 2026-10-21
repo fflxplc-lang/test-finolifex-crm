@@ -50,8 +50,12 @@ suite(async t => {
      list is asserted whole rather than by presence: a tenth question
      creeping back onto a form the firm trimmed is the failure this
      step exists to catch. */
+  /* The firm's own list, with the two boxes a monthly investment adds
+     after the amount. They are asked only when the transaction type
+     says monthly, which the SIP suite checks; here they have to be in
+     the list and in their place. */
   const DBT_FORM = ['dbtType','clientId','leadId','sourceOfBusiness','productCategory',
-    'platform','transactionType','executionDate','amount','status'];
+    'platform','transactionType','executionDate','amount','sipStartDate','sipTenure','status'];
 
   await t.step('the form asks what the firm wrote down, in that order', async () => {
     const r = await t.eval(()=>{
@@ -83,20 +87,25 @@ suite(async t => {
     if(r.consent !== 'Pending from Client Consent')
       throw new Error('a new entry starts on "' + r.consent + '"');
     if(r.start !== 'Not Started') throw new Error('a new transaction starts on "' + r.start + '"');
-    return 'the firm\u2019s nine in order, folio/logged/remarks off the raise form but still on the record';
+    return 'the firm\u2019s nine in order (and the two a monthly investment adds), '
+      + 'folio/logged/remarks off the raise form but still on the record';
   });
 
   await t.step('both raise forms open on Pending from Client Consent', async () => {
     id = await t.eval(SEED);
     const r = await t.eval(async (cid)=>{
+      /* The sheet can hold several DBTs now, so every box carries the
+         number of the section it belongs to. The first is __0. */
       openCmsDbtModal(cid);
-      const cms = {status: (document.getElementById('f_status')||{}).value,
-                   name: (document.getElementById('derived_clientId')||{}).value,
-                   asked: !document.getElementById('f_clientId'),
-                   exec: (document.getElementById('f_executionDate')||{}).value,
-                   noFolio: !document.getElementById('f_folioNumber'),
-                   noLogged: !document.getElementById('f_loggedDate'),
-                   noRemarks: !document.getElementById('f_remarks')};
+      const cms = {status: (document.getElementById('f_status__0')||{}).value,
+                   name: (document.getElementById('derived_clientId__0')||{}).value,
+                   asked: !document.getElementById('f_clientId__0'),
+                   exec: (document.getElementById('f_executionDate__0')||{}).value,
+                   noFolio: !document.getElementById('f_folioNumber__0'),
+                   noLogged: !document.getElementById('f_loggedDate__0'),
+                   noRemarks: !document.getElementById('f_remarks__0'),
+                   sections: document.querySelectorAll('.dbt-entry').length,
+                   another: /dbtAddAnother/.test(document.getElementById('modalBody').innerHTML)};
       closeModal();
       return cms;
     }, id);
@@ -107,7 +116,10 @@ suite(async t => {
     if(!r.exec) throw new Error('the execution date opens blank');
     if(!r.noFolio || !r.noLogged || !r.noRemarks)
       throw new Error('a trimmed field is still on the Fresh DBT form');
-    return 'shows ' + r.name + ', status Pending from Client Consent, execution date filled';
+    if(r.sections !== 1) throw new Error('it opened on ' + r.sections + ' sections, not one');
+    if(!r.another) throw new Error('there is no way to add a second DBT to the sheet');
+    return 'shows ' + r.name + ', status Pending from Client Consent, execution date filled, '
+      + 'one section and a way to add another';
   });
 
   t.section('CMS — business straight from the client');
@@ -123,15 +135,16 @@ suite(async t => {
       const bareAlloc = shell.indexOf('New Asset Allocation') >= 0;
       openCmsDbtModal(cid);
       const asked = BUSINESS_FIELDS.filter(f=>f.k !== 'leadId' && f.k !== 'clientId')
-        .every(f=>!!document.getElementById('f_' + f.k));
-      const set = (k, v)=>{ const el = document.getElementById('f_' + k); if(el) el.value = v; };
+        .every(f=>!!document.getElementById('f_' + f.k + '__0'));
+      const set = (k, v)=>{ const el = document.getElementById('f_' + k + '__0'); if(el) el.value = v; };
       set('dbtType','Investment'); set('sourceOfBusiness','CMS');
       set('productCategory', cfgLabels('business.productCategories')[0]);
       set('platform', cfgLabels('alloc.platforms')[0]);
       set('transactionType','Purchase'); set('amount','500000');
       set('executionDate', new Date().toISOString().slice(0,10));
       set('status', dbtConsentStatus());
-      await submitCmsDbt(cid);
+      await saveDbtBatch();
+      closeModal();
       const entry = (DB.businessEntries || []).filter(e=>e.clientId === cid && !e.deletedAt).pop();
       const rec = entry ? allocationForDbt(entry.id) : null;
       return {onProfile, asked, entry: entry ? {id:entry.id, amount:entry.amount, status:entry.status,
