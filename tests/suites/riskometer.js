@@ -77,7 +77,13 @@ suite(async t => {
         {schemeName:'ZZ Risk B', amount:'300000', riskLevel:'Low', fundObjective:'y'},
       ]);
       const html = allocationDocHtml(rec);
-      return {portfolio: /PORTFOLIO RISKOMETER/.test(html),
+      return {/* The blend is now the Portfolio Risk Meter, in the Risk Profile
+                 section, drawn as a dial beside the client's own rather than
+                 as a strip at the foot of the document. It is the same
+                 reading off the same allocPortfolioRisk. */
+              portfolio: /PORTFOLIO RISK METER/.test(html),
+              noIseq: /No Investor Suitability Questionnaire on file/.test(html),
+              dial: (html.match(/risk-meter-dial/g) || []).length,
               scheme: (html.match(/SCHEME RISKOMETER/g) || []).length,
               strips: (html.match(/riskometer-strip/g) || []).length,
               marked: (html.match(/riskometer-seg[^"]*on/g) || []).length,
@@ -85,14 +91,19 @@ suite(async t => {
               saysWhy: /weighted by the amount/.test(html)};
     });
     if(!r.portfolio) throw new Error('there is no portfolio riskometer on the document');
+    /* This fixture's client has no questionnaire on file, so the client
+       side says so rather than drawing a needle off nothing; the
+       portfolio's own dial is the one this step is about. */
+    if(r.dial !== 1) throw new Error(r.dial + ' dials drawn, expected 1 (the portfolio\u2019s)');
+    if(!r.noIseq) throw new Error('the client meter drew something without a questionnaire');
     if(r.scheme !== 2) throw new Error('the per-scheme riskometer appears ' + r.scheme + ' times, not 2');
-    if(r.strips !== 3) throw new Error(r.strips + ' strips drawn, expected 3 (two schemes and the blend)');
-    if(r.marked < 3) throw new Error('a band was not marked on every strip');
+    if(r.strips !== 2) throw new Error(r.strips + ' strips drawn, expected 2 (one per scheme)');
+    if(r.marked < 2) throw new Error('a band was not marked on every strip');
     /* The honesty of this is the point: a blend presented as a
        regulator's figure would be a lie told in a client's name. */
     if(!r.honest) throw new Error('the document does not say the portfolio reading is not regulatory');
     if(!r.saysWhy) throw new Error('it does not say how the blend was arrived at');
-    return 'two scheme riskometers and one portfolio blend, with the blend named as the firm’s own';
+    return 'two scheme riskometers and the portfolio blend as its own meter, named as the firm’s own';
   });
 
   await t.step('a sheet whose schemes carry no band says so rather than guessing', async () => {

@@ -35,7 +35,7 @@ const SECTIONS = ['Business Intelligence', 'Performance & Comparison', 'Operatio
 const WANT = {
   bi:         ['Client Concentration', 'Client Engagement', 'Investment Activity', 'Servicing Worklist'],
   perf:       ['RM Leads Dashboard', 'Branch Comparison Report', 'Lead Source ROI'],
-  ops:        ['KPIs / MIS', 'Recommendation Analytics', 'Employee Report'],
+  ops:        ['KPIs / MIS', 'Consent Analytics', 'Employee Report'],
   trends:     ['AUM Trend (12 Months)', 'SIP Book Trend', 'Lost Lead Analysis'],
   sales:      [],
   compliance: ['Compliance Certificate'],
