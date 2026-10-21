@@ -77415,11 +77415,19 @@ function hrRegApprovers(userId){
   if(hr.length) return hr;
   const a = hrApproverFor(userId);
   const t = a && (DB.team || []).find(x=>x.id === a.id);
-  return t ? [t] : [];
+  if(t) return [t];
+  /* An HR administrator with nobody above them answers their own, the
+     same as their own leave — otherwise the request has nowhere to go. */
+  const self = (DB.team || []).find(x=>x.id === userId);
+  return self && hrIsAdmin(self) ? [self] : [];
 }
+/* The same rule as leave: an HR administrator decides any request,
+   their own included; HR staff and the named approver decide anybody
+   else's. */
 function hrMayDecideReg(row){
-  return !!row && row.status === 'Pending' && row.userId !== currentUser && (hrIsStaff() || hrIsAdmin()
-    || hrRegApprovers(row.userId).some(t=>t.id === currentUser));
+  if(!row || row.status !== 'Pending') return false;
+  if(hrIsAdmin()) return true;
+  return row.userId !== currentUser && (hrIsStaff() || hrRegApprovers(row.userId).some(t=>t.id === currentUser));
 }
 function hrDayActions(date){
   const u = me(); if(!u) return;
