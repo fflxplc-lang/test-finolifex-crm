@@ -4,6 +4,8 @@
  *   npm run user -- list
  *   npm run user -- passwd someone@company.com "new password"
  *   npm run user -- remove someone@company.com
+ *   npm run user -- 2fa    someone@company.com off   (or on) — two-step sign-in,
+ *                          e.g. for somebody who has lost their mailbox
  *
  * There is no sign-up page and no password reset email on purpose — accounts
  * are created here, by someone with server access.
@@ -72,6 +74,17 @@ switch (cmd) {
     console.log(r.changes ? `${email} is now ${role}` : `no account for ${email}`);
     break;
   }
+  case '2fa': {
+    needEmail();
+    const want = password; // third argument: on | off
+    if (want !== 'on' && want !== 'off') { console.error('Say "on" or "off".'); process.exit(1); }
+    if (!db.prepare("SELECT 1 FROM pragma_table_info('users') WHERE name = 'two_factor'").get()) {
+      db.exec('ALTER TABLE users ADD COLUMN two_factor INTEGER NOT NULL DEFAULT 0');
+    }
+    const r = db.prepare('UPDATE users SET two_factor = ? WHERE email = ?').run(want === 'on' ? 1 : 0, email);
+    console.log(r.changes ? `two-step sign-in is ${want} for ${email}` : `no account for ${email}`);
+    break;
+  }
   case 'list': {
     const rows = db.prepare('SELECT id, email, role, created_at FROM users ORDER BY id').all();
     if (!rows.length) console.log('no accounts yet');
@@ -79,5 +92,5 @@ switch (cmd) {
     break;
   }
   default:
-    console.log('usage: npm run user -- add|passwd|remove|role|list [email] ["password"|admin|user]');
+    console.log('usage: npm run user -- add|passwd|remove|role|2fa|list [email] ["password"|admin|user|on|off]');
 }

@@ -30,7 +30,10 @@ const SEED = async ()=>{
     location: {required: false, note: ''},
     activity: {enabled: true, idleMinutes: 5, beatSeconds: 30, saveSeconds: 120},
     reminders: {enabled: true, inAfter: '09:10', outAfter: '19:00', repeatMinutes: 30},
-    weeklyOff: [], holidays: []});
+    weeklyOff: [], holidays: [],
+    /* open all day, every day: this suite is not about the punch clock's hours */
+    day: Object.assign({}, (DB.hrConfig || {}).day, {punchInFrom: '00:00', punchOutUntil: '23:59'})});
+  window.hrClosedDayWhy = () => ''; window.hrIsSunday = () => false;
   DB.hrAttendance = [];
   DB.hrLeave = [];
   await save('hrConfig'); await save('hrAttendance'); await save('hrLeave');
