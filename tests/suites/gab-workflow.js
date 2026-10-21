@@ -9,7 +9,7 @@
 
    The firm asked for 7 Events' workflow here too, so GAB now walks:
 
-     Input Form · RM Planning · The Golden Age Blueprint
+     Input Form · RM Working · The Golden Age Blueprint
      Required Execution Plan · Final Execution Plan
 
    with the Formula Audit left where it was, last, because it is a
@@ -56,7 +56,7 @@ suite(async t => {
 
   await t.step('six tabs, the journey first and the audit last', async () => {
     const r = await t.eval(()=>GAB_STEPS.map(x=>x[1]));
-    const want = ['Input Form','RM Planning','The Golden Age Blueprint',
+    const want = ['Input Form','RM Working','The Golden Age Blueprint',
                   'Required Execution Plan','Final Execution Plan','Formula Audit'];
     if(JSON.stringify(r) !== JSON.stringify(want)) throw new Error('the steps read ' + r.join(' · '));
     return r.join(' → ');
@@ -75,15 +75,17 @@ suite(async t => {
         guide: (round.output.allocationGuide || []).map(g=>g.label)};
     }, {SETUP});
     if(!r.prepared) throw new Error('the plan was not prepared, so nothing below means anything');
-    if(r.before.open.indexOf('exec:true') < 0)
-      throw new Error('the Required Execution Plan is shut on a prepared plan: ' + r.before.open.join(' '));
+    /* Both execution pages wait for the sign-off, as on FSL. */
+    if(r.before.open.indexOf('exec:false') < 0)
+      throw new Error('the Required Execution Plan is open on a plan nobody signed off: ' + r.before.open.join(' '));
     if(r.before.open.indexOf('alloc:false') < 0)
       throw new Error('the Final Execution Plan opened before the advice was signed off');
     if(r.before.open.indexOf('audit:true') < 0) throw new Error('the Formula Audit stopped being open');
     if(!/signed the advice off/.test(r.before.why)) throw new Error('it does not say why: ' + r.before.why);
-    if(r.after.indexOf('alloc:true') < 0) throw new Error('still shut after approval: ' + r.after.join(' '));
+    if(r.after.indexOf('alloc:true') < 0 || r.after.indexOf('exec:true') < 0)
+      throw new Error('an execution page is still shut after approval: ' + r.after.join(' '));
     if(!r.guide.length) throw new Error('the plan has no buckets to execute');
-    return r.guide.length + ' bucket(s) to execute; Final stays shut until the sign-off and says why';
+    return r.guide.length + ' bucket(s) to execute; both execution pages wait for the sign-off and say why';
   });
 
   await t.step('the Required Execution Plan lists the buckets the plan was approved with', async () => {

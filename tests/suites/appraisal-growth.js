@@ -148,7 +148,9 @@ suite(async t => {
 
   await t.step('lumpsum comes off the Business tracker, year against year', async () => {
     const r = await t.eval(async ()=>{
-      const done = (cfgLabels('business.statuses').slice(-1)[0] || 'Completed');
+      /* Finished business, asked for by name. "The last status on the
+         list" meant that until Declined was added after Completed. */
+      const done = businessDoneStatus();
       DB.businessEntries = (DB.businessEntries || []).concat([
         {id:'BIZ-GRW1', amount: 1000000, transactionType:'Purchase', status: done,
          executionDate:'2025-08-10', createdAt:'2025-08-10T00:00:00.000Z'},

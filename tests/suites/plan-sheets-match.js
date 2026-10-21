@@ -111,7 +111,7 @@ suite(async t => {
           + 'no way to do it at all');
       if(r[k].step !== 'plan') throw new Error(k.toUpperCase() + ' landed on "' + r[k].step + '"');
     });
-    return 'on both sheets Next submitted the form and opened RM Planning, which is the one 7 Events makes';
+    return 'on both sheets Next submitted the form and opened RM Working, which is the one 7 Events makes';
   });
 
   await t.step('and it refuses, and stays put, when the form is not answered', async () => {

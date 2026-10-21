@@ -15,7 +15,9 @@ const {suite} = require('../lib/harness');
 /* A small book, laid out so the arithmetic has a known answer. */
 const SEED = async () => {
   const br = (DB.config.branches || ['Varanasi'])[0];
-  const done = (cfgLabels('business.statuses').slice(-1)[0] || 'Completed');
+  /* Finished business, asked for by name. "The last status on the
+     list" meant that until Declined was added after Completed. */
+  const done = businessDoneStatus();
   const iso = d => d.toISOString().slice(0, 10);
   const now = new Date();
   const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 15);
