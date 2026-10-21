@@ -81,6 +81,8 @@ const USER_COLUMNS = {
   active: "ALTER TABLE users ADD COLUMN active INTEGER NOT NULL DEFAULT 1",
   issued_password: "ALTER TABLE users ADD COLUMN issued_password TEXT",
   last_login_at: "ALTER TABLE users ADD COLUMN last_login_at TEXT",
+  // Two-step sign-in: after the password, a code emailed to this address.
+  two_factor: "ALTER TABLE users ADD COLUMN two_factor INTEGER NOT NULL DEFAULT 0",
 };
 for (const [column, ddl] of Object.entries(USER_COLUMNS)) {
   if (!usersDb.prepare("SELECT 1 FROM pragma_table_info('users') WHERE name = ?").get(column)) usersDb.exec(ddl);
@@ -101,6 +103,7 @@ const updateUserAccount = usersDb.prepare(
 const updateUserPassword = usersDb.prepare('UPDATE users SET password_hash = ?, issued_password = ? WHERE id = ?');
 const noteUserLogin = usersDb.prepare("UPDATE users SET last_login_at = datetime('now'), issued_password = NULL WHERE id = ?");
 const deleteUserById = usersDb.prepare('DELETE FROM users WHERE id = ?');
+const setUserTwoFactor = usersDb.prepare('UPDATE users SET two_factor = ? WHERE id = ?');
 
 // A password somebody has to read off a screen and type once. No look-alike
 // characters, and enough of them that the length is doing the work.
@@ -820,9 +823,29 @@ app.post('/login', (req, res) => {
       .send(loginPage({ error: 'That email and password do not match.', next, email }));
   }
   attempts.delete(ip);
+  if (user.two_factor) {
+    // The password was right; the session waits for the emailed code.
+    const ch = newOtpChallenge(user, 'login', next);
+    return sendOtp(ch, (err) => {
+      if (err) {
+        otpChallenges.delete(ch.id);
+        return res.status(503).type('html').send(loginPage({ next, email,
+          error: 'Your account uses two-step sign-in, but the code could not be emailed (' + err
+            + '). Ask an administrator to check the email connector.' }));
+      }
+      res.cookie(OTP_COOKIE, ch.id, { httpOnly: true, sameSite: 'lax', path: '/login',
+        secure: req.secure || req.get('x-forwarded-proto') === 'https', maxAge: OTP_TTL_MS * 2 });
+      res.redirect('/login/otp');
+    });
+  }
+  completeSignIn(req, res, user, next);
+});
+
+function completeSignIn(req, res, user, next) {
   // They have used the password they were sent, so the copy an admin could
   // read is deleted. Anyone who needs to give them one again issues a new one.
   noteUserLogin.run(user.id);
+  noteLoginAlert(req, user);
   res.cookie(COOKIE, issueToken(user.id), {
     httpOnly: true,
     sameSite: 'lax',
@@ -831,6 +854,171 @@ app.post('/login', (req, res) => {
     path: '/',
   });
   res.redirect(next);
+}
+
+/* ---------------------------------------------------------------------
+   TWO-STEP SIGN-IN
+
+   An account with two_factor on is not signed in by its password alone:
+   a six-digit code is emailed to the account's own address and the
+   session is issued only once it is typed. The code is random
+   (crypto.randomInt), kept only as a keyed hash, good for five minutes
+   and for five wrong tries, and can be sent again up to three times, no
+   sooner than thirty seconds apart. Challenges live in memory: a restart
+   in the middle of one simply means signing in again.
+
+   Turning it on, and off, takes a code too, so a session left open on
+   somebody's desk cannot quietly switch it off, and nobody can turn it
+   on with an address that never receives mail and lock themselves out.
+   If the mailbox is lost, an administrator on the server runs
+     npm run user -- 2fa someone@company.com off
+   --------------------------------------------------------------------- */
+const OTP_COOKIE = 'finowise_otp';
+const OTP_TTL_MS = 5 * 60 * 1000, OTP_MAX_TRIES = 5, OTP_RESEND_GAP_MS = 30 * 1000, OTP_MAX_RESENDS = 3;
+const otpChallenges = new Map();
+function otpHash(id, code) { return sign('otp.' + id + '.' + code); }
+function newOtpChallenge(user, purpose, next) {
+  for (const [k, c] of otpChallenges) if (c.expires < Date.now() - OTP_TTL_MS) otpChallenges.delete(k);
+  // One pending challenge per account and purpose: a new one replaces the old.
+  for (const [k, c] of otpChallenges) if (c.userId === user.id && c.purpose === purpose) otpChallenges.delete(k);
+  const ch = { id: crypto.randomBytes(24).toString('hex'), userId: user.id, email: user.email, purpose,
+    next: next || '/', tries: 0, resends: 0, sentAt: 0, expires: 0, hash: '' };
+  otpChallenges.set(ch.id, ch);
+  return ch;
+}
+function maskEmail(email) {
+  const [name, domain] = String(email || '').split('@');
+  if (!domain) return email;
+  return name.slice(0, 2) + '*'.repeat(Math.max(1, name.length - 2)) + '@' + domain;
+}
+function sendOtp(ch, cb) {
+  const code = String(crypto.randomInt(0, 1000000)).padStart(6, '0');
+  ch.hash = otpHash(ch.id, code);
+  ch.sentAt = Date.now();
+  ch.expires = Date.now() + OTP_TTL_MS;
+  ch.tries = 0;
+  const what = ch.purpose === 'login' ? 'sign in to'
+    : ch.purpose === 'enable' ? 'turn on two-step sign-in for' : 'turn off two-step sign-in for';
+  const firm = branding().name;
+  sendMail({
+    to: ch.email,
+    subject: code + ' is your ' + firm + ' verification code',
+    body: 'Your verification code to ' + what + ' your ' + firm + ' account is:\n\n    ' + code
+      + '\n\nIt expires in 5 minutes. Nobody from the firm will ever ask you for it.\n\n'
+      + 'If you did not just try to do this, someone may know your password: change it, and tell an administrator.',
+  }, null, (status, json) => {
+    if (status === 200 && json && json.ok) return cb(null);
+    cb((json && json.message) || 'the mail server refused it');
+  });
+}
+// null when the code is right; otherwise why not. A wrong try is counted.
+function checkOtp(ch, code) {
+  if (!ch || ch.expires < Date.now()) return 'expired';
+  if (ch.tries >= OTP_MAX_TRIES) return 'locked';
+  const given = Buffer.from(otpHash(ch.id, String(code || '').replace(/\s/g, '')));
+  const want = Buffer.from(ch.hash);
+  if (given.length === want.length && crypto.timingSafeEqual(given, want)) return null;
+  ch.tries++;
+  return ch.tries >= OTP_MAX_TRIES ? 'locked' : 'wrong';
+}
+function resendProblem(ch) {
+  if (ch.resends >= OTP_MAX_RESENDS) return 'The code has been sent ' + (OTP_MAX_RESENDS + 1) + ' times already. Start again.';
+  const wait = Math.ceil((ch.sentAt + OTP_RESEND_GAP_MS - Date.now()) / 1000);
+  if (wait > 0) return 'Wait ' + wait + ' more second' + (wait === 1 ? '' : 's') + ' before asking for another code.';
+  return null;
+}
+
+/* A sign-in is told to the person it belongs to, inside BOSS, when they
+   have asked for desktop notifications: every tab they have open hears
+   it, and a sign-in they did not make is something they find out about
+   at once rather than never. */
+function noteLoginAlert(req, user) {
+  if (!user || !user.member_id) return;
+  try {
+    const team = JSON.parse(store.team || '[]');
+    const member = Array.isArray(team) ? team.find((t) => t && t.id === user.member_id) : null;
+    if (!member || !member.desktopNotifEnabled) return;
+    const list = JSON.parse(store.notifications || '[]');
+    if (!Array.isArray(list)) return;
+    const ua = String(req.get('user-agent') || '');
+    const browser = /Edg\//.test(ua) ? 'Edge' : /Chrome\//.test(ua) ? 'Chrome' : /Firefox\//.test(ua) ? 'Firefox'
+      : /Safari\//.test(ua) ? 'Safari' : 'a browser';
+    const now = new Date();
+    list.push({ id: 'NTF-' + crypto.randomBytes(6).toString('hex'), at: now.toISOString(), userId: member.id,
+      title: 'New sign-in to your account',
+      body: 'Signed in from ' + browser + ' (' + (req.ip || 'unknown address') + ') at '
+        + now.toISOString().slice(0, 16).replace('T', ' ') + ' UTC. If this was not you, change your password now.',
+      view: 'profile', arg: '', kind: 'login-alert', by: member.id });
+    store.notifications = JSON.stringify(list);
+    writeToDisk();
+    publishChange(['notifications'], 'server');
+  } catch (e) { /* an alert that cannot be written must not stop the sign-in */ }
+}
+
+function otpPage({ ch, error = null, info = null }) {
+  const page = loginPage({ next: ch.next });
+  const form = `<form class="card" method="POST" action="/login/otp">
+      <div class="rule" style="margin-top:0"></div>
+      <h2 style="margin:0 0 6px;font-size:18px">Enter your sign-in code</h2>
+      <p style="margin:0 0 18px;font-size:13px;color:var(--muted)">We emailed a 6-digit code to
+        <b>${esc(maskEmail(ch.email))}</b>. It expires in 5 minutes.</p>
+      ${error ? `<p class="error">${esc(error)}</p>` : ''}
+      ${info ? `<p class="error" style="color:#166534;background:rgba(22,101,52,.08);border-color:rgba(22,101,52,.25)">${esc(info)}</p>` : ''}
+      <label for="code">Code</label>
+      <input id="code" name="code" type="password" inputmode="numeric" autocomplete="one-time-code"
+             maxlength="6" pattern="[0-9]{6}" autofocus required placeholder="123456"
+             style="width:100%;padding:12px 13px;font-size:18px;letter-spacing:6px;border:1px solid var(--line);border-radius:9px">
+      <button type="submit">Verify and sign in</button>
+      <button type="submit" formaction="/login/otp/resend" formnovalidate
+        style="background:#fff;color:var(--navy);margin-top:10px">Send a new code</button>
+      <p style="margin:16px 0 0;font-size:12.5px;text-align:center"><a href="/login">Use a different account</a></p>
+    </form>`;
+  return page.replace(/<form class="card"[\s\S]*?<\/form>/, () => form);
+}
+function otpChallengeOf(req) {
+  const ch = otpChallenges.get(readCookie(req, OTP_COOKIE) || '');
+  return ch && ch.purpose === 'login' ? ch : null;
+}
+function otpRestart(res, why) {
+  res.clearCookie(OTP_COOKIE, { path: '/login' });
+  return res.status(401).type('html').send(loginPage({ error: why }));
+}
+app.get('/login/otp', (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const ch = otpChallengeOf(req);
+  if (!ch || ch.expires < Date.now()) return otpRestart(res, 'That sign-in has expired. Sign in again to get a new code.');
+  res.type('html').send(otpPage({ ch }));
+});
+app.post('/login/otp', (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const ip = req.ip || 'unknown';
+  const ch = otpChallengeOf(req);
+  if (!ch) return otpRestart(res, 'That sign-in has expired. Sign in again to get a new code.');
+  const why = checkOtp(ch, (req.body || {}).code);
+  if (why === 'expired') { otpChallenges.delete(ch.id); return otpRestart(res, 'That code has expired. Sign in again to get a new one.'); }
+  if (why === 'locked') { otpChallenges.delete(ch.id); noteFailure(ip); return otpRestart(res, 'Too many wrong codes. Sign in again to get a new one.'); }
+  if (why) {
+    noteFailure(ip);
+    return res.status(401).type('html').send(otpPage({ ch,
+      error: 'That code is not right. ' + (OTP_MAX_TRIES - ch.tries) + ' tr' + (OTP_MAX_TRIES - ch.tries === 1 ? 'y' : 'ies') + ' left.' }));
+  }
+  otpChallenges.delete(ch.id);
+  const user = findUserById.get(ch.userId);
+  if (!user || user.active === 0) return otpRestart(res, 'That email and password do not match.');
+  res.clearCookie(OTP_COOKIE, { path: '/login' });
+  completeSignIn(req, res, user, ch.next);
+});
+app.post('/login/otp/resend', (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const ch = otpChallengeOf(req);
+  if (!ch) return otpRestart(res, 'That sign-in has expired. Sign in again to get a new code.');
+  const wait = resendProblem(ch);
+  if (wait) return res.status(429).type('html').send(otpPage({ ch, error: wait }));
+  ch.resends++;
+  sendOtp(ch, (err) => {
+    if (err) return res.status(503).type('html').send(otpPage({ ch, error: 'The new code could not be emailed: ' + err }));
+    res.type('html').send(otpPage({ ch, info: 'A new code is on its way. Only the newest code works.' }));
+  });
 });
 
 app.post('/logout', (req, res) => { res.clearCookie(COOKIE, { path: '/' }); res.redirect('/login'); });
@@ -892,11 +1080,29 @@ app.get('/api/storage/:key', checkApiKey, (req, res) => {
    add a location to a punch already recorded, drop a session, or drop a
    day. Anything else comes back 409 naming what it tried to move.
 
+   Since the punch clock allows Punch Out to be pressed again, a
+   punch-out may also MOVE — but only later, and only with the one it
+   replaces appended to that session's outHistory, so the earlier punch
+   is still on the record. And a day has one punch-in: a second session
+   cannot be added to a day that already has one.
+
    One exception, deliberate and narrow: an empty array is allowed
    through, because Reset System wipes every store and an administrator
    clearing the system is not the thing this is guarding against. What it
    guards against is a quiet edit to one timestamp among hundreds. */
 const ATT_FIXED = ['in', 'inBy', 'inLoc', 'out', 'outBy', 'outLoc'];
+const ATT_OUT = ['out', 'outBy', 'outLoc'];
+// A later punch-out replacing an earlier one, with the earlier one kept.
+function attendanceOutMoved(a, b) {
+  if (!a.out || !b.out || b.out === a.out) return false;
+  if (!(new Date(b.out).getTime() > new Date(a.out).getTime())) return false;
+  const oldH = Array.isArray(a.outHistory) ? a.outHistory : [];
+  const newH = Array.isArray(b.outHistory) ? b.outHistory : [];
+  if (newH.length !== oldH.length + 1) return false;
+  if (JSON.stringify(newH.slice(0, oldH.length)) !== JSON.stringify(oldH)) return false;
+  const kept = newH[newH.length - 1] || {};
+  return ATT_OUT.every((k) => JSON.stringify(kept[k] === undefined ? null : kept[k]) === JSON.stringify(a[k] === undefined ? null : a[k]));
+}
 function attendanceGuard(before, after) {
   let old;
   try { old = JSON.parse(before || '[]'); } catch (e) { return null; }
@@ -910,18 +1116,28 @@ function attendanceGuard(before, after) {
     if (!row || !row.id) continue;
     seen.add(row.id);
     const was = byId.get(row.id);
-    if (!was) continue;                                // a new day
+    if (!was) {                                        // a new day
+      if (Array.isArray(row.sessions) && row.sessions.length > 1)
+        return 'attendance ' + row.id + ' tried to start a day with more than one punch-in';
+      continue;
+    }
     if (row.userId !== was.userId || row.date !== was.date)
       return 'attendance ' + row.id + ' tried to move to another person or another date';
     const oldS = Array.isArray(was.sessions) ? was.sessions : [];
     const newS = Array.isArray(row.sessions) ? row.sessions : [];
     if (newS.length < oldS.length)
       return 'attendance ' + row.id + ' tried to drop a session';
+    if (newS.length > oldS.length && oldS.length >= 1)
+      return 'attendance ' + row.id + ' already has a punch-in for that day';
     for (let i = 0; i < oldS.length; i++) {
       const a = oldS[i] || {}, b = newS[i] || {};
+      const moved = attendanceOutMoved(a, b);
+      if (!moved && JSON.stringify(a.outHistory || []) !== JSON.stringify(b.outHistory || []))
+        return 'attendance ' + row.id + ' tried to change an earlier punch-out';
       for (const k of ATT_FIXED) {
         const had = a[k] !== undefined && a[k] !== null;
         if (!had) continue;                            // not set yet: may be set now
+        if (moved && ATT_OUT.includes(k)) continue;    // a later punch-out, the earlier one kept
         if (JSON.stringify(a[k]) !== JSON.stringify(b[k]))
           return 'attendance ' + row.id + ' tried to change a recorded ' + k;
       }
@@ -1277,32 +1493,143 @@ app.post('/api/outlook/meeting', checkApiKey, (req, res) => {
 // 200 with { ok:true } only when the mail server took the message.
 app.post('/api/mail/send', checkApiKey, (req, res) => sendMailRequest(req.body || {}, res, null));
 
+/* ---------------------------------------------------------------------
+   PIN AND IFSC LOOKUPS
+
+   A team member's PIN fills their city, state and country; their IFSC
+   fills the bank and the branch. Both are public directories — India
+   Post's PIN list and the RBI IFSC list Razorpay publishes — asked from
+   here rather than from the page, because a browser cannot call either
+   without CORS they do not grant. The answer is cached, since a PIN or
+   an IFSC does not move. Either base URL can be pointed elsewhere by
+   environment variable, which is how the tests run without the internet.
+   --------------------------------------------------------------------- */
+const PIN_LOOKUP_URL = process.env.CRM_PIN_LOOKUP_URL || 'https://api.postalpincode.in/pincode/';
+const IFSC_LOOKUP_URL = process.env.CRM_IFSC_LOOKUP_URL || 'https://ifsc.razorpay.com/';
+const lookupCache = new Map();
+async function lookupJson(url) {
+  const res = await fetch(url, { headers: { Accept: 'application/json', 'User-Agent': 'Finowise-CRM/1.0' },
+    signal: AbortSignal.timeout(8000) });
+  let json = null;
+  try { json = await res.json(); } catch (e) { /* a 404 page is not JSON, which is itself the answer */ }
+  return { status: res.status, json };
+}
+function cachedLookup(key, work, res) {
+  if (lookupCache.has(key)) return res.json(lookupCache.get(key));
+  work().then((answer) => {
+    if (answer.ok || answer.notFound) {
+      if (lookupCache.size > 5000) lookupCache.clear();
+      lookupCache.set(key, answer);
+    }
+    res.status(answer.ok || answer.notFound ? 200 : 502).json(answer);
+  }).catch((e) => res.status(502).json({ ok: false,
+    message: e && e.name === 'TimeoutError' ? 'the directory did not answer in time' : 'the directory could not be reached' }));
+}
+/* Two-step sign-in, from My Profile. Status, then a code to the account's
+   own address, then the code back — and only then is it switched. */
+const meOtp = new Map();   // userId -> challenge for enabling or disabling
+app.get('/api/me/2fa', checkApiKey, (req, res) => {
+  const user = signedInUser(req);
+  if (!user) return res.status(401).json({ ok: false, message: 'not signed in' });
+  res.set('Cache-Control', 'no-store').json({ ok: true, enabled: !!user.two_factor, email: maskEmail(user.email) });
+});
+app.post('/api/me/2fa/start', checkApiKey, (req, res) => {
+  const user = signedInUser(req);
+  if (!user) return res.status(401).json({ ok: false, message: 'not signed in' });
+  const action = (req.body || {}).action === 'disable' ? 'disable' : 'enable';
+  if ((action === 'enable') === !!user.two_factor)
+    return res.status(409).json({ ok: false, message: 'Two-step sign-in is already ' + (user.two_factor ? 'on' : 'off') + '.' });
+  const was = meOtp.get(user.id);
+  if (was && was.purpose === action && (req.body || {}).resend) {
+    const wait = resendProblem(was);
+    if (wait) return res.status(429).json({ ok: false, message: wait });
+    was.resends++;
+    return sendOtp(was, (err) => err ? res.status(503).json({ ok: false, message: 'The code could not be emailed: ' + err })
+      : res.json({ ok: true, sentTo: maskEmail(user.email), resendsLeft: OTP_MAX_RESENDS - was.resends }));
+  }
+  const ch = newOtpChallenge(user, action);
+  otpChallenges.delete(ch.id);           // not a sign-in: it lives in meOtp only
+  meOtp.set(user.id, ch);
+  sendOtp(ch, (err) => {
+    if (err) { meOtp.delete(user.id); return res.status(503).json({ ok: false, message: 'The code could not be emailed: ' + err }); }
+    res.json({ ok: true, sentTo: maskEmail(user.email), resendsLeft: OTP_MAX_RESENDS });
+  });
+});
+app.post('/api/me/2fa/verify', checkApiKey, (req, res) => {
+  const user = signedInUser(req);
+  if (!user) return res.status(401).json({ ok: false, message: 'not signed in' });
+  const ch = meOtp.get(user.id);
+  if (!ch) return res.status(409).json({ ok: false, message: 'Ask for a code first.' });
+  const why = checkOtp(ch, (req.body || {}).code);
+  if (why === 'expired' || why === 'locked') {
+    meOtp.delete(user.id);
+    return res.status(401).json({ ok: false, restart: true, message: why === 'expired'
+      ? 'That code has expired. Ask for a new one.' : 'Too many wrong codes. Ask for a new one.' });
+  }
+  if (why) return res.status(401).json({ ok: false, message: 'That code is not right. '
+    + (OTP_MAX_TRIES - ch.tries) + ' tr' + (OTP_MAX_TRIES - ch.tries === 1 ? 'y' : 'ies') + ' left.' });
+  meOtp.delete(user.id);
+  setUserTwoFactor.run(ch.purpose === 'enable' ? 1 : 0, user.id);
+  res.json({ ok: true, enabled: ch.purpose === 'enable' });
+});
+
+app.get('/api/lookup/pincode/:pin', checkApiKey, (req, res) => {
+  const pin = String(req.params.pin || '');
+  if (!/^[1-9][0-9]{5}$/.test(pin)) return res.status(400).json({ ok: false, message: 'A PIN code is 6 digits.' });
+  cachedLookup('pin:' + pin, async () => {
+    const { json } = await lookupJson(PIN_LOOKUP_URL + pin);
+    const row = Array.isArray(json) ? json[0] : null;
+    if (!row || typeof row !== 'object') return { ok: false, message: 'the PIN directory gave no usable answer' };
+    const offices = Array.isArray(row.PostOffice) ? row.PostOffice : [];
+    if (String(row.Status) !== 'Success' || !offices.length) return { ok: false, notFound: true };
+    const first = offices[0] || {};
+    return { ok: true, pin, city: first.District || first.Block || '', state: first.State || '',
+      country: first.Country || 'India', offices: offices.slice(0, 20).map((o) => o && o.Name).filter(Boolean) };
+  }, res);
+});
+app.get('/api/lookup/ifsc/:code', checkApiKey, (req, res) => {
+  const code = String(req.params.code || '').toUpperCase();
+  if (!/^[A-Z]{4}0[A-Z0-9]{6}$/.test(code)) return res.status(400).json({ ok: false, message: 'An IFSC is 11 characters, like SBIN0001234.' });
+  cachedLookup('ifsc:' + code, async () => {
+    const { status, json } = await lookupJson(IFSC_LOOKUP_URL + code);
+    if (status === 404) return { ok: false, notFound: true };
+    if (status !== 200 || !json || !json.BANK) return { ok: false, message: 'the IFSC directory gave no usable answer' };
+    return { ok: true, ifsc: code, bank: json.BANK, branch: json.BRANCH || '', city: json.CITY || '',
+      state: json.STATE || '', address: json.ADDRESS || '' };
+  }, res);
+});
+
 // One send, whether it came from the CRM or from a client's own page. `allowed`
 // is null for a signed-in sender and a list of addresses for a public one, so a
 // form link can write to the people it concerns and to nobody else.
 function sendMailRequest(body, res, allowed) {
+  sendMail(body, allowed, (status, json) => res.status(status).json(json));
+}
+// The same send for the server's own letters (a sign-in code), which have
+// no request to answer: done(status, { ok, message }).
+function sendMail(body, allowed, done) {
   const c = connections.email;
   const config = (c && c.config) || {}, secrets = (c && c.secrets) || {};
   const to = cleanAddresses(body.to), cc = cleanAddresses(body.cc);
-  if (!to.length) return res.status(400).json({ ok: false, message: 'No recipient.' });
+  if (!to.length) return done(400, { ok: false, message: 'No recipient.' });
   const bad = to.concat(cc).find(a => !ADDRESS_RE.test(a));
-  if (bad) return res.status(400).json({ ok: false, message: '"' + bad + '" is not a usable email address.' });
+  if (bad) return done(400, { ok: false, message: '"' + bad + '" is not a usable email address.' });
   if (allowed) {
     const set = new Set(allowed.filter(Boolean).map((a) => String(a).toLowerCase()));
     const outside = to.concat(cc).find((a) => !set.has(a.toLowerCase()));
-    if (outside) return res.status(403).json({ ok: false,
+    if (outside) return done(403, { ok: false,
       message: 'This link may only write to the people it concerns, not to ' + outside + '.' });
   }
 
-  if (!c || !config.host) return res.status(409).json({ ok: false, notConfigured: true,
+  if (!c || !config.host) return done(409, { ok: false, notConfigured: true,
     message: 'No email connector is set up yet. Add your SMTP details under Setup → Developer Hub → Connections.' });
-  if (!c.enabled) return res.status(409).json({ ok: false, notConfigured: true,
+  if (!c.enabled) return done(409, { ok: false, notConfigured: true,
     message: 'The email connector is switched off. Tick "Enable this channel" on it and test the connection.' });
-  if (c.status !== 'Connected') return res.status(409).json({ ok: false, notConfigured: true,
+  if (c.status !== 'Connected') return done(409, { ok: false, notConfigured: true,
     message: 'The email connector has not passed a connection test' + (c.lastTestMessage ? ' — ' + c.lastTestMessage : '') + '.' });
 
   const fromEmail = (config.fromEmail || config.username || '').trim();
-  if (!ADDRESS_RE.test(fromEmail)) return res.status(409).json({ ok: false, notConfigured: true,
+  if (!ADDRESS_RE.test(fromEmail)) return done(409, { ok: false, notConfigured: true,
     message: 'The connector has no usable From address. Set From Email on it.' });
 
   // Attachments are capped well under the JSON body limit, so a huge file is
@@ -1310,11 +1637,11 @@ function sendMailRequest(body, res, allowed) {
   const attachments = Array.isArray(body.attachments) ? body.attachments.slice(0, 10) : [];
   let attachBytes = 0;
   for (const a of attachments) {
-    if (!a || typeof a.content !== 'string') return res.status(400).json({ ok: false, message: 'An attachment had no content.' });
-    if (!/^[A-Za-z0-9+/=\s]*$/.test(a.content)) return res.status(400).json({ ok: false, message: 'An attachment was not base64.' });
+    if (!a || typeof a.content !== 'string') return done(400, { ok: false, message: 'An attachment had no content.' });
+    if (!/^[A-Za-z0-9+/=\s]*$/.test(a.content)) return done(400, { ok: false, message: 'An attachment was not base64.' });
     attachBytes += Math.ceil(a.content.replace(/\s/g, '').length * 3 / 4);
   }
-  if (attachBytes > 12 * 1024 * 1024) return res.status(413).json({ ok: false,
+  if (attachBytes > 12 * 1024 * 1024) return done(413, { ok: false,
     message: 'The attachments come to ' + Math.round(attachBytes / (1024 * 1024)) + 'MB. Most mailboxes refuse anything over about 10MB — send a link instead.' });
 
   const msg = buildMessage({
@@ -1333,7 +1660,7 @@ function sendMailRequest(body, res, allowed) {
     password: secrets.password || '',
     message: { from: fromEmail, to: to.concat(cc), body: msg.text },
   }, (result) => {
-    res.json({ ok: !!result.ok, message: result.message, messageId: result.ok ? msg.messageId : undefined,
+    done(200, { ok: !!result.ok, message: result.message, messageId: result.ok ? msg.messageId : undefined,
       from: fromEmail, to, cc });
   });
 }

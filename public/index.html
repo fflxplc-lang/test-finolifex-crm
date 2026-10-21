@@ -3370,6 +3370,83 @@ function bindPinToCity(){
     }
   }, true);
 }
+/* A PIN THAT FILLS THE ADDRESS, AN IFSC THAT FILLS THE BANK.
+
+   A box marked data-lookup asks the server once its answer is the right
+   shape: six digits for a PIN, eleven characters for an IFSC. The
+   server asks India Post or the RBI's IFSC directory and hands back
+   what it found. What comes back is written into the boxes beside it,
+   which stay editable — a lookup is a help, not the last word — and a
+   PIN or IFSC that is not found says so under the box.
+
+   When the directory cannot be reached at all, a PIN still fills what
+   the firm's own PIN-to-city list knows, and the person is told the
+   rest has to be typed. */
+const LOOKUP_SPECS = {
+  pincode: {kind:'pin', len:6, url:v=>'/api/lookup/pincode/' + encodeURIComponent(v),
+    fill:r=>({city:r.city, state:r.state, country:r.country || 'India'}),
+    found:r=>'Found: ' + [r.city, r.state, r.country || 'India'].filter(Boolean).join(', '),
+    offline:v=>{ const row = pinRow(v); return row ? {city:row.label, state:row.state || '', country:'India'} : null; },
+    missing:'PIN code not found. Please check it, or fill in the city and state yourself.'},
+  ifsc: {kind:'ifsc', len:11, url:v=>'/api/lookup/ifsc/' + encodeURIComponent(v),
+    fill:r=>({bankName:r.bank, bankBranch:r.branch}),
+    found:r=>'Found: ' + [r.bank, r.branch].filter(Boolean).join(', '),
+    offline:()=>null,
+    missing:'IFSC not found. Please check it, or fill in the bank name and branch yourself.'},
+};
+const lookupCache = {};
+function lookupNote(el, text, tone){
+  const wrap = el.closest ? el.closest('.field') : null;
+  if(!wrap) return;
+  let note = wrap.querySelector('.lookup-note');
+  if(!text){ if(note) note.remove(); return; }
+  if(!note){ note = document.createElement('div'); note.className = 'small-note lookup-note'; wrap.appendChild(note); }
+  note.style.color = tone === 'ok' ? 'var(--ok)' : tone === 'warn' ? 'var(--warn)'
+    : tone === 'bad' ? 'var(--danger)' : 'var(--muted)';
+  note.textContent = text;
+}
+async function runFieldLookup(el){
+  const spec = LOOKUP_SPECS[el.getAttribute('data-lookup')]; if(!spec) return;
+  const value = normaliseValue(spec.kind, el.value).replace(/\s/g, '');
+  if(value.length < spec.len){ lookupNote(el, ''); return; }
+  if(!checkValue(spec.kind, value).ok){ lookupNote(el, ''); return; }
+  if(el._lookedUp === value) return;
+  el._lookedUp = value;
+  lookupNote(el, 'Looking up ' + value + '…');
+  let r = lookupCache[spec.kind + value];
+  if(!r){
+    try {
+      const res = await fetch(spec.url(value), {headers: apiHeaders()});
+      r = await res.json().catch(()=>({ok:false, message:'The lookup gave no readable answer.'}));
+      if(r && (r.ok || r.notFound)) lookupCache[spec.kind + value] = r;
+    } catch(e){ r = {ok:false, message:'The lookup could not be reached.'}; }
+  }
+  if(normaliseValue(spec.kind, el.value).replace(/\s/g, '') !== value) return;   // typed on since
+  const put = vals=>Object.entries(vals).forEach(([k, v])=>{
+    const box = document.getElementById('f_' + k);
+    if(box && v && !box.disabled){ box.value = v; showFieldError(box, ''); }
+  });
+  if(r && r.ok){
+    put(spec.fill(r));
+    showFieldError(el, '');
+    lookupNote(el, spec.found(r), 'ok');
+  } else if(r && r.notFound){
+    lookupNote(el, spec.missing, 'bad');
+  } else {
+    const local = spec.offline(value);
+    if(local){ put(local); lookupNote(el, 'Filled from BOSS’s own PIN list (the online lookup is unavailable). Please check it.', 'warn'); }
+    else lookupNote(el, 'Could not look this up right now' + (r && r.message ? ' (' + r.message + ')' : '')
+      + '. Please fill in the details yourself.', 'warn');
+  }
+}
+function bindFieldLookups(){
+  if(window._lookupBound) return; window._lookupBound = true;
+  document.addEventListener('input', e=>{
+    const el = e.target;
+    if(!el || !el.getAttribute || !el.getAttribute('data-lookup')) return;
+    runFieldLookup(el);
+  }, true);
+}
 /* ---------------------------------------------------------------------
    FIELD VALIDATION.
 
@@ -3387,13 +3464,57 @@ const VALIDATION_KINDS = {
   mobile: {pattern:'validation.mobilePattern', message:'validation.mobileMessage'},
   email:  {pattern:'validation.emailPattern',  message:'validation.emailMessage'},
   pan:    {pattern:'validation.panPattern',    message:'validation.panMessage', upper:true},
+  /* The team member's own details. These are fixed formats set by the
+     issuer (India Post, UIDAI, EPFO, ESIC, AMFI, RBI), not a firm's
+     preference, so the rule is written here rather than kept as a
+     setting somebody could loosen by accident. */
+  pin:     {re:/^[1-9][0-9]{5}$/, len:6, message:'Please enter a valid 6-digit PIN code, e.g. 560001.'},
+  aadhaar: {check:aadhaarCheck, len:12, message:'Please enter a valid 12-digit Aadhaar number.'},
+  uan:     {re:/^[0-9]{12}$/, len:12, message:'PF UAN must be exactly 12 digits, e.g. 123456789012.'},
+  esic:    {re:/^[0-9]{10}$/, len:10, message:'ESIC number must be exactly 10 digits, e.g. 1234567890.'},
+  arn:     {re:/^ARN-[0-9]{1,7}$/, len:10, upper:true, message:'Please enter the ARN as ARN- followed by its number, e.g. ARN-123456.'},
+  euin:    {re:/^E[0-9]{6,9}$/, len:7, upper:true, message:'Please enter the EUIN as E followed by its digits, e.g. E123456.'},
+  ifsc:    {re:/^[A-Z]{4}0[A-Z0-9]{6}$/, len:11, upper:true, message:'Please enter a valid 11-character IFSC, e.g. SBIN0001234.'},
+  account: {re:/^[0-9]{9,18}$/, len:9, message:'Please enter a valid account number: 9 to 18 digits, numbers only.'},
+  person:  {re:/^[A-Za-z][A-Za-z .']*$/, len:1, message:'Please use letters, spaces and initials only.'},
 };
+/* AADHAAR, CHECKED AND THEN FORGOTTEN.
+
+   The full number is checked (12 digits, not starting 0 or 1, and the
+   Verhoeff check digit UIDAI puts on every one) and then only its last
+   four digits are kept: BOSS has no reason to hold the rest, and a
+   number it never stores is one it can never leak. What was saved is
+   shown back masked, XXXX XXXX 1234, and saving that unchanged keeps it. */
+const VERHOEFF_D = [[0,1,2,3,4,5,6,7,8,9],[1,2,3,4,0,6,7,8,9,5],[2,3,4,0,1,7,8,9,5,6],
+  [3,4,0,1,2,8,9,5,6,7],[4,0,1,2,3,9,5,6,7,8],[5,9,8,7,6,0,4,3,2,1],[6,5,9,8,7,1,0,4,3,2],
+  [7,6,5,9,8,2,1,0,4,3],[8,7,6,5,9,3,2,1,0,4],[9,8,7,6,5,4,3,2,1,0]];
+const VERHOEFF_P = [[0,1,2,3,4,5,6,7,8,9],[1,5,7,6,2,8,3,0,9,4],[5,8,0,3,7,9,6,1,4,2],
+  [8,9,1,6,0,4,3,5,2,7],[9,4,5,3,1,2,6,8,7,0],[4,2,8,6,5,7,3,9,0,1],[2,7,9,3,8,0,6,4,1,5],
+  [7,0,4,6,9,1,3,2,5,8]];
+function verhoeffOk(digits){
+  let c = 0;
+  String(digits).split('').reverse().forEach((ch, i)=>{ c = VERHOEFF_D[c][VERHOEFF_P[i % 8][Number(ch)]]; });
+  return c === 0;
+}
+function aadhaarMasked(last4){ return last4 ? 'XXXX XXXX ' + last4 : ''; }
+/* {ok, value}: value is the last four digits, which is all that is stored. */
+function aadhaarCheck(raw){
+  const v = String(raw || '').trim();
+  const masked = v.match(/^X{4}\s?X{4}\s?([0-9]{4})$/i);
+  if(masked) return {ok:true, value:masked[1]};
+  if(/^[0-9]{4}$/.test(v)) return {ok:true, value:v};          // what an older record already holds
+  const d = v.replace(/[\s-]/g, '');
+  if(/^[2-9][0-9]{11}$/.test(d) && verhoeffOk(d)) return {ok:true, value:d.slice(-4)};
+  return {ok:false, value:v};
+}
 /* A PAN typed in lower case is the same PAN. Nothing else is rewritten:
    stripping spaces out of a mobile number would hide the mistake rather
    than report it, and the brief asks for it to be refused. */
 function normaliseValue(kind, raw){
   const v = raw===null || raw===undefined ? '' : String(raw);
-  return (VALIDATION_KINDS[kind] && VALIDATION_KINDS[kind].upper) ? v.toUpperCase() : v;
+  const spec = VALIDATION_KINDS[kind];
+  if(spec && spec.upper) return v.toUpperCase().trim();
+  return (spec && (spec.re || spec.check)) ? v.trim() : v;
 }
 /* {ok, value, message}. `value` is what should be stored — the PAN in
    upper case. An unreadable or empty pattern turns the check off, so a
@@ -3403,6 +3524,11 @@ function checkValue(kind, raw){
   const value = normaliseValue(kind, raw);
   if(!spec) return {ok:true, value};
   if(!String(value).trim()) return {ok:true, value};        // blank is the form's business
+  if(spec.check){
+    const got = spec.check(value);
+    return got.ok ? {ok:true, value:got.value} : {ok:false, value, message:spec.message};
+  }
+  if(spec.re) return spec.re.test(value) ? {ok:true, value} : {ok:false, value, message:spec.message};
   const src = String(cfg(spec.pattern) || '').trim();
   if(!src) return {ok:true, value};
   let re;
@@ -3516,7 +3642,7 @@ function bindValidation(){
       return;
     }
     const kind = el.getAttribute('data-vk'); if(!kind) return;
-    if(kind === 'pan' && el.value !== el.value.toUpperCase()){
+    if((VALIDATION_KINDS[kind] || {}).upper && el.value !== el.value.toUpperCase()){
       const at = el.selectionStart;
       el.value = el.value.toUpperCase();
       try { el.setSelectionRange(at, at); } catch(err){}
@@ -3525,7 +3651,8 @@ function bindValidation(){
     // While they are still typing, only say so once the answer is as long
     // as a right one would be — complaining at the first digit is noise.
     const settled = leaving || !el.value || got.ok
-      || String(el.value).length >= (kind === 'pan' ? 10 : kind === 'mobile' ? 10 : 1);
+      || String(el.value).replace(/\s/g, '').length >= (kind === 'pan' ? 10 : kind === 'mobile' ? 10
+        : ((VALIDATION_KINDS[kind] || {}).len || 1));
     showFieldError(el, (!got.ok && settled) ? got.message : '');
   };
   document.addEventListener('input', e=>handle(e, false), true);
@@ -31858,6 +31985,7 @@ let DB = { settings:{}, settingsAudit:[], workActivities:[], djtEntries:[], camp
            /* HR's own stores. Nothing else in BOSS reads or writes them,
               and HR writes nothing outside them. */
            hrAttendance:[], hrLeave:[], hrSourceMaps:[], hrIncentives:[], hrAppraisals:[], hrConfig:{},
+           hrRegularizations:[],
            /* What the firm has wired BOSS to, what each run of it did, and
               what has been pushed in through a connector's own door and is
               waiting to be mapped. The credentials are not here: they live
@@ -31966,6 +32094,7 @@ async function loadAll(){
   DB.exportHistory = await sget('exportHistory', []);
   DB.hrAttendance = await sget('hrAttendance', []);
   DB.hrLeave = await sget('hrLeave', []);
+  DB.hrRegularizations = await sget('hrRegularizations', []);
   DB.hrSourceMaps = await sget('hrSourceMaps', []);
   DB.hrIncentives = await sget('hrIncentives', []);
   DB.hrAppraisals = await sget('hrAppraisals', []);
@@ -32347,6 +32476,11 @@ function defaultConfig(){
          words, edited in Setup like every other letter. */
       hrLeaveApproved: {subject:'Your leave has been approved — {Dates}',
         body:'Dear {Name},\n\nYour leave request has been approved.\n\nDates: {Dates}\nDays: {Days}\nType: {Type}\nApproved by: {Approver}\n{Remarks}\nBest regards,\n{FirmName}'},
+      /* A day somebody asks to have regularized, and HR's answer. */
+      hrRegularizeRequest: {subject:'Attendance regularization request — {Name}, {Date}',
+        body:'Dear HR,\n\n{Name} has asked to regularize their attendance for {Date}.\n\nRecorded punch in: {PunchIn}\nLatest punch out: {PunchOut}\nRecorded hours: {Hours} ({Percent})\n\nTime asked for: {Periods}\nThis would add: {Adds}\nReason: {Reason}\n\nPlease approve or reject it in BOSS under HR › Attendance. The record changes only once it is approved.\n\n{FirmName}'},
+      hrRegularizeDecided: {subject:'Your attendance regularization for {Date} was {Status}',
+        body:'Dear {Name},\n\nYour request to regularize {Date} ({Periods}) has been {Status} by {Approver}.\n{Remarks}\nAttendance for the day: {NewPercent}\n\nBest regards,\n{FirmName}'},
       hrLeaveDeclined: {subject:'Your leave request was declined — {Dates}',
         body:'Dear {Name},\n\nYour leave request has not been approved.\n\nDates: {Dates}\nDays: {Days}\nType: {Type}\nDecided by: {Approver}\n{Remarks}\nIf you would like to discuss it, speak to them directly.\n\nBest regards,\n{FirmName}'},
       iseqSend: {subject:'{Form} — the risk questionnaire your allocation is worked out from',
@@ -33227,6 +33361,7 @@ async function boot(){
   }
   await loadAll();
   bindPinToCity();
+  bindFieldLookups();
   bindValidation();
   watchTableHeads();
   if(docToken){
@@ -33277,6 +33412,7 @@ async function boot(){
   await alignRolesOnce();
   await migrateQueryPermissions();
   bindSignedInMember();
+  desktopNotifySweep();
   await loadAccounts();
   await migrateAllocPlans();
   await loadMailChannel();
@@ -33350,7 +33486,7 @@ const LIVE_KEY_TO_DB = {
   platformHoldings:'platformHoldings', platformSips:'platformSips', importBatches:'importBatches',
   aumMonthly:'aumMonthly',
   exportHistory:'exportHistory',
-  hrAttendance:'hrAttendance', hrLeave:'hrLeave', hrSourceMaps:'hrSourceMaps',
+  hrAttendance:'hrAttendance', hrLeave:'hrLeave', hrSourceMaps:'hrSourceMaps', hrRegularizations:'hrRegularizations',
   hrIncentives:'hrIncentives', hrAppraisals:'hrAppraisals', hrConfig:'hrConfig',
   automationExecutionLog:'automationExecutionLog', webhooks:'webhooks', workActivities:'workActivities',
   config:'config', settings:'settings', slaRules:'slaRules', automationRules:'automationRules',
@@ -33515,6 +33651,7 @@ async function liveRefresh(keys){
     const v = await sget(k, fallback);
     if(v !== null && v !== undefined) DB[LIVE_KEY_TO_DB[k]] = v;
   }
+  if(known.indexOf('notifications') >= 0) desktopNotifySweep();
 }
 async function liveReconcile(why){
   live.misses++;
@@ -37403,7 +37540,21 @@ function fieldInput(f, val){
     const liveAttr = f.live ? ` oninput="${esc(f.live)}"` : '';
     control = `<input type="number" step="any" id="f_${f.k}" class="${fieldIsMoney(f)?'num-in':''}" value="${esc(val)}"${f.min!==undefined?` min="${f.min}"`:''}${f.max!==undefined?` max="${f.max}"`:''}${changeAttr}${liveAttr}>`;
   } else {
-    control = `<input type="text" id="f_${f.k}" value="${esc(val)}"${changeAttr}>`;
+    /* A field may say what a right answer looks like (ph), which rule it
+       is under (vk, checked as it is typed and again on save), how long
+       it can be, which keypad a phone should offer, a list of usual
+       answers that can still be typed over, and a lookup that fills the
+       boxes beside it. A field that says none of these is drawn as it
+       always was. */
+    const extra = (f.ph ? ` placeholder="${esc(f.ph)}"` : '')
+      + (f.vk ? ` data-vk="${esc(f.vk)}"` : '')
+      + (f.maxLen ? ` maxlength="${f.maxLen}"` : '')
+      + (f.im ? ` inputmode="${esc(f.im)}"` : '')
+      + (f.lookup ? ` data-lookup="${esc(f.lookup)}"` : '')
+      + (f.suggest ? ` list="dl_f_${f.k}" autocomplete="off"` : '');
+    const shown = (f.vk === 'aadhaar' && /^[0-9]{4}$/.test(String(val))) ? aadhaarMasked(val) : val;
+    control = `<input type="text" id="f_${f.k}" value="${esc(shown)}"${extra}${changeAttr}>`
+      + (f.suggest ? `<datalist id="dl_f_${f.k}">${f.suggest.map(o=>`<option value="${esc(o)}">`).join('')}</datalist>` : '');
   }
   // A field may carry a line saying what it is for; the ones that do not
   // are unchanged.
@@ -37625,6 +37776,30 @@ function validateRequired(fields, data){
       if(el && el.focus){ try{ el.focus(); }catch(e){} }
       return false;
     }
+  }
+  /* A field needed only once another one is answered: an emergency
+     number is no use without the name of the person it reaches. */
+  for(const f of fields){
+    if(!f.reqIf || !String(data[f.reqIf] || '').trim() || String(data[f.k] || '').trim()) continue;
+    const el = pickFocusTarget(document.getElementById('f_'+f.k));
+    const msg = f.reqIfMessage || ('Please fill: ' + f.l);
+    if(el) showFieldError(el, msg);
+    alert(msg);
+    if(el && el.focus){ try{ el.focus(); }catch(e){} }
+    return false;
+  }
+  /* A field under a rule is judged again on save, whatever happened
+     while it was typed, and what is stored is the rule's own reading
+     of it: an IFSC in capitals, an Aadhaar as its last four digits. */
+  for(const f of fields){
+    if(!f.vk || data[f.k] === undefined) continue;
+    const got = checkValue(f.vk, data[f.k]);
+    if(got.ok){ data[f.k] = got.value; continue; }
+    const el = pickFocusTarget(document.getElementById('f_'+f.k));
+    if(el) showFieldError(el, got.message);
+    alert(f.l + ': ' + got.message);
+    if(el && el.focus){ try{ el.focus(); }catch(e){} }
+    return false;
   }
   /* Every date this form is about to write, whether it was typed, pasted,
      defaulted or set in code. The box itself refuses a bad year, but a
@@ -39478,13 +39653,14 @@ function profileMissing(user){
   const out = [];
   profileMyGroups(u).forEach(([g, fields])=>fields.forEach(f=>{
     const v = u[f.k];
+    if(f.opt) return;                     // optional: blank is a complete answer
     if(v===undefined || v===null || String(v).trim()==='') out.push({group:g, label:f.l, k:f.k});
   }));
   return out;
 }
 function profileCompletionHtml(){
   const miss = profileMissing();
-  const total = profileMyGroups().reduce((n, pair)=>n + pair[1].length, 0);
+  const total = profileMyGroups().reduce((n, pair)=>n + pair[1].filter(f=>!f.opt).length, 0);
   const pct = total ? Math.round((total - miss.length) * 100 / total) : 100;
   if(!miss.length) return `<div class="card" style="margin-top:14px;border-left:3px solid var(--ok)">
     <b style="font-size:13px">✓ Your profile is complete</b>
@@ -39556,8 +39732,8 @@ function viewProfile(){
         <div class="field-grid">${fields.map(f=>fieldInput(f, u[f.k])).join('')}</div>
         <div class="row" style="justify-content:space-between;align-items:center;margin-top:4px">
           <button class="btn sm primary" onclick="saveProfileSection(${gi})">Save ${esc(g)}</button>
-          <span class="small-note">${fields.filter(f=>!String(u[f.k]===undefined?'':u[f.k]).trim()).length
-            ? fields.filter(f=>!String(u[f.k]===undefined?'':u[f.k]).trim()).length + ' blank here'
+          <span class="small-note">${fields.filter(f=>!f.opt && !String(u[f.k]===undefined?'':u[f.k]).trim()).length
+            ? fields.filter(f=>!f.opt && !String(u[f.k]===undefined?'':u[f.k]).trim()).length + ' blank here'
             : '✓ nothing missing here'}</span>
         </div>
       </div>`).join('')}
@@ -39571,14 +39747,8 @@ function viewProfile(){
     </div>
     <div class="card" style="margin-top:14px">
       <div class="section-title" style="margin-top:0">🔐 Security</div>
-      <div class="row" style="justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--line)">
-        <div><b style="font-size:13px">Two-Factor Authentication</b> <span class="badge ${u.twoFactorEnabled?'ok':'muted'}">${u.twoFactorEnabled?'ENABLED':'DISABLED'}</span><div class="small-note" style="margin-top:2px">Adds a code check at login. Simulated in this prototype — no real OTP is sent.</div></div>
-        <button class="btn sm ${u.twoFactorEnabled?'':'primary'}" onclick="toggleProfileFlag('twoFactorEnabled')">${u.twoFactorEnabled?'Disable':'Enable'}</button>
-      </div>
-      <div class="row" style="justify-content:space-between;padding:10px 0">
-        <div><b style="font-size:13px">Desktop Notifications</b> <span class="badge ${u.desktopNotifEnabled?'ok':'muted'}">${u.desktopNotifEnabled?'ENABLED':'DISABLED'}</span></div>
-        <button class="btn sm ${u.desktopNotifEnabled?'':'primary'}" onclick="toggleProfileFlag('desktopNotifEnabled')">${u.desktopNotifEnabled?'Disable':'Enable'}</button>
-      </div>
+      ${twoFactorRowHtml()}
+      ${desktopNotifRowHtml(u)}
     </div>
     ${signatureEditorHtml(u.id)}
     <div class="card" style="margin-top:14px">
@@ -39601,7 +39771,9 @@ async function saveProfileSection(gi){
   if(!pair){ alert('That is not a section of your profile.'); return; }
   const group = pair[0], fields = pair[1];
   const before = Object.assign({}, u);
-  fields.forEach(f=>{ const el=document.getElementById('f_'+f.k); if(el) u[f.k]=el.value; });
+  const data = readFields(fields);
+  if(!validateRequired(fields, data)) return;
+  fields.forEach(f=>{ if(data[f.k] !== undefined) u[f.k] = data[f.k]; });
   await save('team');
   await logAudit('Team', u.id, 'Profile Updated (' + group + ')', diffFields(before, u, fields));
   const left = profileMissing(u).length;
@@ -39630,11 +39802,188 @@ async function deleteProfileDoc(idx){
   navigate('profile');
 }
 async function toggleProfileFlag(flag){
+  if(flag === 'twoFactorEnabled') return twoFactorStart(twoFactorState.enabled ? 'disable' : 'enable');
+  if(flag === 'desktopNotifEnabled') return toggleDesktopNotifications();
   const u = me();
   u[flag] = !u[flag];
   await save('team');
   await logAudit('Team', u.id, 'Security Setting Changed', [{field:flag, oldValue:'', newValue:String(u[flag])}]);
   navigate('profile');
+}
+
+/* ---------------------------------------------------------------------
+   TWO-STEP SIGN-IN, AS MY PROFILE SHOWS IT.
+
+   The setting lives with the account on the server, not on the team
+   record, because the server is what asks for the code at sign-in and
+   a setting the page could flip would be no protection at all. So the
+   card reads it from there, and changing it takes a code emailed to
+   the sign-in address: ENABLED appears only once a code has come back
+   right. The team record keeps a copy for display elsewhere.
+   --------------------------------------------------------------------- */
+const twoFactorState = {loaded:false, loading:false, enabled:false, email:'', error:''};
+async function twoFactorLoad(){
+  if(twoFactorState.loading) return;
+  twoFactorState.loading = true;
+  try {
+    const r = await fetch('/api/me/2fa', {headers: apiHeaders()});
+    const j = await r.json().catch(()=>({}));
+    if(r.ok && j.ok){ twoFactorState.enabled = !!j.enabled; twoFactorState.email = j.email || ''; twoFactorState.error = ''; }
+    else twoFactorState.error = j.message || ('HTTP ' + r.status);
+  } catch(e){ twoFactorState.error = 'the server could not be reached'; }
+  twoFactorState.loaded = true; twoFactorState.loading = false;
+  const u = me();
+  if(u && !twoFactorState.error && !!u.twoFactorEnabled !== twoFactorState.enabled){
+    u.twoFactorEnabled = twoFactorState.enabled; await save('team');
+  }
+  if(currentView === 'profile' && !document.querySelector('#overlay.show')) render();
+}
+function twoFactorRowHtml(){
+  if(!twoFactorState.loaded) setTimeout(twoFactorLoad, 0);
+  const st = twoFactorState;
+  const badge = !st.loaded ? '<span class="badge muted">CHECKING…</span>'
+    : st.error ? '<span class="badge warn">UNKNOWN</span>'
+    : `<span class="badge ${st.enabled?'ok':'muted'}">${st.enabled?'ENABLED':'DISABLED'}</span>`;
+  const note = st.error ? 'Could not read the setting: ' + esc(st.error) + '.'
+    : st.enabled ? 'Signing in asks for your password and then a 6-digit code emailed to <b>' + esc(st.email) + '</b>.'
+    : 'Adds a second step at sign-in: a 6-digit code emailed to your sign-in address, good for 5 minutes.';
+  return `<div class="row" style="justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--line)">
+        <div><b style="font-size:13px">Two-Factor Authentication</b> ${badge}<div class="small-note" style="margin-top:2px">${note}</div></div>
+        <button class="btn sm ${st.enabled?'':'primary'}" ${!st.loaded || st.error ? 'disabled' : ''}
+          onclick="toggleProfileFlag('twoFactorEnabled')">${st.enabled?'Disable':'Enable'}</button>
+      </div>`;
+}
+async function twoFactorPost(path, body){
+  try {
+    const r = await fetch(path, {method:'POST', headers: Object.assign({'Content-Type':'application/json'}, apiHeaders()),
+      body: JSON.stringify(body || {})});
+    const j = await r.json().catch(()=>({}));
+    return Object.assign({httpOk: r.ok}, j);
+  } catch(e){ return {ok:false, message:'The server could not be reached.'}; }
+}
+async function twoFactorStart(action, resend){
+  const r = await twoFactorPost('/api/me/2fa/start', {action, resend: !!resend});
+  if(!r.ok){
+    if(resend){ const n = document.getElementById('tfaNote'); if(n){ n.style.color = 'var(--danger)'; n.textContent = r.message || 'Could not send a new code.'; } return; }
+    alert('The code could not be sent.\n\n' + (r.message || 'Try again in a moment.'));
+    return;
+  }
+  if(resend){
+    const n = document.getElementById('tfaNote');
+    if(n){ n.style.color = 'var(--ok)'; n.textContent = 'A new code was sent to ' + r.sentTo + '. Only the newest code works.'; }
+    return;
+  }
+  const on = action === 'enable';
+  openModal(on ? 'Turn on two-step sign-in' : 'Turn off two-step sign-in', `
+    <p style="margin-top:0;font-size:13px">We have emailed a 6-digit code to <b>${esc(r.sentTo)}</b>.
+      Type it below to ${on ? 'turn two-step sign-in on' : 'turn it off'}. The code expires in 5 minutes.</p>
+    <div class="field"><label>Code<span class="req">*</span></label>
+      <input type="text" id="f_tfaCode" inputmode="numeric" maxlength="6" autocomplete="one-time-code"
+        placeholder="123456" onkeydown="if(event.key==='Enter') twoFactorVerify()"></div>
+    <div class="small-note" id="tfaNote" style="margin-top:4px"></div>`,
+    `<button class="btn" onclick="closeModal()">Cancel</button>
+     <button class="btn" onclick="twoFactorStart('${action}', true)">Resend code</button>
+     <button class="btn primary" onclick="twoFactorVerify()">Verify</button>`);
+  setTimeout(()=>{ const el = document.getElementById('f_tfaCode'); if(el) el.focus(); }, 50);
+}
+async function twoFactorVerify(){
+  const el = document.getElementById('f_tfaCode');
+  const code = ((el || {}).value || '').replace(/\s/g, '');
+  const note = document.getElementById('tfaNote');
+  const say = (t)=>{ if(note){ note.style.color = 'var(--danger)'; note.textContent = t; } };
+  if(!/^[0-9]{6}$/.test(code)){ say('Enter the 6-digit code from the email.'); return; }
+  const r = await twoFactorPost('/api/me/2fa/verify', {code});
+  if(!r.ok){ say(r.message || 'That code did not work.'); if(r.restart && el) el.value = ''; return; }
+  twoFactorState.enabled = !!r.enabled;
+  const u = me();
+  if(u){
+    u.twoFactorEnabled = twoFactorState.enabled;
+    await save('team');
+    await logAudit('Team', u.id, 'Security Setting Changed', [{field:'Two-Factor Authentication',
+      oldValue: r.enabled ? 'Disabled' : 'Enabled', newValue: r.enabled ? 'Enabled' : 'Disabled'}]);
+  }
+  closeModal();
+  window._profileSaved = 'Two-step sign-in is now ' + (r.enabled ? 'on' : 'off');
+  navigate('profile');
+}
+
+/* ---------------------------------------------------------------------
+   DESKTOP NOTIFICATIONS
+
+   The browser's own Notification API, asked for permission when
+   somebody switches it on and never before. ENABLED is only saved when
+   the browser has said yes, so the badge never claims something the
+   browser will not do. Once on, a new notification addressed to this
+   person — a leave decision, a sign-in to their account, anything the
+   bell would show — also appears on the desktop, in whichever of their
+   tabs is open. The preference is kept on their team record, so it
+   follows them; the permission is the browser's, per device, and the
+   card says when the two disagree.
+   --------------------------------------------------------------------- */
+function desktopNotifSupport(){
+  if(typeof window === 'undefined' || !('Notification' in window)) return 'unsupported';
+  return Notification.permission;          // 'default' | 'granted' | 'denied'
+}
+function desktopNotifRowHtml(u){
+  const perm = desktopNotifSupport();
+  const on = !!u.desktopNotifEnabled;
+  const badge = on && perm === 'granted' ? '<span class="badge ok">ENABLED</span>'
+    : on ? '<span class="badge warn">BLOCKED IN THIS BROWSER</span>'
+    : '<span class="badge muted">DISABLED</span>';
+  const note = perm === 'unsupported' ? 'This browser cannot show desktop notifications.'
+    : perm === 'denied' ? 'This browser has blocked notifications for this site. Allow them in the browser’s site settings (the padlock beside the address), then press Enable.'
+    : on ? 'You are told on your desktop about sign-ins to your account and new notifications.'
+    : 'Get a desktop alert for sign-ins to your account and for new notifications, even when this tab is in the background.';
+  return `<div class="row" style="justify-content:space-between;padding:10px 0">
+        <div><b style="font-size:13px">Desktop Notifications</b> ${badge}<div class="small-note" style="margin-top:2px">${note}</div></div>
+        <button class="btn sm ${on && perm === 'granted' ? '' : 'primary'}" onclick="toggleProfileFlag('desktopNotifEnabled')">${on && perm === 'granted' ? 'Disable' : 'Enable'}</button>
+      </div>`;
+}
+async function toggleDesktopNotifications(){
+  const u = me(); if(!u) return;
+  const perm = desktopNotifSupport();
+  const turningOn = !(u.desktopNotifEnabled && perm === 'granted');
+  if(turningOn){
+    if(perm === 'unsupported'){ alert('This browser cannot show desktop notifications.\n\nTry a current version of Chrome, Edge, Firefox or Safari.'); return; }
+    let got = perm;
+    if(got === 'default'){ try { got = await Notification.requestPermission(); } catch(e){ got = 'denied'; } }
+    if(got !== 'granted'){
+      alert(got === 'denied'
+        ? 'Notifications are blocked for this site in your browser.\n\nAllow them in the browser’s site settings (the padlock beside the address bar), then press Enable again.'
+        : 'Notifications were not allowed, so they have been left off.');
+      navigate('profile'); return;
+    }
+  }
+  const was = !!u.desktopNotifEnabled;
+  u.desktopNotifEnabled = turningOn;
+  await save('team');
+  await logAudit('Team', u.id, 'Security Setting Changed', [{field:'Desktop Notifications',
+    oldValue: was ? 'Enabled' : 'Disabled', newValue: turningOn ? 'Enabled' : 'Disabled'}]);
+  if(turningOn) desktopNotify('Desktop notifications are on', 'You will be told here about sign-ins and new notifications.', {tag:'boss-notif-on'});
+  window._profileSaved = 'Desktop notifications ' + (turningOn ? 'turned on' : 'turned off');
+  navigate('profile');
+}
+function desktopNotify(title, body, opts){
+  const u = me();
+  if(!u || !u.desktopNotifEnabled || desktopNotifSupport() !== 'granted') return null;
+  try {
+    const n = new Notification(title, {body: body || '', tag: (opts && opts.tag) || undefined});
+    n.onclick = ()=>{ try { window.focus(); } catch(e){} if(opts && opts.onclick) opts.onclick(); n.close(); };
+    return n;
+  } catch(e){ return null; }
+}
+/* What has already been shown, so a notification appears once — and
+   what was already there when the page opened is not announced at all. */
+const desktopSeen = {primed:false, ids:new Set()};
+function desktopNotifySweep(){
+  if(!currentUser || !Array.isArray(DB.notifications)) return;
+  const mine = DB.notifications.filter(n=>n && n.userId === currentUser && !n.readAt && !n.deletedAt);
+  if(!desktopSeen.primed){ mine.forEach(n=>desktopSeen.ids.add(n.id)); desktopSeen.primed = true; return; }
+  mine.forEach(n=>{
+    if(desktopSeen.ids.has(n.id)) return;
+    desktopSeen.ids.add(n.id);
+    desktopNotify(n.title || 'BOSS', n.body || '', {tag: n.id, onclick: ()=>openNotification(n.id)});
+  });
 }
 function openRaiseQuery(){
   openModal('Raise a Query', `<div class="field"><label>Describe the issue or suggestion</label><textarea id="queryText" placeholder="Found a bug or have a suggestion?"></textarea></div>`,
@@ -68401,6 +68750,12 @@ const MEMBER_DOC_CATEGORIES = ['Joining Document','Employment Document','Identit
    module sees a colleague's working details; these two need Manage Users (or Admin), or
    it being your own record. Same RBAC as everywhere else — no new permission system. */
 const SENSITIVE_MEMBER_GROUPS = ['Identity Documents','Bank Details'];
+const EMERGENCY_RELATIONS = ['Father','Mother','Sister','Brother','Other'];
+/* The NISM certificates a distributor or adviser usually holds. A list
+   to pick from, not a rule: anything else can still be typed. */
+const NISM_SERIES = ['NISM-Series-V-A','NISM-Series-V-B','NISM-Series-V-C','NISM-Series-X-A',
+  'NISM-Series-X-B','NISM-Series-XV','NISM-Series-XXI-A','NISM-Series-XXI-B','NISM-Series-VIII',
+  'NISM-Series-VII','NISM-Series-III-A','NISM-Series-XIX-C'];
 
 function memberStatus(t){ return (t && t.status) || 'Active'; }
 function isMemberActive(t){ return memberStatus(t)==='Active'; }
@@ -68470,11 +68825,12 @@ function teamMemberFieldGroups(forId){
       {k:'dob',l:'Date of Birth',t:'date'},
       {k:'gender',l:'Gender',t:'select',opts:GENDERS},
       {k:'bloodGroup',l:'Blood Group',t:'select',opts:BLOOD_GROUPS},
-      {k:'phone',l:'Personal Mobile',t:'text'},
-      {k:'personalEmail',l:'Personal Email',t:'text'},
-      {k:'emergencyName',l:'Emergency Contact Name',t:'text'},
-      {k:'emergencyPhone',l:'Emergency Contact Number',t:'text'},
-      {k:'emergencyRelation',l:'Emergency Contact Relationship',t:'text'},
+      {k:'phone',l:'Personal Mobile',t:'text',vk:'mobile',ph:'9876543210',maxLen:10,im:'numeric'},
+      {k:'personalEmail',l:'Personal Email',t:'text',vk:'email',ph:'yourname@gmail.com',im:'email'},
+      {k:'emergencyName',l:'Emergency Contact Name',t:'text',vk:'person',ph:'e.g. R. K. Sharma',
+       reqIf:'emergencyPhone', reqIfMessage:'Please enter the emergency contact’s name.'},
+      {k:'emergencyPhone',l:'Emergency Contact Number',t:'text',vk:'mobile',ph:'9876543210',maxLen:10,im:'numeric'},
+      {k:'emergencyRelation',l:'Emergency Contact Relationship',t:'select',opts:EMERGENCY_RELATIONS},
     ],
     'Professional Information': [
       /* The eight that fit a column come first and fill their rows; the
@@ -68487,7 +68843,7 @@ function teamMemberFieldGroups(forId){
       {k:'employmentType',l:'Employment Type',t:'select',opts:EMPLOYMENT_TYPES},
       {k:'branch',l:'Work Location / Branch',t:'branch'},
       {k:'team',l:'Team Name',t:'text'},
-      {k:'officialMobile',l:'Official Mobile',t:'text'},
+      {k:'officialMobile',l:'Official Mobile',t:'text',vk:'mobile',ph:'9876543210',maxLen:10,im:'numeric'},
       {k:'status',l:'Status',t:'select',opts:TEAM_MEMBER_STATUSES},
       /* Pay, for whoever may set it. Left out of the form entirely for
          anybody else, which is also what stops their save clearing it:
@@ -68518,31 +68874,39 @@ function teamMemberFieldGroups(forId){
                   branch:'Their whole branch', all:'Everything in the firm'}},
     ],
     'Address': [
-      {k:'addressLine1',l:'Address Line 1',t:'text'},
-      {k:'addressLine2',l:'Address Line 2',t:'text'},
-      {k:'city',l:'City',t:'text'},
-      {k:'state',l:'State',t:'text'},
-      {k:'country',l:'Country',t:'text'},
-      {k:'pincode',l:'PIN Code',t:'text'},
+      /* The PIN comes before the city because it fills it: type a PIN and
+         the city, state and country are looked up, and stay editable. */
+      {k:'addressLine1',l:'Address Line 1',t:'text',ph:'Flat / house no., building, street'},
+      {k:'addressLine2',opt:1,l:'Address Line 2 (optional)',t:'text',ph:'Area, landmark'},
+      {k:'pincode',l:'PIN Code',t:'text',vk:'pin',ph:'560001',maxLen:6,im:'numeric',lookup:'pincode',
+       h:'Fills in the city, state and country. You can still change them.'},
+      {k:'city',l:'City',t:'text',ph:'Bengaluru'},
+      {k:'state',l:'State',t:'text',ph:'Karnataka'},
+      {k:'country',l:'Country',t:'text',ph:'India'},
     ],
     'Identity Documents': [
-      {k:'panNumber',l:'PAN Number',t:'text'},
-      {k:'aadhaarLast4',l:'Aadhaar (last 4 only)',t:'text'},
-      {k:'pfUan',l:'PF UAN',t:'text'},
-      {k:'esicNumber',l:'ESIC Number',t:'text'},
+      {k:'panNumber',mask:1,l:'PAN Number',t:'text',vk:'pan',ph:'ABCDE1234F',maxLen:10},
+      {k:'aadhaarLast4',l:'Aadhaar Number',t:'text',vk:'aadhaar',ph:'XXXX XXXX 1234',maxLen:14,im:'numeric',
+       h:'Type the full 12-digit number to check it. Only the last 4 digits are kept, and it is shown masked.'},
+      {k:'pfUan',mask:1,l:'PF UAN',t:'text',vk:'uan',ph:'123456789012',maxLen:12,im:'numeric'},
+      {k:'esicNumber',mask:1,l:'ESIC Number',t:'text',vk:'esic',ph:'1234567890',maxLen:10,im:'numeric'},
       {k:'dscSubmitted',l:'DSC Submitted',t:'select',opts:['No','Yes']},
     ],
     'Certifications': [
-      {k:'arnNo',l:'AMFI ARN',t:'text'},
-      {k:'euinNo',l:'EUIN',t:'text'},
-      {k:'nismCert',l:'NISM Certification',t:'text'},
+      {k:'arnNo',l:'AMFI ARN',t:'text',vk:'arn',ph:'ARN-123456',maxLen:11},
+      {k:'euinNo',l:'EUIN',t:'text',vk:'euin',ph:'E123456789',maxLen:10},
+      {k:'nismCert',l:'NISM Certification',t:'text',ph:'NISM-Series-V-A',suggest:NISM_SERIES,
+       h:'Pick from the list or type your own.'},
+      {k:'nismCertNo',opt:1,l:'NISM Certificate Number (optional)',t:'text',ph:'e.g. NISM-201900012345'},
     ],
     'Bank Details': [
-      {k:'bankName',l:'Bank Name',t:'text'},
-      {k:'bankAccountName',l:'Account Holder Name',t:'text'},
-      {k:'bankAccountNumber',l:'Account Number',t:'text'},
-      {k:'bankIfsc',l:'IFSC',t:'text'},
-      {k:'bankBranch',l:'Branch',t:'text'},
+      /* The IFSC fills the bank and the branch, so it is asked first. */
+      {k:'bankIfsc',l:'IFSC',t:'text',vk:'ifsc',ph:'SBIN0001234',maxLen:11,lookup:'ifsc',
+       h:'Fills in the bank name and branch. You can still change them.'},
+      {k:'bankName',l:'Bank Name',t:'text',ph:'State Bank of India'},
+      {k:'bankAccountName',l:'Account Holder Name',t:'text',vk:'person',ph:'Ramesh Kumar'},
+      {k:'bankAccountNumber',mask:1,l:'Account Number',t:'text',vk:'account',ph:'123456789012',maxLen:18,im:'numeric'},
+      {k:'bankBranch',l:'Branch',t:'text',ph:'Indiranagar Branch'},
     ],
   };
 }
@@ -68726,7 +69090,16 @@ async function toggleMemberStatus(id){
 function kvRows(fields, rec){
   const filled = fields.filter(f=>rec[f.k]!==undefined && rec[f.k]!=='');
   if(!filled.length) return `<div style="color:var(--muted);font-size:12.5px;padding:4px 0">Nothing recorded yet.</div>`;
-  return filled.map(f=>`<div style="padding:4px 0;font-size:13px"><span style="color:var(--muted)">${esc(f.l)}:</span> <b>${esc(displayFieldValue(f, rec[f.k]))}</b></div>`).join('');
+  return filled.map(f=>`<div style="padding:4px 0;font-size:13px"><span style="color:var(--muted)">${esc(f.l)}:</span> <b>${esc(maskedFieldValue(f, rec[f.k]))}</b></div>`).join('');
+}
+/* An identity or bank number read off a profile shows its last four
+   characters and no more. Whoever may edit it still sees it whole in
+   the form; a card on the screen is not where it needs to be legible. */
+function maskedFieldValue(f, v){
+  if(f.vk === 'aadhaar') return /^[0-9]{4}$/.test(String(v)) ? aadhaarMasked(v) : String(v || '');
+  if(!f.mask) return displayFieldValue(f, v);
+  const x = String(v || '');
+  return x.length > 4 ? 'X'.repeat(x.length - 4) + x.slice(-4) : x;
 }
 /* What the member's profile says about the account behind them. Only an admin
    sees it, because only an admin can do anything about it. */
@@ -75279,7 +75652,12 @@ function hrConfigDefaults(){
       start: '',            // e.g. '09:30' — what time the office starts
       end: '',              // e.g. '18:30'
       graceMinutes: '',     // how late is still on time
-      fullDayHours: '',     // what counts as a full day
+      fullDayHours: '',     // what counts as a full day; 9 when blank
+      /* When the punch clock is open. Punch In works once a day from
+         punchInFrom; Punch Out can be pressed again and again (the latest
+         one stands) until punchOutUntil, after which both are shut. */
+      punchInFrom: '08:45',
+      punchOutUntil: '20:45',
     },
     weeklyOff: [],          // ['Sat','Sun'] once the firm says so
     holidays: [],           // [{date:'YYYY-MM-DD', name:'...'}]
@@ -75604,10 +75982,136 @@ function hrDayStatus(userId, date, rec){
   const holiday = hrHolidayOn(date);
   if(holiday) return {code:'holiday', label:'Holiday' + (holiday.name ? ' — ' + holiday.name : ''), tone:'muted'};
   if(hrIsWeeklyOff(date)) return {code:'off', label:'Weekly off', tone:'muted'};
+  if(hrIsSunday(date)) return {code:'off', label:'Sunday', tone:'muted'};
   if(date === hrToday()) return {code:'none', label:'Not punched in yet', tone:'muted'};
   if(date > hrToday()) return {code:'future', label:'—', tone:'muted'};
   return {code:'absent', label:'No attendance recorded', tone:'warn'};
 }
+
+/* ---------- the punch clock's rules ---------- */
+
+/* WHEN A PUNCH IS ALLOWED.
+
+   Punch In once a day, from the opening time (08:45 unless HR Setup
+   says otherwise). Punch Out as often as somebody likes after that —
+   the latest one is the one that counts — until the closing time
+   (20:45), after which both buttons are shut for the day. Sundays and
+   the firm's holidays have no punch clock at all. The buttons are drawn
+   disabled with the reason beside them, and the two functions below
+   refuse the same things, so a button pressed from anywhere else meets
+   the same rule. */
+function hrNow(){ return new Date(); }
+function hrHHMM(d){ return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'); }
+function hrPunchWindow(){
+  const d = hrCfg().day, ok = v => /^\d{2}:\d{2}$/.test(String(v || ''));
+  return {from: ok(d.punchInFrom) ? d.punchInFrom : '08:45', until: ok(d.punchOutUntil) ? d.punchOutUntil : '20:45'};
+}
+function hrIsSunday(date){
+  const d = new Date(date + 'T00:00:00');
+  return !isNaN(d) && d.getDay() === 0;
+}
+function hrClosedDayWhy(date){
+  if(hrIsSunday(date)) return 'There is no attendance on Sundays.';
+  const h = hrHolidayOn(date);
+  if(h) return 'It is a holiday' + (h.name ? ' — ' + h.name : '') + '.';
+  return '';
+}
+function hrPunchRules(rec, now){
+  now = now || hrNow();
+  const date = hrDateKey(now), at = hrHHMM(now), w = hrPunchWindow();
+  const closed = hrClosedDayWhy(date);
+  if(closed) return {inOk:false, outOk:false, inWhy:closed, outWhy:closed};
+  const first = hrFirstIn(rec);
+  const r = {inOk:true, outOk:true, inWhy:'', outWhy:''};
+  if(first){ r.inOk = false; r.inWhy = 'You punched in at ' + hrClock(first) + ' today. Punch In works once a day.'; }
+  else if(at < w.from){ r.inOk = false; r.inWhy = 'Punch In opens at ' + w.from + '.'; }
+  else if(at >= w.until){ r.inOk = false; r.inWhy = 'The punch clock closed at ' + w.until + ' today.'; }
+  if(!first){ r.outOk = false; r.outWhy = 'Punch in first.'; }
+  else if(at >= w.until){ r.outOk = false; r.outWhy = 'Punch Out closed at ' + w.until
+    + '. Your last punch out stands; ask for a regularization if it is wrong.'; }
+  return r;
+}
+
+/* ---------- how much of a day counts ---------- */
+
+/* ATTENDANCE %, WORKED OUT ONE WAY EVERYWHERE.
+
+   A day's eligible time is the time between punch in and the latest
+   punch out, plus any regularized periods HR has approved, all clipped
+   to the punch clock's hours and laid on one timeline, so a minute that
+   is covered twice is counted once. Attendance % is that time over a
+   full day (9 hours unless HR Setup says otherwise), capped at 100.
+
+   A day counts as worked in proportion: 100% is one full day, 50% half
+   of one. An approved leave counts as a day (half a day for a half-day
+   type); pending or declined leave counts for nothing, and no date is
+   ever worth more than one day however it was made up. */
+function hrFullDayMinutes(){
+  const h = Number(hrCfg().day.fullDayHours);
+  return (isFinite(h) && h > 0 ? h : 9) * 60;
+}
+function hrAt(date, hhmm){ return new Date(date + 'T' + hhmm + ':00').getTime(); }
+function hrRegsAll(){ return Array.isArray(DB.hrRegularizations) ? DB.hrRegularizations : []; }
+function hrRegsOn(userId, date){ return hrRegsAll().filter(r=>r && r.userId === userId && r.date === date); }
+function hrRecordedSpans(rec){
+  return (rec && Array.isArray(rec.sessions) ? rec.sessions : [])
+    .filter(s=>s && s.in && s.out)
+    .map(s=>[new Date(s.in).getTime(), new Date(s.out).getTime()])
+    .filter(x=>isFinite(x[0]) && isFinite(x[1]) && x[1] > x[0]);
+}
+function hrSpanMinutes(spans, lo, hi){
+  const cut = spans.map(([a, b])=>[Math.max(a, lo), Math.min(b, hi)]).filter(([a, b])=>b > a)
+    .sort((x, y)=>x[0] - y[0]);
+  let total = 0, curA = null, curB = null;
+  cut.forEach(([a, b])=>{
+    if(curB === null || a > curB){ if(curB !== null) total += curB - curA; curA = a; curB = b; }
+    else if(b > curB) curB = b;
+  });
+  if(curB !== null) total += curB - curA;
+  return total / 60000;
+}
+/* extra: periods [{from,to}] not yet approved, for a form's preview. */
+function hrEligibleMinutes(userId, date, rec, extra){
+  const r = rec !== undefined ? rec : hrAttendanceOf(userId, date);
+  const w = hrPunchWindow();
+  const periods = hrRegsOn(userId, date).filter(x=>x.status === 'Approved')
+    .reduce((all, x)=>all.concat(x.periods || []), []).concat(extra || []);
+  const spans = hrRecordedSpans(r).concat(periods
+    .filter(p=>p && /^\d{2}:\d{2}$/.test(p.from || '') && /^\d{2}:\d{2}$/.test(p.to || ''))
+    .map(p=>[hrAt(date, p.from), hrAt(date, p.to)]));
+  return hrSpanMinutes(spans, hrAt(date, w.from), hrAt(date, w.until));
+}
+function hrDayPct(userId, date, rec){
+  return Math.min(100, Math.round(hrEligibleMinutes(userId, date, rec) * 1000 / hrFullDayMinutes()) / 10);
+}
+/* What one date is worth, 0 to 1, and why. */
+function hrDayCredit(userId, date, rec){
+  if(hrClosedDayWhy(date)) return {credit:0, leave:0, worked:0};
+  const worked = Math.min(1, hrDayPct(userId, date, rec) / 100);
+  const lv = hrLeaveOn(userId, date);
+  const leave = lv ? ((lv.unit || hrLeaveTypeUnit(lv.type)) === 'half' ? 0.5 : 1) : 0;
+  return {credit: Math.min(1, worked + leave), leave, worked};
+}
+function hrDatesBack(n, from){
+  const out = [], d = new Date((from || hrToday()) + 'T00:00:00');
+  for(let i = 0; i < n; i++){ out.push(hrDateKey(d)); d.setDate(d.getDate() - 1); }
+  return out;
+}
+/* Days worked over a month to date: the sum of what each date is worth,
+   and how many of them were whole days. */
+function hrMonthDays(userId, month){
+  const m = month || hrToday().slice(0, 7);
+  const today = hrToday();
+  let days = 0, full = 0, leave = 0;
+  const d = new Date(m + '-01T00:00:00');
+  while(hrDateKey(d).slice(0, 7) === m && hrDateKey(d) <= today){
+    const c = hrDayCredit(userId, hrDateKey(d));
+    days += c.credit; if(c.credit >= 1) full++; leave += c.leave;
+    d.setDate(d.getDate() + 1);
+  }
+  return {days: Math.round(days * 100) / 100, full, leave, month: m};
+}
+function hrDaysText(n){ return (Math.round(n * 100) / 100) + ' day' + (n === 1 ? '' : 's'); }
 
 /* ---------- punching in and out ---------- */
 
@@ -75632,11 +76136,13 @@ function hrLocationBlocks(fix){
    there, and the whole value of the record is that it is true. So the
    punch reads itself back off the server, and says so if it is not
    there. It costs one GET, twice a day.  */
-async function hrSaveAttendance(recId, sessions){
+async function hrSaveAttendance(recId, sessions, outAt){
   await save('hrAttendance');
   const back = (await sget('hrAttendance', [])) || [];
   const row = back.find(r=>r && r.id === recId);
-  if(row && (row.sessions || []).length >= sessions) return true;
+  const landed = row && (row.sessions || []).length >= sessions
+    && (!outAt || (row.sessions || []).some(x=>x && x.out === outAt));
+  if(landed) return true;
   alert('The server did not accept that punch, so it has not been recorded.\n\n'
     + 'Nothing has been lost. Reload the page and try again, and tell an administrator if it keeps happening.');
   return false;
@@ -75646,10 +76152,8 @@ async function hrPunchIn(){
   if(!u){ alert('Sign in first.'); return; }
   const date = hrToday();
   let rec = hrAttendanceOf(u.id, date);
-  if(rec && hrOpenSession(rec)){
-    alert('You are already punched in.\n\nPunch out before punching in again — one open session at a time is what keeps the day’s total honest.');
-    return;
-  }
+  const rules = hrPunchRules(rec);
+  if(!rules.inOk){ alert('You cannot punch in now.\n\n' + rules.inWhy); return; }
   const fix = await hrGetLocation();
   const blocked = hrLocationBlocks(fix);
   if(blocked){ alert(blocked); return; }
@@ -75683,23 +76187,27 @@ async function hrPunchOut(){
   if(!u){ alert('Sign in first.'); return; }
   const date = hrToday();
   const rec = hrAttendanceOf(u.id, date);
-  const open = hrOpenSession(rec);
-  if(!open){
-    alert('There is no open session to punch out of.\n\nPunch in first.');
-    return;
-  }
+  const rules = hrPunchRules(rec);
+  if(!rules.outOk){ alert('You cannot punch out now.\n\n' + rules.outWhy); return; }
+  /* The session punched out of: the open one, or — for a punch out
+     pressed again — the last one, whose punch out moves to now. The
+     one it replaces is kept on the session, so nothing is lost. */
+  const open = hrOpenSession(rec) || (rec.sessions || []).filter(x=>x && x.in).slice(-1)[0];
   const fix = await hrGetLocation();
   const blocked = hrLocationBlocks(fix);
   if(blocked){ alert(blocked); return; }
-  await hrActBeat(true);                 // close the books before the session does
+  const again = !!open.out;
+  const previous = again ? hrClock(open.out) : '';
+  if(!again) await hrActBeat(true);      // close the books before the session does
   const at = new Date().toISOString();
+  if(again) open.outHistory = (open.outHistory || []).concat([{out: open.out, outBy: open.outBy, outLoc: open.outLoc}]);
   open.out = at; open.outBy = u.id; open.outLoc = hrLocStamp(fix);
   rec.updatedAt = at;
-  if(!await hrSaveAttendance(rec.id, (rec.sessions || []).length)) return;
+  if(!await hrSaveAttendance(rec.id, (rec.sessions || []).length, at)) return;
   await logAudit('HR', rec.id, 'Punched Out', [
     {field:'Person', oldValue:'', newValue: u.name || u.id},
     {field:'Date', oldValue:'', newValue: date},
-    {field:'At', oldValue:'', newValue: hrClock(at)},
+    {field:'At', oldValue: previous, newValue: hrClock(at)},
     {field:'Location', oldValue:'', newValue: fix.ok
       ? fix.lat + ', ' + fix.lng + (fix.accuracy !== null ? ' (±' + fix.accuracy + 'm)' : '')
       : 'not captured — ' + fix.status},
@@ -75982,17 +76490,18 @@ function hrNudgeDue(){
   const today = hrToday();
   /* A day somebody is not working is not a day to nag them. */
   if(hrLeaveOn(u.id, today)) return null;
-  if(hrIsWeeklyOff(today) || hrHolidayOn(today)) return null;
+  if(hrIsWeeklyOff(today) || hrHolidayOn(today) || hrIsSunday(today)) return null;
   const now = new Date();
   const mins = now.getHours() * 60 + now.getMinutes();
   const rec = hrAttendanceOf(u.id, today);
   const open = hrOpenSession(rec);
   const everIn = !!hrFirstIn(rec);
-  if(!everIn && mins >= hrMinutesOfDay(cfg.inAfter))
+  const rules = hrPunchRules(rec);
+  if(!everIn && rules.inOk && mins >= hrMinutesOfDay(cfg.inAfter))
     return {key:'in', title:'You have not punched in',
       body:'It is past ' + cfg.inAfter + ' and there is no punch in on your record for today.',
       action:'hrPunchIn()', label:'⏺ Punch In'};
-  if(open && mins >= hrMinutesOfDay(cfg.outAfter))
+  if(open && rules.outOk && mins >= hrMinutesOfDay(cfg.outAfter))
     return {key:'out', title:'You are still punched in',
       body:'It is past ' + cfg.outAfter + ' and your session from ' + hrClock(open.in)
         + ' is still open.',
@@ -76248,11 +76757,21 @@ function hrPunchWidgetHtml(){
           >since ${hrClock(open.in)}</span>`
       : worked > 0
         ? `<span class="small-note" style="margin:0">${hrDuration(worked)} today</span>` : ''}
-    ${open
-      ? `<button class="btn sm primary" onclick="hrPunchOut()">⏻ Punch Out</button>`
-      : `<button class="btn sm primary" onclick="hrPunchIn()">⏺ Punch In</button>`}
+    ${hrPunchButtonsHtml(rec, 'sm')}
     <button class="btn sm ghost" onclick="hrOpenLeaveRequest()"
       title="Apply for leave — it goes to your branch head">Leave Request</button>`;
+}
+/* The two buttons, each disabled with its reason when the rules say no.
+   Before anybody has punched in only Punch In is shown; once they have,
+   only Punch Out, which stays pressable until the clock closes. */
+function hrPunchButtonsHtml(rec, size){
+  const r = hrPunchRules(rec);
+  const cls = 'btn ' + (size ? size + ' ' : '') + 'primary';
+  const btn = (fn, label, ok, why)=>`<button class="${cls}" onclick="${fn}()" ${ok ? '' : 'disabled'}
+    title="${esc(ok ? label : why)}">${label}</button>${ok ? '' : `<span class="small-note" style="margin:0">${esc(why)}</span>`}`;
+  return hrFirstIn(rec)
+    ? btn('hrPunchOut', '⏻ Punch Out', r.outOk, r.outWhy)
+    : btn('hrPunchIn', '⏺ Punch In', r.inOk, r.inWhy);
 }
 function viewHrDashboard(){
   const u = me();
@@ -76276,6 +76795,8 @@ function viewHrDashboard(){
       <div class="grid-kpi" style="margin-bottom:0">
         <div class="kpi"><div class="num" style="color:var(--info)">${esc(st.label)}</div><div class="lbl">You, today</div></div>
         <div class="kpi"><div class="num">${hrDuration(hrWorkedMinutes(mine))}</div><div class="lbl">Your hours today</div></div>
+        <div class="kpi"><div class="num">${hrDayPct(u.id, today, mine)}%</div><div class="lbl">Attendance today</div></div>
+        <div class="kpi"><div class="num" style="color:var(--ok)">${esc(String(hrMonthDays(u.id).days))}</div><div class="lbl">Days worked this month</div></div>
         ${staff? `<div class="kpi"><div class="num" style="color:var(--ok)">${presentToday}</div><div class="lbl">Present today</div></div>
         <div class="kpi"><div class="num">${inToday}</div><div class="lbl">Punched in now</div></div>`:''}
       </div>
@@ -76284,6 +76805,7 @@ function viewHrDashboard(){
         <button class="btn sm" onclick="hrOpenLeaveRequest()">+ Leave Request</button>
       </div>
     </div>
+    ${hrRegInboxHtml()}
     ${hrLeaveInboxHtml()}
     <div class="card" style="margin-top:14px">
       <div class="section-title" style="margin-top:0">\u{1F4B0} Incentive management</div>
@@ -76314,8 +76836,11 @@ function viewHrAttendance(){
   const open = hrOpenSession(rec);
   const st = hrDayStatus(u.id, today, rec);
   const late = hrLateMinutes(rec);
-  const history = hrAttendanceFor(u.id).slice(0, 30);
+  /* Every date of the last thirty, worked or not, so a day with no
+     punch at all can still be regularized or taken as leave. */
+  const history = hrDatesBack(30).map(date=>({date, rec: hrAttendanceOf(u.id, date)}));
   const cfg = hrCfg();
+  const month = hrMonthDays(u.id);
   return `
     <div class="between" style="margin-bottom:10px">
       <div><div class="section-title" style="margin:0">⏱ Attendance Management</div></div>
@@ -76333,21 +76858,28 @@ function viewHrAttendance(){
               : `<span class="badge ok">On time</span>`}
           </div>
         </div>
-        <div class="row">
-          ${open
-            ? `<button class="btn primary" onclick="hrPunchOut()">⏻ Punch Out</button>`
-            : `<button class="btn primary" onclick="hrPunchIn()">⏺ Punch In</button>`}
-        </div>
+        <div class="row">${hrPunchButtonsHtml(rec, '')}</div>
+      </div>
+      <div class="grid-kpi" style="margin:12px 0 0">
+        <div class="kpi"><div class="num" style="color:var(--info)">${hrDayPct(u.id, today, rec)}%</div><div class="lbl">Attendance today</div></div>
+        <div class="kpi"><div class="num" style="color:var(--ok)">${esc(String(month.days))}</div><div class="lbl">Days worked this month</div></div>
+        <div class="kpi"><div class="num">${month.full}</div><div class="lbl">Full days (100%)</div></div>
+        <div class="kpi"><div class="num">${esc(String(month.leave))}</div><div class="lbl">Approved leave days</div></div>
       </div>
       <div class="field-grid" style="--fg-gap:24px;gap:4px 24px;margin-top:12px">
         <div style="padding:4px 0;font-size:13px"><span style="color:var(--muted)">First punch in:</span> <b>${hrClock(hrFirstIn(rec))}</b></div>
         <div style="padding:4px 0;font-size:13px"><span style="color:var(--muted)">Last punch out:</span> <b>${hrClock(hrLastOut(rec))}</b></div>
         <div style="padding:4px 0;font-size:13px"><span style="color:var(--muted)">Worked today:</span> <b>${hrDuration(hrWorkedMinutes(rec))}</b></div>
-        <div style="padding:4px 0;font-size:13px"><span style="color:var(--muted)">Sessions today:</span> <b>${(rec && rec.sessions || []).length}</b></div>
+        <div style="padding:4px 0;font-size:13px"><span style="color:var(--muted)">Punch clock:</span> <b>${esc(hrPunchWindow().from)} to ${esc(hrPunchWindow().until)}</b></div>
       </div>
       ${hrTimesHtml(rec)}
       ${open? `<div class="small-note" style="margin-top:8px">You are punched in since <b>${hrClock(open.in)}</b>.
-        The total above counts completed sessions, so it moves when you punch out.</div>`:''}
+        The total above counts from punch in to your latest punch out, so it moves when you punch out.</div>`
+        : hrFirstIn(rec) ? `<div class="small-note" style="margin-top:8px">You can press Punch Out again until
+        ${esc(hrPunchWindow().until)}; the latest punch out replaces the one before it.</div>` : ''}
+      <div class="small-note" style="margin-top:8px">Attendance % is your time between punch in and your latest
+        punch out, plus approved regularizations, out of ${hrFullDayMinutes() / 60} hours (capped at 100%). A day at
+        100% counts as one full day; approved leave counts as a day.</div>
       ${!cfg.day.start? `<div class="small-note" style="margin-top:8px">Office timings, the grace period and a full
         working day are not configured yet, so nothing here is marked late and no day is called short. An
         administrator sets those in HR Setup.</div>`:''}
@@ -76355,35 +76887,45 @@ function viewHrAttendance(){
 
     <div class="card" style="margin-top:14px">
       <div class="section-title" style="margin-top:0">\u{1F4C5} My attendance history</div>
-      ${history.length? `<div class="table-wrap"><table><thead><tr>
+      <div class="small-note" style="margin:0 0 8px">Click any date to <b>Regularize Attendance</b> or
+        <b>Apply Leave</b> for it.</div>
+      <div class="table-wrap"><table><thead><tr>
           <th>Name</th><th>Date</th><th>Status</th><th>In</th><th>In at</th><th>Out</th><th>Out at</th>
-          <th>Sessions</th><th>Worked</th><th>Late</th>
+          <th>Worked</th><th>Attendance %</th><th>Counts as</th><th>Late</th><th>Regularization</th>
         </tr></thead><tbody>
-        ${history.map(r=>{
-          const s = hrDayStatus(u.id, r.date, r);
-          const l = hrLateMinutes(r);
-          const first = (r.sessions||[])[0] || {};
-          const closed = (r.sessions||[]).filter(x=>x && x.out);
+        ${history.map(({date, rec: r})=>{
+          const s = hrDayStatus(u.id, date, r);
+          const l = r ? hrLateMinutes(r) : null;
+          const first = (r && r.sessions || [])[0] || {};
+          const closed = (r && r.sessions || []).filter(x=>x && x.out);
           const last = closed[closed.length - 1] || {};
-          return `<tr>
-            <td><b>${esc(teamName(r.userId) || u.name || r.userId)}</b></td>
-            <td>${esc(fmtDate(r.date))}</td>
+          const credit = hrDayCredit(u.id, date, r);
+          const regs = hrRegsOn(u.id, date);
+          const reg = regs[regs.length - 1];
+          return `<tr class="clickable" style="cursor:pointer" data-hrdate="${esc(date)}"
+              onclick="hrDayActions('${esc(date)}')" title="Regularize attendance or apply leave for this date">
+            <td><b>${esc(u.name || u.id)}</b></td>
+            <td>${esc(fmtDate(date))}</td>
             <td><span class="badge ${s.tone}">${esc(s.label)}</span></td>
             <td>${hrClock(hrFirstIn(r))}</td>
-            <td>${hrLocCellHtml(first.inLoc, u.id)}</td>
+            <td>${r ? hrLocCellHtml(first.inLoc, u.id) : '—'}</td>
             <td>${hrClock(hrLastOut(r))}</td>
-            <td>${hrLocCellHtml(last.outLoc, u.id)}</td>
-            <td>${(r.sessions||[]).length}</td>
+            <td>${r ? hrLocCellHtml(last.outLoc, u.id) : '—'}</td>
             <td>${hrDuration(hrWorkedMinutes(r))}</td>
+            <td>${hrClosedDayWhy(date) ? '—' : hrDayPct(u.id, date, r) + '%'}</td>
+            <td>${hrClosedDayWhy(date) ? '—' : esc(hrDaysText(credit.credit))}${credit.leave ? ' <span class="small-note" style="display:inline;margin:0">(leave)</span>' : ''}</td>
             <td>${l === null ? '—' : l > 0 ? l + ' min' : 'On time'}</td>
+            <td>${reg ? `<span class="badge ${hrRegTone(reg.status)}">${esc(reg.status)}</span>` : '—'}</td>
           </tr>`;
         }).join('')}
-      </tbody></table></div>`
-      : `<div class="empty" style="padding:16px">Nothing recorded yet. Punch in above and the day appears here.</div>`}
+      </tbody></table></div>
       <div class="small-note" style="margin-top:8px">Your own timestamps are not editable here, by you or by anybody
-        else — an attendance record is only worth keeping if nobody can move it after the fact.</div>
+        else — an attendance record is only worth keeping if nobody can move it after the fact. Time that was
+        missed is added by a regularization, which HR approves, and the record keeps both.</div>
     </div>
 
+    ${hrRegMineHtml(u.id)}
+    ${hrRegInboxHtml()}
     ${hrLeaveCardHtml(u.id)}
     ${hrLeaveInboxHtml()}
     ${hrIsStaff()? hrTeamAttendanceHtml() : ''}`;
@@ -76645,8 +77187,9 @@ function hrMyLeaveSummaryHtml(userId){
       · ${inYear.length} request${inYear.length === 1 ? '' : 's'}</div>
   </div>`;
 }
-function hrOpenLeaveRequest(){
+function hrOpenLeaveRequest(date){
   const u = me();
+  const day = (typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date)) ? date : hrToday();
   if(!u){ alert('Sign in first.'); return; }
   const types = hrCfg().leaveTypes;
   const approver = hrApproverFor(u.id);
@@ -76660,10 +77203,10 @@ function hrOpenLeaveRequest(){
       <div class="small-note" id="hrBalNote" style="margin-top:4px">${esc(hrBalanceLine(u.id, ''))}</div></div>
     <div class="field-grid">
       <div class="field"><label>From<span class="req">*</span></label>
-        <input type="date" id="f_hrReqFrom" value="${esc(hrToday())}"${dateBoundsAttr()}
+        <input type="date" id="f_hrReqFrom" value="${esc(day)}"${dateBoundsAttr()}
           onchange="hrLeaveBalanceNote()"></div>
       <div class="field"><label>To<span class="req">*</span></label>
-        <input type="date" id="f_hrReqTo" value="${esc(hrToday())}"${dateBoundsAttr()}
+        <input type="date" id="f_hrReqTo" value="${esc(day)}"${dateBoundsAttr()}
           onchange="hrLeaveBalanceNote()"></div>
     </div>
     <div class="field"><label>Reason<span class="req">*</span></label>
@@ -76849,6 +77392,297 @@ async function hrMailLeaveDecision(row){
   return {problem: mailResultNote(result, 'The leave decision')};
 }
 
+/* =====================================================================
+   REGULARIZING A DAY: TIME THAT WAS WORKED BUT NOT PUNCHED
+
+   An attendance record is not edited — not by the person, not by HR.
+   What was missed (a client visit before punching in, a punch out
+   forgotten at a branch) is asked for as a regularization: the date,
+   one or more periods with a start and an end, and a reason. It goes
+   to HR by email and in BOSS, waits as Pending, and changes nothing
+   until HR approves it. Once approved, its periods join the day's
+   timeline and the day's hours and attendance % are worked out again;
+   a minute that was already recorded, or asked for twice, still counts
+   once. Rejected requests stay on the record with the reason, and every
+   request keeps the history of what happened to it.
+   ===================================================================== */
+function hrRegTone(status){ return status === 'Approved' ? 'ok' : status === 'Rejected' ? 'danger' : 'warn'; }
+/* Who HR is, for a regularization: everybody holding HR access, apart
+   from the person asking. With nobody holding it, the person who would
+   approve their leave. */
+function hrRegApprovers(userId){
+  const hr = (DB.team || []).filter(t=>t && isMemberActive(t) && t.id !== userId && (hrIsStaff(t) || hrIsAdmin(t)));
+  if(hr.length) return hr;
+  const a = hrApproverFor(userId);
+  const t = a && (DB.team || []).find(x=>x.id === a.id);
+  return t ? [t] : [];
+}
+function hrMayDecideReg(row){
+  return !!row && row.status === 'Pending' && row.userId !== currentUser && (hrIsStaff() || hrIsAdmin()
+    || hrRegApprovers(row.userId).some(t=>t.id === currentUser));
+}
+function hrDayActions(date){
+  const u = me(); if(!u) return;
+  if(date > hrToday()){ alert('That date has not happened yet. Apply for leave from the Leave Request button.'); return; }
+  const rec = hrAttendanceOf(u.id, date);
+  const closed = hrClosedDayWhy(date);
+  openModal('Attendance — ' + esc(fmtDate(date)), `
+    <div class="field-grid" style="--fg-gap:24px;gap:4px 24px">
+      <div style="padding:4px 0;font-size:13px"><span style="color:var(--muted)">Punch in:</span> <b>${hrClock(hrFirstIn(rec))}</b></div>
+      <div style="padding:4px 0;font-size:13px"><span style="color:var(--muted)">Latest punch out:</span> <b>${hrClock(hrLastOut(rec))}</b></div>
+      <div style="padding:4px 0;font-size:13px"><span style="color:var(--muted)">Hours:</span> <b>${hrDuration(hrEligibleMinutes(u.id, date, rec))}</b></div>
+      <div style="padding:4px 0;font-size:13px"><span style="color:var(--muted)">Attendance:</span> <b>${closed ? '—' : hrDayPct(u.id, date, rec) + '%'}</b></div>
+    </div>
+    ${closed ? `<div class="small-note" style="margin-top:8px">${esc(closed)} There is nothing to regularize.</div>` : ''}
+    <div class="row" style="gap:10px;margin-top:14px">
+      <button class="btn primary" ${closed ? 'disabled' : ''} onclick="hrOpenRegularize('${esc(date)}')">Regularize Attendance</button>
+      <button class="btn" onclick="hrOpenLeaveRequest('${esc(date)}')">Apply Leave</button>
+    </div>`, `<button class="btn" onclick="closeModal()">Close</button>`);
+}
+function hrRegPeriodRowHtml(p){
+  p = p || {};
+  return `<div class="hr-reg-period" style="display:flex;flex-wrap:nowrap;gap:8px;align-items:center;margin-bottom:6px">
+    <input type="time" class="hr-reg-from" style="width:150px;flex:none" value="${esc(p.from || '')}" oninput="hrRegPreview()" onchange="hrRegPreview()">
+    <span class="small-note" style="margin:0;flex:none">to</span>
+    <input type="time" class="hr-reg-to" style="width:150px;flex:none" value="${esc(p.to || '')}" oninput="hrRegPreview()" onchange="hrRegPreview()">
+    <button class="btn sm ghost" title="Remove this period" onclick="this.closest('.hr-reg-period').remove();hrRegPreview()">✕</button>
+  </div>`;
+}
+function hrRegAddPeriod(){
+  const box = document.getElementById('hrRegPeriods'); if(!box) return;
+  box.insertAdjacentHTML('beforeend', hrRegPeriodRowHtml());
+  hrRegPreview();
+}
+function hrRegReadPeriods(){
+  return Array.from(document.querySelectorAll('#hrRegPeriods .hr-reg-period')).map(row=>({
+    from: (row.querySelector('.hr-reg-from') || {}).value || '',
+    to: (row.querySelector('.hr-reg-to') || {}).value || ''})).filter(p=>p.from || p.to);
+}
+/* Why these periods cannot be asked for, or '' when they can. */
+function hrRegProblem(date, periods){
+  const w = hrPunchWindow();
+  if(!periods.length) return 'Add at least one period with a start and an end time.';
+  for(const p of periods){
+    if(!p.from || !p.to) return 'Every period needs both a start and an end time.';
+    if(p.to <= p.from) return 'A period ends before it starts (' + p.from + ' to ' + p.to + ').';
+    if(p.from < w.from || p.to > w.until) return 'Periods have to fall between ' + w.from + ' and ' + w.until + '.';
+  }
+  const u = me();
+  if(date === hrToday() && hrAt(date, periods.reduce((m, p)=>p.to > m ? p.to : m, '00:00')) > Date.now())
+    return 'A period cannot end later than now.';
+  const before = hrEligibleMinutes(u.id, date);
+  const after = hrEligibleMinutes(u.id, date, undefined, periods);
+  if(after - before < 1) return 'Those times are already counted on this day, so there is nothing to add.';
+  return '';
+}
+function hrRegPreview(){
+  const el = document.getElementById('hrRegPreviewNote'); if(!el) return;
+  const date = el.getAttribute('data-date'), u = me();
+  const periods = hrRegReadPeriods();
+  const problem = periods.length ? hrRegProblem(date, periods) : '';
+  if(problem){ el.style.color = 'var(--danger)'; el.textContent = problem; return; }
+  if(!periods.length){ el.style.color = ''; el.textContent = ''; return; }
+  const before = hrEligibleMinutes(u.id, date), after = hrEligibleMinutes(u.id, date, undefined, periods);
+  el.style.color = 'var(--ok)';
+  el.textContent = 'If approved, this adds ' + hrDuration(after - before) + ' (time already recorded is not counted twice): '
+    + hrDuration(before) + ' becomes ' + hrDuration(after) + ', and attendance '
+    + Math.min(100, Math.round(before * 1000 / hrFullDayMinutes()) / 10) + '% becomes '
+    + Math.min(100, Math.round(after * 1000 / hrFullDayMinutes()) / 10) + '%.';
+}
+function hrOpenRegularize(date){
+  const u = me(); if(!u) return;
+  const closed = hrClosedDayWhy(date);
+  if(closed){ alert(closed + ' There is nothing to regularize.'); return; }
+  if(date > hrToday()){ alert('That date has not happened yet.'); return; }
+  const rec = hrAttendanceOf(u.id, date);
+  const regs = hrRegsOn(u.id, date);
+  const hr = hrRegApprovers(u.id);
+  openModal('Regularize attendance — ' + esc(fmtDate(date)), `
+    <div class="field-grid" style="--fg-gap:24px;gap:4px 24px">
+      <div style="padding:4px 0;font-size:13px"><span style="color:var(--muted)">Punch in:</span> <b>${hrClock(hrFirstIn(rec))}</b></div>
+      <div style="padding:4px 0;font-size:13px"><span style="color:var(--muted)">Latest punch out:</span> <b>${hrClock(hrLastOut(rec))}</b></div>
+      <div style="padding:4px 0;font-size:13px"><span style="color:var(--muted)">Total working hours:</span> <b>${hrDuration(hrEligibleMinutes(u.id, date, rec))}</b></div>
+      <div style="padding:4px 0;font-size:13px"><span style="color:var(--muted)">Attendance:</span> <b>${hrDayPct(u.id, date, rec)}%</b></div>
+    </div>
+    ${regs.length ? `<div class="small-note" style="margin:8px 0 0">Earlier requests for this day: ${regs.map(r=>
+      esc((r.periods || []).map(p=>p.from + '–' + p.to).join(', ')) + ' <span class="badge ' + hrRegTone(r.status) + '">'
+      + esc(r.status) + '</span>').join(' · ')}</div>` : ''}
+    <div class="field" style="margin-top:12px"><label>Time to add<span class="req">*</span></label>
+      <div id="hrRegPeriods">${hrRegPeriodRowHtml()}</div>
+      <button class="btn sm" onclick="hrRegAddPeriod()">+ Add More</button>
+      <div class="small-note" id="hrRegPreviewNote" data-date="${esc(date)}" style="margin-top:6px"></div></div>
+    <div class="field"><label>Reason<span class="req">*</span></label>
+      <textarea id="f_hrRegReason" placeholder="What you were doing, e.g. client meeting at Indiranagar before reaching office"></textarea></div>
+    <div class="small-note">${hr.length
+      ? 'This is emailed to HR (' + esc(hr.map(t=>t.name || t.email || t.id).join(', ')) + ') and waits as <b>Pending</b>. '
+        + 'Your attendance changes only once it is approved.'
+      : '<span style="color:var(--danger)">Nobody holds HR access yet, so there is nobody to send this to. An administrator grants it in Setup › Users &amp; Access.</span>'}</div>`,
+    `<button class="btn" onclick="closeModal()">Cancel</button>
+     ${hr.length ? `<button class="btn primary" onclick="hrSubmitRegularize('${esc(date)}')">Submit for approval</button>` : ''}`);
+}
+async function hrSubmitRegularize(date){
+  const u = me(); if(!u) return;
+  const periods = hrRegReadPeriods();
+  const reason = ((document.getElementById('f_hrRegReason') || {}).value || '').trim();
+  const problem = hrRegProblem(date, periods);
+  if(problem){ alert(problem); return; }
+  if(!reason){ alert('Please give a reason — HR is being asked to add time to your record.');
+    const el = document.getElementById('f_hrRegReason'); if(el) el.focus(); return; }
+  if(hrRegsOn(u.id, date).some(r=>r.status === 'Pending')){
+    alert('You already have a request for ' + fmtDate(date) + ' waiting on HR. Wait for their answer before asking again.');
+    return;
+  }
+  const hr = hrRegApprovers(u.id);
+  if(!hr.length){ alert('There is nobody with HR access to send this to.'); return; }
+  const rec = hrAttendanceOf(u.id, date);
+  const now = new Date().toISOString();
+  const before = hrEligibleMinutes(u.id, date, rec), after = hrEligibleMinutes(u.id, date, rec, periods);
+  const row = {id: uid('HRG'), userId: u.id, date, periods: periods.slice().sort((a, b)=>a.from.localeCompare(b.from)),
+    reason, status: 'Pending', requestedAt: now, requestedBy: u.id,
+    recorded: {in: hrFirstIn(rec) || '', out: hrLastOut(rec) || '', minutes: Math.round(before), pct: hrDayPct(u.id, date, rec)},
+    addsMinutes: Math.round(after - before),
+    history: [{at: now, by: u.id, action: 'Requested', note: reason}]};
+  DB.hrRegularizations = hrRegsAll().concat([row]);
+  await save('hrRegularizations');
+  await logAudit('HR', row.id, 'Regularization Requested', [
+    {field:'Person', oldValue:'', newValue: u.name || u.id},
+    {field:'Date', oldValue:'', newValue: date},
+    {field:'Periods', oldValue:'', newValue: row.periods.map(p=>p.from + '–' + p.to).join(', ')},
+    {field:'Adds', oldValue:'', newValue: hrDuration(row.addsMinutes)}]);
+  await notifyUsers(hr.map(t=>t.id), {
+    title: (u.name || 'A colleague') + ' asked to regularize ' + fmtDate(date),
+    body: row.periods.map(p=>p.from + '–' + p.to).join(', ') + ' — ' + reason.slice(0, 120),
+    view: 'hrattendance', kind: 'hr-regularize-request'});
+  const sent = await hrMailRegularization(row, 'request', hr);
+  closeModal();
+  alert('Sent to HR.\n\nIt shows as Pending, and your attendance for ' + fmtDate(date)
+    + ' changes only once it is approved.' + (sent && sent.problem ? '\n\nThe email did not go out: ' + sent.problem : ''));
+  render();
+}
+function hrRegMineHtml(userId){
+  const rows = hrRegsAll().filter(r=>r && r.userId === userId)
+    .slice().sort((a, b)=>String(b.requestedAt || '').localeCompare(String(a.requestedAt || ''))).slice(0, 20);
+  if(!rows.length) return '';
+  return `<div class="card" style="margin-top:14px">
+    <div class="section-title" style="margin-top:0">\u{1F552} My regularization requests</div>
+    <div class="table-wrap"><table><thead><tr>
+      <th>Date</th><th>Periods</th><th>Adds</th><th>Reason</th><th>Status</th><th>Decided</th><th>Remarks</th>
+    </tr></thead><tbody>
+    ${rows.map(r=>`<tr>
+      <td>${esc(fmtDate(r.date))}</td>
+      <td>${esc((r.periods || []).map(p=>p.from + '–' + p.to).join(', '))}</td>
+      <td>${hrDuration(r.addsMinutes)}</td>
+      <td>${esc(String(r.reason || '').slice(0, 80))}</td>
+      <td><span class="badge ${hrRegTone(r.status)}">${esc(r.status)}</span></td>
+      <td>${r.decidedAt ? esc(fmtDate(r.decidedAt)) + `<div class="small-note" style="margin:0">by ${esc(teamName(r.decidedBy) || '')}</div>` : '—'}</td>
+      <td>${esc(r.remarks || '—')}</td></tr>`).join('')}
+    </tbody></table></div></div>`;
+}
+function hrRegInboxHtml(){
+  const rows = hrRegsAll().filter(hrMayDecideReg)
+    .slice().sort((a, b)=>String(a.date).localeCompare(String(b.date)));
+  if(!rows.length) return '';
+  return `<div class="card" style="margin-top:14px;border-left:3px solid var(--warn)">
+    <div class="section-title" style="margin-top:0">\u{1F4E5} Regularization requests waiting on HR (${rows.length})</div>
+    <div class="table-wrap"><table><thead><tr>
+      <th>Person</th><th>Date</th><th>Recorded</th><th>Periods asked for</th><th>Adds</th><th>Reason</th><th></th>
+    </tr></thead><tbody>
+    ${rows.map(r=>`<tr>
+      <td><b>${esc(teamName(r.userId) || r.userId)}</b></td>
+      <td>${esc(fmtDate(r.date))}</td>
+      <td>${hrClock((r.recorded || {}).in)} – ${hrClock((r.recorded || {}).out)}
+        <div class="small-note" style="margin:0">${hrDuration((r.recorded || {}).minutes)} · ${esc(String((r.recorded || {}).pct || 0))}%</div></td>
+      <td>${esc((r.periods || []).map(p=>p.from + '–' + p.to).join(', '))}</td>
+      <td>${hrDuration(r.addsMinutes)}</td>
+      <td>${esc(String(r.reason || '').slice(0, 100))}</td>
+      <td style="white-space:nowrap">
+        <button class="btn sm" style="background:var(--ok);border-color:var(--ok);color:#fff"
+          onclick="hrOpenRegDecision('${esc(r.id)}', true)">Approve</button>
+        <button class="btn sm" style="background:var(--danger);border-color:var(--danger);color:#fff"
+          onclick="hrOpenRegDecision('${esc(r.id)}', false)">Reject</button></td>
+    </tr>`).join('')}
+    </tbody></table></div>
+  </div>`;
+}
+function hrOpenRegDecision(id, approving){
+  const row = hrRegsAll().find(r=>r && r.id === id);
+  if(!row){ alert('That request no longer exists.'); return; }
+  if(!hrMayDecideReg(row)){ alert('That request is not yours to decide.'); return; }
+  const yes = approving !== false;
+  openModal((yes ? 'Approve' : 'Reject') + ' regularization — ' + esc(teamName(row.userId) || row.userId), `
+    <div class="field-grid" style="--fg-gap:24px;gap:4px 24px">
+      <div style="padding:4px 0;font-size:13px"><span style="color:var(--muted)">Date:</span> <b>${esc(fmtDate(row.date))}</b></div>
+      <div style="padding:4px 0;font-size:13px"><span style="color:var(--muted)">Periods:</span> <b>${esc((row.periods || []).map(p=>p.from + '–' + p.to).join(', '))}</b></div>
+      <div style="padding:4px 0;font-size:13px"><span style="color:var(--muted)">Recorded:</span> <b>${hrClock((row.recorded || {}).in)} – ${hrClock((row.recorded || {}).out)}</b></div>
+      <div style="padding:4px 0;font-size:13px"><span style="color:var(--muted)">Adds:</span> <b>${hrDuration(row.addsMinutes)}</b></div>
+    </div>
+    <div class="field" style="margin-top:10px"><label>Their reason</label>
+      <div class="small-note" style="margin:0">${esc(row.reason || '—')}</div></div>
+    <div class="field"><label>${yes ? 'Remarks (optional)' : 'Reason for rejecting'}${yes ? '' : '<span class="req">*</span>'}</label>
+      <textarea id="f_hrRegDecideNote" placeholder="${yes ? 'Anything you want on the record' : 'Why this cannot be approved'}"></textarea></div>`,
+    `<button class="btn" onclick="closeModal()">Cancel</button>
+     <button class="btn" style="background:var(--${yes ? 'ok' : 'danger'});border-color:var(--${yes ? 'ok' : 'danger'});color:#fff"
+       onclick="hrDecideReg('${esc(id)}', ${yes})">${yes ? 'Approve' : 'Reject'}</button>`);
+}
+async function hrDecideReg(id, approved){
+  const row = hrRegsAll().find(r=>r && r.id === id);
+  if(!row || !hrMayDecideReg(row)){ alert('That request is not yours to decide.'); return; }
+  const note = ((document.getElementById('f_hrRegDecideNote') || {}).value || '').trim();
+  if(!approved && !note){ alert('A rejected request needs a reason — it goes to them with the decision.'); return; }
+  const now = new Date().toISOString();
+  const pctBefore = hrDayPct(row.userId, row.date);
+  row.status = approved ? 'Approved' : 'Rejected';
+  row.decidedBy = currentUser; row.decidedAt = now; row.remarks = note;
+  row.history = (row.history || []).concat([{at: now, by: currentUser, action: row.status, note}]);
+  if(approved) row.pctAfter = hrDayPct(row.userId, row.date);
+  await save('hrRegularizations');
+  await logAudit('HR', row.id, 'Regularization ' + row.status, [
+    {field:'Person', oldValue:'', newValue: teamName(row.userId) || row.userId},
+    {field:'Date', oldValue:'', newValue: row.date},
+    {field:'Attendance %', oldValue: String(pctBefore), newValue: String(approved ? row.pctAfter : pctBefore)},
+    {field:'Decided by', oldValue:'', newValue: teamName(currentUser) || currentUser},
+    {field:'Remarks', oldValue:'', newValue: note || '—'}]);
+  await notifyUser(row.userId, {
+    title: 'Your regularization for ' + fmtDate(row.date) + ' was ' + row.status.toLowerCase(),
+    body: (approved ? 'Attendance is now ' + row.pctAfter + '%.' : '') + (note ? ' "' + note.slice(0, 120) + '"' : ''),
+    view: 'hrattendance', kind: 'hr-regularize-decided'});
+  const who = (DB.team || []).find(t=>t.id === row.userId);
+  const sent = await hrMailRegularization(row, 'decided', who ? [who] : []);
+  closeModal();
+  render();
+  if(sent && sent.problem) alert('Recorded, and they have been told inside BOSS.\n\nThe email did not go out: ' + sent.problem);
+}
+async function hrMailRegularization(row, which, people){
+  const to = (people || []).map(t=>t && t.email).filter(Boolean);
+  if(!to.length) return {problem: 'there is no email address on file for ' + (which === 'request' ? 'HR' : 'them') + '.'};
+  const key = which === 'request' ? 'hrRegularizeRequest' : 'hrRegularizeDecided';
+  const tpl = mailTemplateOf(key);
+  const rec = row.recorded || {};
+  const vars = {
+    Name: teamName(row.userId) || '',
+    Date: fmtDate(row.date),
+    PunchIn: hrClock(rec.in), PunchOut: hrClock(rec.out),
+    Hours: hrDuration(rec.minutes), Percent: String(rec.pct || 0) + '%',
+    Periods: (row.periods || []).map(p=>p.from + ' to ' + p.to).join(', '),
+    Adds: hrDuration(row.addsMinutes),
+    Reason: row.reason || '',
+    Status: row.status, Approver: teamName(row.decidedBy) || '',
+    NewPercent: row.pctAfter !== undefined ? row.pctAfter + '%' : '',
+    Remarks: row.remarks ? 'Remarks: ' + row.remarks + '\n' : '',
+    FirmName: (DB.config.company || {}).name || '',
+  };
+  const result = await deliverMail({
+    to: to.join(', '),
+    subject: fillTemplate(tpl.subject, vars),
+    body: fillTemplate(tpl.body, vars),
+    template: key,
+    module: 'HR', recordId: row.id,
+    label: which === 'request' ? 'Regularization request — emailed to HR' : 'Regularization ' + row.status + ' — emailed',
+    extraDetails: [{field:'Date', oldValue:'', newValue: vars.Date}, {field:'Periods', oldValue:'', newValue: vars.Periods}],
+  });
+  return {problem: mailResultNote(result, 'The email')};
+}
+
 /* ---------- HR configuration ---------- */
 
 /* HR CONFIGURATION LIVES IN SETUP.
@@ -76989,7 +77823,9 @@ function renderSettingsHr(){
         <div class="field"><label>Office starts</label><input type="time" id="f_hrStart" value="${esc(c.day.start)}"></div>
         <div class="field"><label>Office ends</label><input type="time" id="f_hrEnd" value="${esc(c.day.end)}"></div>
         <div class="field"><label>Grace (minutes)</label><input type="number" id="f_hrGrace" value="${esc(c.day.graceMinutes)}"></div>
-        <div class="field"><label>Full day (hours)</label><input type="number" id="f_hrHours" value="${esc(c.day.fullDayHours)}"></div>
+        <div class="field"><label>Full day (hours)</label><input type="number" id="f_hrHours" placeholder="9" value="${esc(c.day.fullDayHours)}"></div>
+        <div class="field"><label>Punch In opens at</label><input type="time" id="f_hrPunchFrom" value="${esc(c.day.punchInFrom)}"></div>
+        <div class="field"><label>Punch Out closes at</label><input type="time" id="f_hrPunchUntil" value="${esc(c.day.punchOutUntil)}"></div>
       </div>
       <div class="field"><label>Weekly offs</label>
         <div class="role-pick">${days.map(d=>{
@@ -77064,7 +77900,9 @@ async function hrSaveSetup(){
   const g = id => (document.getElementById(id) || {}).value || '';
   const c = hrCfg();
   c.day = {start: g('f_hrStart'), end: g('f_hrEnd'),
-           graceMinutes: g('f_hrGrace'), fullDayHours: g('f_hrHours')};
+           graceMinutes: g('f_hrGrace'), fullDayHours: g('f_hrHours'),
+           punchInFrom: g('f_hrPunchFrom') || hrConfigDefaults().day.punchInFrom,
+           punchOutUntil: g('f_hrPunchUntil') || hrConfigDefaults().day.punchOutUntil};
   c.leaveTypes = g('f_hrLeaveTypes').split('\n').map(x=>x.trim()).filter(Boolean).map(line=>{
     const bits = line.split('|');
     const name = (bits.shift() || '').trim();

@@ -108,13 +108,22 @@ suite({mail: true}, async t => {
         hrStores: Object.keys(DB).filter(k=>k.indexOf('hr') === 0).sort()};
     });
     if(r.dup.length) throw new Error('a source reads an HR copy, not the original: ' + r.dup.join(', '));
-    if(r.hrStores.join(',') !== 'hrAppraisals,hrAttendance,hrConfig,hrIncentives,hrLeave,hrSourceMaps')
+    if(r.hrStores.join(',') !== 'hrAppraisals,hrAttendance,hrConfig,hrIncentives,hrLeave,hrRegularizations,hrSourceMaps')
       throw new Error('HR owns an unexpected set of stores: ' + r.hrStores.join(', '));
     return r.info.length + ' sources, read where they live (' + r.stores.join(', ') + '); HR owns '
       + r.hrStores.length + ' stores of its own and nothing else';
   });
 
   t.section('punching in and out');
+
+  /* The punch clock has opening hours and is shut on Sundays. This suite
+     is about what a punch records, not when, so the clock is opened for
+     the whole day, every day; punch-clock.js tests the hours themselves. */
+  await t.eval(async ()=>{
+    const c = hrCfg(); c.day.punchInFrom = '00:00'; c.day.punchOutUntil = '23:59';
+    DB.hrConfig = c; await save('hrConfig');
+    window.hrClosedDayWhy = () => ''; window.hrIsSunday = () => false;
+  });
 
   await t.step('a punch lands against that account and today, and twice is refused', async () => {
     const r = await t.eval(async (a)=>{
@@ -136,8 +145,14 @@ suite({mail: true}, async t => {
       out.afterOut = {open: !!hrOpenSession(done), sessions: (done.sessions||[]).length,
         closed: !!(done.sessions||[]).filter(x=>x.out).length,
         status: hrDayStatus(a.who, hrToday(), done).code};
-      await hrPunchOut();                      // and this one too
-      out.afterOut2 = {sessions: (hrAttendanceOf(a.who, hrToday()).sessions||[]).length};
+      const firstOut = done.sessions[0].out;
+      await new Promise(r=>setTimeout(r, 1100));
+      await hrPunchOut();                      // again: the later one replaces it
+      const again = hrAttendanceOf(a.who, hrToday());
+      out.afterOut2 = {sessions: (again.sessions||[]).length, moved: again.sessions[0].out !== firstOut,
+        kept: ((again.sessions[0].outHistory || [])[0] || {}).out === firstOut};
+      const server = ((await sget('hrAttendance')) || []).find(x=>x.id === again.id) || {};
+      out.afterOut2.onServer = ((server.sessions || [])[0] || {}).out === again.sessions[0].out;
       currentUser = was;
       return out;
     }, {who: plain});
@@ -147,13 +162,13 @@ suite({mail: true}, async t => {
     if(r.afterOut.open) throw new Error('punch out left the session open');
     if(!r.afterOut.closed) throw new Error('punch out did not close the session');
     if(r.ninety < 89 || r.ninety > 91) throw new Error('ninety minutes came out as ' + r.ninety);
-    if(r.afterOut2.sessions !== 1) throw new Error('a second punch out changed the record');
-    if(!t.dialogs.some(d=>/already punched in/i.test(String(d))))
+    if(r.afterOut2.sessions !== 1) throw new Error('a second punch out added a session');
+    if(!r.afterOut2.moved || !r.afterOut2.kept) throw new Error('the second punch out did not replace the first and keep it');
+    if(!r.afterOut2.onServer) throw new Error('the server did not take the later punch out');
+    if(!t.dialogs.some(d=>/once a day/i.test(String(d))))
       throw new Error('the duplicate punch in was refused silently');
-    if(!t.dialogs.some(d=>/no open session/i.test(String(d))))
-      throw new Error('the duplicate punch out was refused silently');
-    return 'one session, closed; ninety minutes of timestamps come out as ' + r.ninety + ' — and the '
-      + 'second punch in and second punch out are both refused with the reason';
+    return 'one session; ninety minutes of timestamps come out as ' + r.ninety + '; the second punch in is '
+      + 'refused with the reason, and a second punch out replaces the first, which is kept';
   });
 
   await t.step('and the record is on the server, under HR’s own key', async () => {
@@ -209,10 +224,11 @@ suite({mail: true}, async t => {
     if(!/Punch Out/.test(r.after) || /Punch In<\/button>/.test(r.after))
       throw new Error('it did not turn into Punch Out: ' + r.after.slice(0, 160));
     if(!/Punched in/.test(r.after)) throw new Error('the status did not follow the punch');
-    if(!/Punch In/.test(r.done)) throw new Error('after punching out it does not offer Punch In again');
+    if(!/Punch Out/.test(r.done) || /Punch In<\/button>/.test(r.done))
+      throw new Error('after punching out it does not offer Punch Out again');
     if(r.elsewhere) throw new Error('the slot is filled on a page that is not the Dashboard');
     return 'there by default, gone when an administrator unticks Attendance, back when they tick it again; '
-      + 'Punch In → Punch Out → Punch In with the status beside it, and nothing in that slot elsewhere';
+      + 'Punch In → Punch Out → Punch Out again with the status beside it, and nothing in that slot elsewhere';
   });
 
   t.section('leave, asked for and decided');
@@ -482,25 +498,31 @@ suite({mail: true}, async t => {
       const out = {};
       /* the device answers */
       navigator.geolocation.getCurrentPosition = (ok)=>ok({coords:{latitude:25.3176, longitude:82.9739, accuracy:12.4}});
-      /* appended to whatever is already on file — nothing is deleted,
-         because an attendance row cannot be. A session another step
-         left open is closed first: one at a time is the rule the
-         punch buttons keep, and this is not the test of it. */
-      if(hrOpenSession(hrAttendanceOf(a.who, hrToday()))) await hrPunchOut();
-      const before = (hrAttendanceOf(a.who, hrToday()) || {sessions:[]}).sessions.length;
+      /* One punch-in a day, so each case is somebody who has not punched
+         in today: a colleague made for it. */
+      const fresh = async name => {
+        const m = {id: uid('TM'), name, role: roleList().slice(-1)[0], email: name.replace(/\s+/g,'.').toLowerCase() + '@zz.in',
+          status:'Active', scope:'own', branch:'Varanasi', adminFlags: fullAdminFlags(false),
+          perms: fullPerms(false, {view:1}), createdAt:new Date().toISOString()};
+        DB.team.push(m); await save('team'); currentUser = m.id; return m.id;
+      };
+      const before = 0;
+      a.who = await fresh('ZZ Loc One');
       await hrPunchIn();
       const rec = hrAttendanceOf(a.who, hrToday());
       out.inLoc = rec.sessions[before].inLoc;
       await hrPunchOut();
       out.outLoc = rec.sessions[before].outLoc;
       out.at = before;
+      const first = a.who;
+      a.who = await fresh('ZZ Loc Two');
       /* The device refuses. Location is required by default now, so
          the punch has to be let through explicitly to test that a
          refusal is RECORDED as a refusal rather than invented. */
       const c0 = hrCfg(); c0.location = {required:false, note:''}; DB.hrConfig = c0; await save('hrConfig');
       navigator.geolocation.getCurrentPosition = (ok, err)=>err({code:1, message:'denied'});
       await hrPunchIn();
-      out.denied = hrAttendanceOf(a.who, hrToday()).sessions[before + 1].inLoc;
+      out.denied = hrAttendanceOf(a.who, hrToday()).sessions[before].inLoc;
       out.punchStood = hrAttendanceOf(a.who, hrToday()).sessions.length - before;
       /* …and with the policy on, the punch is refused rather than recorded */
       const c = hrCfg(); c.location = {required:true, note:''}; DB.hrConfig = c; await save('hrConfig');
@@ -509,7 +531,7 @@ suite({mail: true}, async t => {
       c.location = {required:false, note:''}; DB.hrConfig = c; await save('hrConfig');
       navigator.geolocation.getCurrentPosition = real;
       currentUser = was;
-      const stored = ((await sget('hrAttendance')) || []).find(x=>x.userId === a.who) || {};
+      const stored = ((await sget('hrAttendance')) || []).find(x=>x.userId === first) || {};
       out.storedLat = ((stored.sessions || [])[before] || {}).inLoc;
       return out;
     }, {who: plain});
@@ -521,8 +543,8 @@ suite({mail: true}, async t => {
     if(!r.denied || r.denied.status !== 'denied')
       throw new Error('a refusal was not recorded as a refusal: ' + JSON.stringify(r.denied));
     if(r.denied.lat !== undefined) throw new Error('a coordinate was invented for a refused reading');
-    if(r.punchStood !== 2) throw new Error('the punch itself was lost when location was refused');
-    if(r.blockedSessions !== 1)
+    if(r.punchStood !== 1) throw new Error('the punch itself was lost when location was refused');
+    if(r.blockedSessions !== 0)
       throw new Error('with the policy on, a punch with no location was still recorded');
     if(!r.storedLat || r.storedLat.lat !== 25.3176) throw new Error('the reading never reached the server');
     return 'in and out each carry their own reading; a refusal is stored as "denied" with no coordinates; '
@@ -555,14 +577,30 @@ suite({mail: true}, async t => {
       const two = await put(withTwo);
       const dropped = withTwo.filter(x=>x.id !== mine.id);
       const gone = await put(dropped);
-      /* …while an honest append still goes through */
+      /* a second punch-in on a day that has one is refused… */
       const appended = JSON.parse(JSON.stringify(withTwo));
       appended.find(x=>x.id === mine.id).sessions.push({in:new Date().toISOString(), out:null, inBy:a.who});
-      const ok = await put(appended);
+      const second = await put(appended);
+      /* …so is a punch out moved earlier, or moved without keeping the one it replaced… */
+      const s0 = mine.sessions[0];
+      const earlier = JSON.parse(JSON.stringify(withTwo));
+      Object.assign(earlier.find(x=>x.id === mine.id).sessions[0], {out: new Date(new Date(s0.out).getTime() - 60000).toISOString(),
+        outHistory: (s0.outHistory || []).concat([{out: s0.out, outBy: s0.outBy, outLoc: s0.outLoc}])});
+      const backwards = await put(earlier);
+      const later = new Date(Date.now() + 1000).toISOString();
+      const unkept = JSON.parse(JSON.stringify(withTwo));
+      Object.assign(unkept.find(x=>x.id === mine.id).sessions[0], {out: later});
+      const lost = await put(unkept);
+      /* …while an honest later punch out, keeping the earlier one, goes through */
+      const honest = JSON.parse(JSON.stringify(withTwo));
+      Object.assign(honest.find(x=>x.id === mine.id).sessions[0], {out: later, outBy: a.who,
+        outHistory: (s0.outHistory || []).concat([{out: s0.out, outBy: s0.outBy, outLoc: s0.outLoc}])});
+      const ok = await put(honest);
       const back = (await sget('hrAttendance')) || [];
       const now = back.find(x=>x.id === mine.id) || {};
-      return {edited, movedLoc, gone, ok, two,
+      return {edited, movedLoc, gone, ok, two, second, backwards, lost,
         kept: now.sessions && now.sessions[0] && now.sessions[0].in === mine.sessions[0].in,
+        movedOut: now.sessions && now.sessions[0].out === later,
         sessions: (now.sessions || []).length, before: mine.sessions.length};
     }, {who: plain});
     if(r.edited.status !== 409) throw new Error('an edited timestamp was accepted (' + r.edited.status + ')');
@@ -570,11 +608,14 @@ suite({mail: true}, async t => {
     if(r.movedLoc.status !== 409) throw new Error('an edited coordinate was accepted');
     if(r.two.status !== 200) throw new Error('adding a second day was refused (' + r.two.status + ')');
     if(r.gone.status !== 409) throw new Error('a dropped day was accepted');
-    if(r.ok.status !== 200) throw new Error('an honest new session was refused (' + r.ok.status + ')');
+    if(r.second.status !== 409) throw new Error('a second punch-in on the same day was accepted');
+    if(r.backwards.status !== 409) throw new Error('a punch out moved earlier was accepted');
+    if(r.lost.status !== 409) throw new Error('a punch out replaced without keeping the old one was accepted');
+    if(r.ok.status !== 200) throw new Error('an honest later punch out was refused (' + r.ok.status + ' ' + JSON.stringify(r.ok.body) + ')');
     if(!r.kept) throw new Error('the original timestamp did not survive');
-    if(r.sessions !== r.before + 1) throw new Error('the append did not land');
-    return 'edited timestamp, edited coordinate and dropped day all 409 with the reason; a new session goes '
-      + 'through and the original punch is untouched';
+    if(!r.movedOut || r.sessions !== r.before) throw new Error('the later punch out did not land');
+    return 'edited timestamp, edited coordinate, dropped day, a second punch-in and a punch out moved back '
+      + 'or without its history all 409; a later punch out keeping the earlier one goes through';
   });
 
   t.section('whose records are whose');
