@@ -3212,7 +3212,7 @@ const SE_LIST_SPEC = [
   {k:'PURE', label:'Pure Insurance Policy Types', itemLabel:'Policy type',
    tags:['healthBase','healthTopup','critical','parentsHealth','pa','term'],
    desc:'These tags are how an existing policy finds its event: the health rows of Event 2, the accident protection of Event 3 and the life protection of Event 4 all fill themselves from whatever is tagged for them.',
-   def:[['Mediclaim Policy',['healthBase']],['Top-up Mediclaim Policy',['healthTopup']],['Critical Illness Policy',['critical']],['Term Plan',['term']],['Personal Accidental Policy',['pa']],['Parents Health Insurance',['parentsHealth']],['Other']]},
+   def:[['Term Plan',['term']],['Mediclaim Policy',['healthBase']],['Top-up Mediclaim Policy',['healthTopup']],['Critical Illness Policy',['critical']],['Personal Accidental Policy',['pa']],['Parents Health Insurance',['parentsHealth']],['Other']]},
   {k:'CHILD_GOALS', label:'Children’s Goals', itemLabel:'Goal',
    desc:'Every child in Family details is given one row per goal here, in this order.',
    def:[['Graduation'],['Post Graduation'],['Marriage']]},
@@ -3932,7 +3932,7 @@ const SE_FORM = [
          {k:'cont', label:'Continues after job exit?', t:'sel', list:'YN', w:'s'},
          {k:'remark', label:'Remark', t:'text'}]},
   {key:'pureIns', num:10, card:'Pure insurance policies', label:'Pure insurance policies', kind:'table', path:'pureIns', annex:1,
-   hint:'Policy details go in the insurance annexures.',
+   hint:'Term Plan details are mandatory — enter a sum assured of 0 if the family has none. Policy details go in the insurance annexures.',
    foot:[{cells:{sa:['pureSA','inr','Total'], prem:['purePrem','inr'], annual:['pureAnnual','inr']}}],
    cols:[{k:'type', label:'Type of policy', t:'sel', list:'PURE', w:'l', req:1},
          {k:'sa', label:'Sum assured', t:'num', req:1},
@@ -12582,6 +12582,25 @@ function meetingEmailToggled(module, recordId){
   const el = document.getElementById('f_schedEmail');
   if(on && el && !el.value) el.focus();
 }
+/* WHERE A LINK THE TEMPLATE DOES NOT MENTION GOES.
+
+   It used to be added at the very end, which is after the signature and
+   the disclaimer under it — so a link pasted by hand reached the client
+   below the small print, where nobody looks. It now goes with the meeting
+   details: under the Mode line when the letter has one, otherwise just
+   above the signature, and only at the end when there is neither. */
+function meetingLinkInto(body, link){
+  body = String(body || '');
+  link = String(link || '').trim();
+  if(!link || body.indexOf(link) >= 0) return body;
+  const line = '🔗 Meeting Link: ' + link;
+  const lines = body.split('\n');
+  const at = lines.findIndex(l=>/^\s*(\S+\s+)?(Mode|Platform)\s*:/i.test(l));
+  if(at >= 0){ lines.splice(at + 1, 0, line); return lines.join('\n'); }
+  const sig = body.indexOf('{Signature}');
+  if(sig >= 0) return body.slice(0, sig) + 'Join here: ' + link + '\n\n' + body.slice(sig);
+  return body + '\n\nJoin here: ' + link;
+}
 /* The invitation itself, from the admin-editable draft. */
 async function sendMeetingInvite(module, record, meeting, toEmail){
   const tpl = mailTemplateFor('meetingInvite', meetingInviteKey(meeting));
@@ -12603,10 +12622,7 @@ async function sendMeetingInvite(module, record, meeting, toEmail){
   const subject = fillTemplate(tpl.subject, vars);
   // A link nobody can see is a link nobody can use: if the template does not
   // mention it, it is added at the end rather than quietly dropped.
-  let body = fillTemplate(tpl.body, vars);
-  if(meeting.meetingLink && body.indexOf(meeting.meetingLink) < 0){
-    body += '\n\nJoin here: ' + meeting.meetingLink;
-  }
+  const body = meetingLinkInto(fillTemplate(tpl.body, vars), meeting.meetingLink);
   return deliverMail({
     template: mailTemplateKeyFor('meetingInvite', meetingInviteKey(meeting)),
     to: toEmail, subject, body, refId: meeting.id, label:'Meeting Invitation',
@@ -14718,7 +14734,9 @@ function seBlank(){
     nonFin: {life:[seNewRow('nonFin.life')], inv:[seNewRow('nonFin.inv')]},
     empRet: [seNewRow('empRet')],
     empProt: [seNewRow('empProt')],
-    pureIns: [seNewRow('pureIns')],
+    /* Term plan details are asked for on every plan, so the table opens
+       on a Term Plan row rather than on a blank one. */
+    pureIns: [Object.assign(seNewRow('pureIns'), {type: seTagged('PURE','term')[0] || 'Term Plan'})],
     invIns: [seNewRow('invIns')],
     annex: {},
     addInfo: ['','','',''],
@@ -15473,6 +15491,16 @@ function seMissing(who, ctx, opts){
         if(row[c.k]===''||row[c.k]===undefined||row[c.k]===null) add(sec, sec.label+' row '+(i+1)+' — '+c.label, sec.path+'.'+i+'.'+c.k);
       });
     });
+    /* Term plan details are mandatory. A family with no term plan says so
+       with a sum assured of 0, which is an answer; a table with no Term
+       Plan row at all has not been asked the question. */
+    if(sec.key==='pureIns'){
+      const saCol = (sec.cols||[]).find(c=>c.k==='sa');
+      const st = saCol ? seColState(sec.key, saCol, who, false) : {show:false};
+      const terms = seTagged('PURE','term');
+      if(st.show && st.edit && terms.length && !rows.some(r=>terms.includes(r.type)))
+        add(sec, sec.label+' — Term Plan details (sum assured; enter 0 if there is none)', sec.path);
+    }
   });
   return out;
 }
@@ -26766,6 +26794,89 @@ function iseqAlignmentNo(module, recordId){
   try{ logAudit(module, recordId, 'ISEQ Alignment \u2014 Not Confirmed',
     [{field:'Outcome', oldValue:'', newValue:'the adviser said the plan is not aligned; it was not sent'}]); }catch(e){}
 }
+/* THE MINUTES AS A DOCUMENT.
+
+   The minutes used to go out as the template's paragraphs with whatever
+   was typed dropped into them, so they read like a note. They now go as a
+   set of minutes: the meeting's particulars in a table, the discussion as
+   numbered points, the action points as a table of who does what by when,
+   and the next step set apart. The template's own wording around them is
+   untouched — the firm's letter, with the minutes laid out inside it. */
+function momMeetingOf(module, record, transitionId){
+  return momSourceMeeting(module, record, transitionId)
+    || DB.meetings.filter(m=>m.linkedModule===module && m.linkedRecordId===record.id && !m.deletedAt).slice(-1)[0]
+    || null;
+}
+function momDefaultAttendees(module, record, transitionId){
+  const m = momMeetingOf(module, record, transitionId) || {};
+  const who = module==='LMS' ? leadName(record.id) : clientName(module==='CMS' ? record.id : record.clientId);
+  const rm = teamName(m.assignTo || (module==='LMS' ? record.assignedTo : record.assignTo) || currentUser);
+  const names = [who, rm].concat(String(m.withTeamNames||'').split(',')).map(x=>String(x||'').trim())
+    .filter(x=>x && x !== '—');
+  return names.filter((x,i)=>names.indexOf(x)===i).join(', ');
+}
+function momPointsOf(text){
+  return String(text||'').split(/\n+/).map(l=>l.replace(/^\s*(?:[-•*·]|\d+[.)])\s*/, '').trim()).filter(Boolean);
+}
+const MOM_CELL = 'padding:7px 10px;border:1px solid #D9DEE5;font-size:13px;vertical-align:top;text-align:left';
+const MOM_HEAD = MOM_CELL + ';background:#F2F5F8;font-weight:bold;color:#164B5E';
+function momHtmlEsc(x){ return String(x===undefined||x===null?'':x).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function momDetailsHtml(o){
+  const rows = [['Meeting', o.meeting], ['With', o.who], ['Date & Time', o.when], ['Mode', o.mode],
+    ['Attended By', o.attendees], ['Minutes Prepared By', o.preparedBy]].filter(r=>r[1]);
+  return '<table cellpadding="0" cellspacing="0" style="border-collapse:collapse;margin:6px 0 14px;min-width:60%">'
+    + '<tr><td colspan="2" style="' + MOM_CELL + ';background:#164B5E;color:#fff;font-weight:bold;font-size:14px">Minutes of Meeting</td></tr>'
+    + rows.map(r=>'<tr><td style="' + MOM_HEAD + ';width:170px">' + momHtmlEsc(r[0]) + '</td><td style="' + MOM_CELL + '">'
+      + momHtmlEsc(r[1]) + '</td></tr>').join('') + '</table>';
+}
+function momMinutesHtml(text){
+  const pts = momPointsOf(text);
+  if(pts.length <= 1) return '<p style="margin:4px 0 12px">' + mailLinkify(momHtmlEsc(pts[0] || '')) + '</p>';
+  return '<ol style="margin:4px 0 12px;padding-left:22px">' + pts.map(p=>'<li style="margin:0 0 5px">'
+    + mailLinkify(momHtmlEsc(p)) + '</li>').join('') + '</ol>';
+}
+function momActionsHtml(points, subject){
+  if(!points || !points.length) return '<p style="margin:4px 0 12px">Nothing outstanding from this meeting.</p>';
+  return '<table cellpadding="0" cellspacing="0" style="border-collapse:collapse;margin:4px 0 14px;min-width:60%">'
+    + '<tr><td style="' + MOM_HEAD + ';width:28px">#</td><td style="' + MOM_HEAD + '">Action Point</td>'
+    + '<td style="' + MOM_HEAD + '">Responsible</td><td style="' + MOM_HEAD + '">Due Date</td></tr>'
+    + points.map((a,i)=>'<tr><td style="' + MOM_CELL + '">' + (i+1) + '</td><td style="' + MOM_CELL + '">' + momHtmlEsc(a.text)
+      + '</td><td style="' + MOM_CELL + '">' + momHtmlEsc(a.owner ? momOwnerName(a.owner, subject) : 'Your relationship manager')
+      + '</td><td style="' + MOM_CELL + '">' + momHtmlEsc(a.due ? fmtDate(a.due) : 'To be fixed') + '</td></tr>').join('')
+    + '</table>';
+}
+function momNextHtml(text){
+  return '<div style="margin:4px 0 14px;padding:9px 12px;border-left:4px solid #F25C2A;background:#FFF6F1;font-size:13.5px">'
+    + momHtmlEsc(text) + '</div>';
+}
+/* Fills the template with tokens where the minutes go, sets the numbered
+   section headings in bold, and puts the meeting's particulars at the head
+   of the minutes when the template has no {MeetingDetails} of its own. */
+function momMailBody(tplBody, vars, html){
+  const parts = {};
+  const v = Object.assign({}, vars, {Minutes:'[[MOM_MINUTES]]', ActionPoints:'[[MOM_ACTIONS]]',
+    NextAction:'[[MOM_NEXT]]', MeetingDetails:'[[MOM_DETAILS]]'});
+  parts['[[MOM_MINUTES]]'] = html.minutes; parts['[[MOM_ACTIONS]]'] = html.actions;
+  parts['[[MOM_NEXT]]'] = html.next; parts['[[MOM_DETAILS]]'] = html.details;
+  let body = fillTemplate(tplBody, v);
+  const lines = body.split('\n');
+  if(body.indexOf('[[MOM_DETAILS]]') < 0){
+    const at = lines.findIndex(l=>l.indexOf('[[MOM_MINUTES]]') >= 0);
+    const head = at > 0 && /^\s*\d+(\.\d+)*\.?\s+\S.{0,60}$/.test(lines[at-1]) ? at - 1 : at;
+    if(head >= 0) lines.splice(head, 0, '[[MOM_DETAILS]]');
+    else lines.unshift('[[MOM_DETAILS]]');
+  }
+  let n = 0;
+  const out = lines.map(l=>{
+    if(/^\s*\d+(\.\d+)*\.?\s+[A-Z][^\[\]]{0,60}$/.test(l)){
+      const k = '[[MOM_H' + (n++) + ']]';
+      parts[k] = '<div style="font-weight:bold;color:#164B5E;font-size:14.5px;margin:10px 0 2px">' + momHtmlEsc(l.trim()) + '</div>';
+      return k;
+    }
+    return l;
+  });
+  return {body: out.join('\n'), parts};
+}
 function openSendMomModal(module, recordId, transitionId){
   const record = DB[RECORD_DB[module]].find(r=>r.id===recordId); if(!record) return;
   /* These minutes carry the client's link to the Final Execution Plan, so
@@ -26811,8 +26922,12 @@ function openSendMomModal(module, recordId, transitionId){
       src.scheduledDate? ' — the '+esc(which)+' on '+fmtDate(src.completedDate||src.scheduledDate) : ''}. ${
       src.momText? 'What was already written up for it is below; edit it and send.'
                  : 'Nothing has been written up for it yet, so write it here.'}</div>`:''}
-    <div class="field"><label>Description <span class="req">*</span></label>
-      <textarea id="f_momText" style="min-height:170px" placeholder="What was discussed, what was agreed, and what happens next…">${esc(prior)}</textarea></div>
+    <div class="field"><label>Attended By</label>
+      <input type="text" id="f_momAttendees" value="${esc(record.momAttendees || momDefaultAttendees(module, record, transitionId))}"
+        placeholder="Who was in the meeting"></div>
+    <div class="field"><label>Discussion Points <span class="req">*</span></label>
+      <textarea id="f_momText" style="min-height:170px" placeholder="One point per line — what was discussed and what was agreed">${esc(prior)}</textarea>
+      <div class="small-note" style="margin-top:4px">Write one point per line. Each line becomes a numbered point in the minutes the client receives.</div></div>
     <div class="section-title" style="margin-bottom:4px">Action Points</div>
     <div class="small-note" style="margin-top:0">Each one becomes a service task for the person responsible, and shows on their Daily Job Tracker on its due date.</div>
     <div id="momActionRows">${momActionRowHtml(0, window._momDefaultOwner, window._momDefaultDue)}</div>
@@ -26955,6 +27070,8 @@ async function submitSendMom(module, recordId, transitionId){
   }
   const which = momMeetingLabel(module, record, transitionId);
   const subject_ = momSubjectFor(module, record);
+  const attendees = ((document.getElementById('f_momAttendees')||{}).value||'').trim();
+  record.momAttendees = attendees;
   const points = readMomActionPoints();
   const actions = momActionPointsText(points, subject_);
   // Whatever stands in the Next Step box is what goes to the client and what
@@ -27020,7 +27137,13 @@ async function submitSendMom(module, recordId, transitionId){
         contentType:'application/pdf', content: pdfBase64(ctFormPdfBlocks(ctLink, ctSub, cl))});
     }
   }
-  let mailBody = fillTemplate(tpl.body, vars);
+  const mm = meeting || {};
+  const built = momMailBody(tpl.body, vars, {
+    details: momDetailsHtml({meeting: which, who,
+      when: mm.scheduledDate ? fmtDate(mm.completedDate || mm.scheduledDate) + (mm.scheduledTime ? ', ' + clockLabel(mm.scheduledTime) : '') : fmtDate(record.momSentAt),
+      mode: mm.platform || '', attendees, preparedBy: teamName(currentUser)}),
+    minutes: momMinutesHtml(text), actions: momActionsHtml(points, subject_), next: momNextHtml(nextStep)});
+  let mailBody = built.body;
   // A firm that has put {PlanLink} in its own template decides where it
   // reads; one that has not still gets the link, after the minutes, because
   // the consent has to be given against something the client can open.
@@ -27032,7 +27155,7 @@ async function submitSendMom(module, recordId, transitionId){
   }
   const result = await deliverMail({
     template: module==='RMS' ? 'rmsMom' : mailTemplateKeyFor('momSend', carriesPlan? 'momPlanSend' : ''),
-    to, subject: fillTemplate(tpl.subject, vars), body: mailBody,
+    to, subject: fillTemplate(tpl.subject, vars), body: mailBody, htmlParts: built.parts,
     module, recordId, label:'Minutes of Meeting',
     leadId: module==='LMS' ? recordId : null,
     clientId: module==='LMS' ? null : record.clientId,
@@ -37224,7 +37347,8 @@ function pickPlace(id){
   box.style.zIndex = '1200';
   box.style.left = Math.round(r.left) + 'px';
   box.style.right = 'auto';
-  box.style.width = Math.round(r.width) + 'px';
+  // A narrow column (a goal's Type) still gets a list its options fit in.
+  box.style.width = Math.round(Math.max(r.width, 170)) + 'px';
   box.style.marginTop = '0';
   box.style.maxHeight = Math.max(PICK_MIN, Math.min(PICK_TALL, up ? above : below)) + 'px';
   if(up){
@@ -50965,18 +51089,26 @@ function mailLinkify(safe){
       + 'style="color:#1A73E8;text-decoration:underline">' + url + '</a>' + tail;
   });
 }
-function mailApplySignature(body, who){
+/* A letter may carry parts that are already HTML — the tables in the
+   minutes of a meeting. They travel as tokens through the plain text and
+   the escaping, and are put in place last, so a letter with any of them
+   always goes as HTML, signature or not. */
+function mailApplySignature(body, who, parts){
   body = String(body || '');
+  const keys = Object.keys(parts || {});
   const wants = body.indexOf('{Signature}') >= 0;
   const auto = !wants && !!cfg('campaign.autoSignature');
-  if(!wants && !auto) return {body, html:false};
-  const sigHtml = (typeof signatureHtmlFor === 'function') ? signatureHtmlFor(who || currentUser) : '';
-  if(!sigHtml) return {body: body.split('{Signature}').join(''), html:false};
+  if(!wants && !auto && !keys.length) return {body, html:false};
+  const sigHtml = ((wants || auto) && typeof signatureHtmlFor === 'function') ? signatureHtmlFor(who || currentUser) : '';
+  if(!sigHtml && !keys.length) return {body: body.split('{Signature}').join(''), html:false};
   const esc2 = x => String(x||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
   const toHtml = x => mailLinkify(esc2(x).split('\n').join('<br>'));
-  const out = wants
+  let out = wants
     ? body.split('{Signature}').map(toHtml).join(sigHtml)
     : toHtml(body) + sigHtml;
+  /* A part on a line of its own brings no line breaks of its own: the
+     block it is draws its own spacing. */
+  keys.forEach(k=>{ out = out.split('<br>' + k + '<br>').join(k).split(k).join(parts[k]); });
   return {html:true,
     body: '<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.55;color:#0A1931">'
         + out + '</div>'};
@@ -74488,7 +74620,7 @@ async function deliverMail(o){
      send sites: a template puts {Signature} where it wants it, and a
      firm that would rather not edit its templates can have it added to
      the ones that do not. */
-  const signed = mailApplySignature(o.body || '', o.signAs || currentUser);
+  const signed = mailApplySignature(o.body || '', o.signAs || currentUser, o.htmlParts);
   let body = signed.body, asHtml = signed.html;
   let status, note;
   // One mail can be addressed to more than one mailbox — the review certificate
