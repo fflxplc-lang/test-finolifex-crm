@@ -78215,10 +78215,19 @@ function hrMyLeaveSummaryHtml(userId){
       · ${inYear.length} request${inYear.length === 1 ? '' : 's'}</div>
   </div>`;
 }
+/* Two ways in. The Leave Request button asks about time ahead, so
+   neither date can be earlier than today. Apply Leave on a day in the
+   attendance history is about that one day, past or not, so both dates
+   are set to it and cannot be changed; the day travels in a hidden
+   field and the submit holds the request to it. */
 function hrOpenLeaveRequest(date){
   const u = me();
-  const day = (typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date)) ? date : hrToday();
+  const locked = (typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date)) ? date : '';
+  const day = locked || hrToday();
   if(!u){ alert('Sign in first.'); return; }
+  const dateAttrs = locked
+    ? ` min="${esc(locked)}" max="${esc(locked)}" readonly style="background:var(--bg);cursor:not-allowed"`
+    : ` min="${esc(hrToday())}" max="${DATE_BOUND_MAX}"`;
   const types = hrCfg().leaveTypes;
   const approver = hrApproverFor(u.id);
   openModal('Request leave', `
@@ -78231,12 +78240,16 @@ function hrOpenLeaveRequest(date){
       <div class="small-note" id="hrBalNote" style="margin-top:4px">${esc(hrBalanceLine(u.id, ''))}</div></div>
     <div class="field-grid">
       <div class="field"><label>From<span class="req">*</span></label>
-        <input type="date" id="f_hrReqFrom" value="${esc(day)}"${dateBoundsAttr()}
+        <input type="date" id="f_hrReqFrom" value="${esc(day)}"${dateAttrs}
           onchange="hrLeaveBalanceNote()"></div>
       <div class="field"><label>To<span class="req">*</span></label>
-        <input type="date" id="f_hrReqTo" value="${esc(day)}"${dateBoundsAttr()}
+        <input type="date" id="f_hrReqTo" value="${esc(day)}"${dateAttrs}
           onchange="hrLeaveBalanceNote()"></div>
     </div>
+    <input type="hidden" id="f_hrReqLock" value="${esc(locked)}">
+    <div class="small-note" style="margin:-4px 0 8px">${locked
+      ? 'This request is for <b>' + esc(fmtDate(locked)) + '</b> only, the day picked in the attendance history.'
+      : 'Leave can be requested from today onwards.'}</div>
     <div class="field"><label>Reason<span class="req">*</span></label>
       <textarea id="f_hrReqReason" placeholder="Why you need the time"></textarea></div>
     <div class="small-note">${approver
@@ -78279,6 +78292,10 @@ async function hrSubmitLeaveRequest(){
   const bad = dateRangeProblem('From', from) || dateRangeProblem('To', to);
   if(bad){ alert(bad); return; }
   if(to < from){ alert('The end date is before the start date.'); return; }
+  const lock = g('f_hrReqLock');
+  if(lock && (from !== lock || to !== lock)){
+    alert('This request is for ' + fmtDate(lock) + ' only. To ask for other dates, use + Leave Request.'); return; }
+  if(!lock && from < hrToday()){ alert('Leave cannot start before today.'); return; }
   if(!reason){ alert('Say why you need the time \u2014 the person approving it is being asked to agree to something.'); return; }
   const approver = hrApproverFor(u.id);
   if(!approver){ alert('There is nobody on file to approve this.'); return; }
