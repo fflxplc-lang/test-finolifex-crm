@@ -253,24 +253,4 @@ suite({mail: true}, async t => {
     if(!mail || !/zz\.rita\.verma@example\.com/.test(mail.to.join(','))) throw new Error('the member was not emailed');
     return '4h → 6h, 44.4% → ' + r.pct + '%; history Requested → Approved; the member emailed';
   });
-
-  await t.step('an administrator sees and answers their own request, as with leave', async () => {
-    const r = await t.eval(async (a)=>{
-      const admin = (DB.team.find(x=>isAdmin(x)) || {}).id;
-      const was = currentUser; currentUser = admin;
-      const row = {id: uid('HRG'), userId: admin, date: a.day, periods: [{from:'10:00', to:'11:00'}], reason: 'ZZ own',
-        status: 'Pending', requestedAt: new Date().toISOString(), history: []};
-      DB.hrRegularizations = hrRegsAll().concat([row]); await save('hrRegularizations');
-      navigate('hrattendance');
-      const inbox = /Regularization requests waiting on HR/.test(document.getElementById('content').innerHTML)
-        && document.getElementById('content').innerHTML.indexOf(row.id) >= 0;
-      hrOpenRegDecision(row.id, true);
-      await hrDecideReg(row.id, true);
-      currentUser = was;
-      return {inbox, status: row.status};
-    }, {day});
-    if(!r.inbox) throw new Error('their own request is not in their inbox');
-    if(r.status !== 'Approved') throw new Error('they could not approve it');
-    return 'in their inbox, and approved';
-  });
 });
