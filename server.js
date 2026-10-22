@@ -1692,6 +1692,8 @@ app.post('/api/market/nav', checkApiKey, async (req, res) => {
 const MARKET_URL = String(process.env.CRM_MARKET_URL || 'https://query1.finance.yahoo.com').replace(/\/+$/, '');
 const MARKET_SOURCE = 'Yahoo Finance';
 const marketCache = new Map();
+// How long a price answer is kept; the tests set CRM_MARKET_CACHE_SECONDS=0 so a second read sees the feed's new price.
+const marketTtl = (ms) => (process.env.CRM_MARKET_CACHE_SECONDS ? Number(process.env.CRM_MARKET_CACHE_SECONDS) * 1000 : ms);
 async function marketGet(path, ttl) {
   const url = MARKET_URL + path;
   const hit = marketCache.get(url);
@@ -1749,7 +1751,7 @@ function marketRsi(c, n = 14) {
 }
 /* One listing's year of daily prices, read down to what an advisor uses. */
 async function marketQuote(symbol) {
-  const json = await marketGet('/v8/finance/chart/' + encodeURIComponent(symbol) + '?range=1y&interval=1d', 60 * 1000);
+  const json = await marketGet('/v8/finance/chart/' + encodeURIComponent(symbol) + '?range=1y&interval=1d', marketTtl(60 * 1000));
   const r = json && json.chart && json.chart.result && json.chart.result[0];
   if (!r || !r.meta) return null;
   const m = r.meta, q = ((r.indicators || {}).quote || [])[0] || {};
@@ -1787,8 +1789,21 @@ async function marketQuote(symbol) {
     history: history,
   };
 }
-// GET /api/market/quote?q=<company, index or symbol>
+const MARKET_SYMBOL_RE = /^[\^A-Za-z0-9.&_-]{1,30}$/;
+// GET /api/market/quote?q=<company, index or symbol>, or ?symbol=<the feed's own symbol> to refresh one listing without searching
 app.get('/api/market/quote', checkApiKey, async (req, res) => {
+  const sym = String(req.query.symbol || '').trim();
+  if (sym) {
+    res.set('Cache-Control', 'no-store');
+    if (!MARKET_SYMBOL_RE.test(sym)) return res.json({ ok: false, message: 'That is not a symbol.' });
+    try {
+      const quote = await marketQuote(sym);
+      if (!quote) return res.json({ ok: false, notFound: true, query: sym, message: 'No price for "' + sym + '".' });
+      return res.json({ ok: true, source: MARKET_SOURCE, fetchedAt: new Date().toISOString(), query: sym, quote, news: [], alternatives: [] });
+    } catch (e) {
+      return res.json({ ok: false, query: sym, message: 'live prices could not be read: ' + (e && e.message || e) });
+    }
+  }
   const q = String(req.query.q || '').trim().slice(0, 80);
   if (!q) return res.status(400).json({ ok: false, message: 'Say which company or index.' });
   res.set('Cache-Control', 'no-store');
@@ -1806,6 +1821,32 @@ app.get('/api/market/quote', checkApiKey, async (req, res) => {
   } catch (e) {
     // As with NAVs: the feed being down is an answer for LEXI to pass on, not a failed request.
     res.json({ ok: false, query: q, message: e && e.name === 'TimeoutError' ? 'the price feed did not answer in time' : 'live prices could not be read: ' + (e && e.message || e) });
+  }
+});
+
+/* The candles behind the large chart: open, high, low, close and volume for
+   the timeframe asked, in the feed's own bar size for it. */
+const MARKET_RANGES = { '1D': ['1d', '5m'], '5D': ['5d', '15m'], '1M': ['1mo', '1d'], '3M': ['3mo', '1d'], '6M': ['6mo', '1d'],
+  YTD: ['ytd', '1d'], '1Y': ['1y', '1d'], '5Y': ['5y', '1wk'], ALL: ['max', '1mo'] };
+// GET /api/market/candles?symbol=<the feed's symbol>&range=1D|5D|1M|3M|6M|YTD|1Y|5Y|ALL
+app.get('/api/market/candles', checkApiKey, async (req, res) => {
+  const symbol = String(req.query.symbol || '').trim(), range = String(req.query.range || '6M').toUpperCase(), rg = MARKET_RANGES[range];
+  res.set('Cache-Control', 'no-store');
+  if (!MARKET_SYMBOL_RE.test(symbol) || !rg) return res.json({ ok: false, message: 'Say which symbol and which range.' });
+  try {
+    const json = await marketGet('/v8/finance/chart/' + encodeURIComponent(symbol) + '?range=' + rg[0] + '&interval=' + rg[1],
+      marketTtl(rg[1].endsWith('m') && rg[1] !== '1mo' ? 20 * 1000 : 45 * 1000));
+    const r = json && json.chart && json.chart.result && json.chart.result[0];
+    if (!r || !r.meta) return res.json({ ok: false, notFound: true, symbol, message: 'No prices for "' + symbol + '".' });
+    const m = r.meta, q = ((r.indicators || {}).quote || [])[0] || {};
+    const candles = (r.timestamp || []).map((t, i) => [t * 1000, (q.open || [])[i], (q.high || [])[i], (q.low || [])[i], (q.close || [])[i], (q.volume || [])[i] || 0])
+      .filter((c) => [1, 2, 3, 4].every((k) => c[k] != null && isFinite(c[k])))
+      .map((c) => [c[0], marketRound(c[1]), marketRound(c[2]), marketRound(c[3]), marketRound(c[4]), c[5]]);
+    res.json({ ok: true, source: MARKET_SOURCE, fetchedAt: new Date().toISOString(), symbol: m.symbol || symbol, range, interval: rg[1],
+      currency: m.currency || 'INR', price: marketRound(m.regularMarketPrice), time: m.regularMarketTime ? new Date(m.regularMarketTime * 1000).toISOString() : '',
+      prevClose: marketRound(m.chartPreviousClose != null ? m.chartPreviousClose : m.previousClose), candles });
+  } catch (e) {
+    res.json({ ok: false, symbol, message: e && e.name === 'TimeoutError' ? 'the price feed did not answer in time' : 'candles could not be read: ' + (e && e.message || e) });
   }
 });
 

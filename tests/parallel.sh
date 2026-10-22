@@ -72,6 +72,7 @@ worker(){
         CRM_IFSC_LOOKUP_URL="http://127.0.0.1:$(($PORT + 252))/ifsc/" \
         CRM_NAV_URL="http://127.0.0.1:$(($PORT + 311))/NAVAll.txt" \
         CRM_MARKET_URL="http://127.0.0.1:$(($PORT + 317))" \
+        CRM_MARKET_CACHE_SECONDS=0 \
         exec node server.js ) > "$D/server.log" 2>&1 &
     SRV=$!
     for _ in $(seq 1 150); do

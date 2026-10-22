@@ -15,10 +15,10 @@ function chart(symbol, name, from, prev, last){
   for(let i = n - 1; i >= 0; i--){ t.push(Math.floor((now - 60000 - i * 86400000) / 1000)); }
   for(let i = 0; i < n - 2; i++) c.push(from + (prev - from) * i / (n - 3) + (i % 2 ? 3 : -3));
   c.push(prev, last);
-  return {chart:{result:[{meta:{symbol, longName:name, currency:'INR', fullExchangeName:'NSE', regularMarketPrice:last,
+  return {chart:{result:[{meta:{symbol, longName:name, currency:'INR', fullExchangeName:'NSE', regularMarketPrice:last, chartPreviousClose:prev,
     regularMarketTime:Math.floor(now / 1000), regularMarketDayHigh:last + 5, regularMarketDayLow:last - 9,
     fiftyTwoWeekHigh:Math.max(from, last) + 20, fiftyTwoWeekLow:Math.min(from, last) - 20},
-    timestamp:t, indicators:{quote:[{close:c, high:c.map(x => x + 4), low:c.map(x => x - 4)}]}}], error:null}};
+    timestamp:t, indicators:{quote:[{close:c, high:c.map(x => x + 4), low:c.map(x => x - 4), open:c.map(x => x - 1.5), volume:c.map((_, i) => 100000 + i * 37)}]}}], error:null}};
 }
 const CHARTS = {
   'HDFCBANK.NS': chart('HDFCBANK.NS', 'HDFC Bank Limited', 600, 700, 707),
@@ -101,6 +101,24 @@ suite(async t => {
     return 'not found: "' + a.body.message + '"; down: "' + b.body.message + '"';
   });
 
+  await t.step('the candles behind the large chart come per timeframe, and a listing can be refreshed by its symbol', async () => {
+    const ask = async url => { const r = await t.eval(async (u) => { const x = await fetch(u, {headers: apiHeaders()}); return {status: x.status, body: await x.json()}; }, url); return r; };
+    const c = await ask('/api/market/candles?symbol=HDFCBANK.NS&range=3M');
+    if(!c.body.ok || c.body.candles.length !== 250 || c.body.candles[0].length !== 6 || c.body.interval !== '1d') throw new Error('candles ' + JSON.stringify(c.body).slice(0, 300));
+    const last = c.body.candles[c.body.candles.length - 1];
+    if(last[4] !== 707 || !(last[2] >= last[4] && last[3] <= last[4]) || !(last[5] > 0)) throw new Error('last bar ' + JSON.stringify(last));
+    const asked = {}; for(const [r, want] of [['1D', 'range=1d&interval=5m'], ['5D', 'range=5d&interval=15m'], ['1Y', 'range=1y&interval=1d'], ['5Y', 'range=5y&interval=1wk'], ['ALL', 'range=max&interval=1mo']]){
+      await ask('/api/market/candles?symbol=HDFCBANK.NS&range=' + r);
+      if(!hits.some(h => h.includes('/HDFCBANK.NS?' + want))) throw new Error('no feed read for ' + r + ' (' + want + ')');
+      asked[r] = want;
+    }
+    const bad = await ask('/api/market/candles?symbol=HDFC%20BANK&range=3M'), badR = await ask('/api/market/candles?symbol=HDFCBANK.NS&range=9Y');
+    if(bad.status !== 200 || bad.body.ok || badR.status !== 200 || badR.body.ok || !badR.body.message) throw new Error('bad input answered ' + JSON.stringify([bad, badR]));
+    const q = await ask('/api/market/quote?symbol=ICICIBANK.NS');
+    if(!q.body.ok || q.body.quote.symbol !== 'ICICIBANK.NS' || q.body.quote.price !== 1200) throw new Error('quote by symbol ' + JSON.stringify(q.body).slice(0, 200));
+    return 'OHLCV per timeframe (' + Object.keys(asked).join(', ') + '); a bad symbol or range is an answer (ok:false), not an error; quote by symbol refreshes without a search';
+  });
+
   t.section('LEXI answers from live prices');
   await t.step('"konsa loon" between two companies hands LEXI both, with the market view, and draws a card each', async () => {
     const r = await t.eval(async (port) => {
@@ -121,40 +139,51 @@ suite(async t => {
     if(!/MOCK MARKET ANSWER/.test(r.answer)) throw new Error('answer not shown');
     return 'both quotes and the Fair Value zone in the data; cards: ' + r.cards.map(c => c.split(' · ')[0]).join(' | ');
   });
-  await t.step('a click on a price card opens the bigger chart: range, hover, averages, key figures, and closes again', async () => {
-    const r = await t.eval(async () => {
-      const out = {};
+  await t.step('a click on a price card opens the trading chart: candles, volume, timeframes, hover, zoom, live refresh', async () => {
+    const wait = ms => t.eval(ms => new Promise(r => setTimeout(r, ms)), ms);
+    const r1 = await t.eval(async () => {
       document.querySelector('.lexi-quote').click();
-      const ov = document.getElementById('lexiChartOv'); out.open = !!ov;
-      out.ranges = [...ov.querySelectorAll('[role=group] button')].map(b => b.textContent + (b.getAttribute('aria-pressed') === 'true' ? '*' : ''));
-      out.label0 = document.getElementById('lexiChartSvg').getAttribute('aria-label');
-      out.avgs = ov.querySelectorAll('path[stroke-dasharray]').length;
-      const hit = document.getElementById('lexiChartHit'), b = hit.getBoundingClientRect();
-      const tip0 = document.getElementById('lexiChartTip').innerText;
-      hit.dispatchEvent(new PointerEvent('pointermove', {clientX: b.left + 2, clientY: b.top + 5, bubbles: true}));
-      out.tipFirst = document.getElementById('lexiChartTip').innerText; out.tipLast = tip0;
-      out.cross = document.getElementById('lexiChartCross').style.display !== 'none';
-      [...ov.querySelectorAll('[role=group] button')].find(x => x.textContent === '1M').click();
-      out.label1 = document.getElementById('lexiChartSvg').getAttribute('aria-label');
-      out.text = ov.innerText.replace(/\s+/g, ' ');
-      out.href = ov.querySelector('a[href*="tradingview"]').getAttribute('href');
-      out.sector = /Financial Services/.test(out.text); out.news = /52-week low/.test(out.text);
-      document.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape', bubbles: true}));
-      out.closed = !document.getElementById('lexiChartOv');
-      return out;
+      await new Promise(r => setTimeout(r, 700));
+      const st = window._lexiChart, cv = document.getElementById('lcCanvas'), o = {};
+      o.open = !!document.getElementById('lexiChartOv'); o.tfs = [...document.querySelectorAll('#lcTfs button')].map(b => b.textContent + (b.getAttribute('aria-pressed') === 'true' ? '*' : ''));
+      o.bars = st.bars.length; o.shape = st.bars[0].length;
+      const px = cv.getContext('2d').getImageData(0, 0, cv.width, cv.height).data; let inked = 0; for(let i = 3; i < px.length; i += 4) if(px[i] > 0) inked++; o.inked = inked;
+      const b = cv.getBoundingClientRect();
+      cv.dispatchEvent(new PointerEvent('pointermove', {clientX: b.left + b.width * .4, clientY: b.top + 120, bubbles: true}));
+      o.ohlc = document.getElementById('lcOhlc').innerText.replace(/\s+/g, ' '); o.cross = st.cross;
+      cv.dispatchEvent(new WheelEvent('wheel', {clientX: b.left + b.width * .5, deltaY: -300, bubbles: true, cancelable: true}));
+      o.zoomed = st.n; [...document.querySelectorAll('#lcTools button')].find(x => x.textContent === 'Reset').click(); o.reset = st.n;
+      o.price0 = document.getElementById('lcPrice').textContent; o.text = document.getElementById('lexiChartOv').innerText.replace(/\s+/g, ' ');
+      o.href = document.querySelector('#lexiChartOv a[href*="tradingview"]').getAttribute('href');
+      return o;
     });
-    if(!r.open || r.ranges.join() !== '1M,3M,6M*,1Y') throw new Error('ranges ' + JSON.stringify(r.ranges));
-    if(!/251 sessions|250 sessions/.test(r.label0) && !/ 126 sessions/.test(r.label0)) throw new Error('6M should plot 126 sessions: ' + r.label0);
-    if(r.avgs < 1) throw new Error('no moving-average line');
-    if(!r.cross || r.tipFirst === r.tipLast || !/₹/.test(r.tipFirst)) throw new Error('hover ' + JSON.stringify([r.cross, r.tipFirst, r.tipLast]));
-    if(!/ 21 sessions/.test(r.label1)) throw new Error('1M should plot 21 sessions: ' + r.label1);
-    for(const w of ['52-week range', 'RSI (14)', '50-day average', '200-day average', '1 month']) if(!r.text.includes(w)) throw new Error('missing ' + w);
-    if(r.href !== 'https://www.tradingview.com/chart/?symbol=NSE%3AHDFCBANK') throw new Error('link ' + r.href);
-    if(!r.sector || !r.news) throw new Error('sector or headline missing');
-    if(!r.closed) throw new Error('Escape did not close it');
-    const u = lastUser();
-    if(u.includes('"history"')) throw new Error('the year of prices was sent to the model');
-    return 'ranges ' + r.ranges.join(' ') + '; hover moves the figure; 6M = 126 sessions, 1M = 21; Escape closes; the model never gets the year';
+    if(!r1.open || r1.tfs.join() !== '1D,5D,1M,3M,6M*,YTD,1Y,5Y,All') throw new Error('timeframes ' + JSON.stringify(r1.tfs));
+    if(r1.bars !== 250 || r1.shape !== 6) throw new Error('bars ' + r1.bars + ' x ' + r1.shape);
+    if(r1.inked < 3000) throw new Error('the canvas is blank (' + r1.inked + ' pixels)');
+    if(!/O [\d,.]+ H [\d,.]+ L [\d,.]+ C [\d,.]+/.test(r1.ohlc) || r1.cross == null) throw new Error('hover read-out ' + r1.ohlc);
+    if(!(r1.zoomed < 250) || r1.reset !== 250) throw new Error('zoom ' + r1.zoomed + ' reset ' + r1.reset);
+    if(r1.price0 !== '₹707') throw new Error('price ' + r1.price0);
+    for(const w of ['52-week range', 'RSI (14)', '50-day average', '200-day average', 'Financial Services', '52-week low']) if(!r1.text.includes(w)) throw new Error('missing ' + w);
+    if(r1.href !== 'https://www.tradingview.com/chart/?symbol=NSE%3AHDFCBANK') throw new Error('link ' + r1.href);
+    // each timeframe asks the feed for its own bar size
+    const tfHit = {};
+    for(const [tf, want] of [['1D', 'range=1d&interval=5m'], ['1Y', 'range=1y&interval=1d'], ['5Y', 'range=5y&interval=1wk'], ['All', 'range=max&interval=1mo']]){
+      const n0 = hits.length;
+      await t.eval(async (tf) => { [...document.querySelectorAll('#lcTfs button')].find(b => b.textContent === tf).click(); await new Promise(r => setTimeout(r, 500)); }, tf);
+      if(!hits.slice(n0).some(h => h.includes('/HDFCBANK.NS?' + want))) throw new Error(tf + ' did not read ' + want);
+      tfHit[tf] = want;
+    }
+    // the feed moves; the open chart follows it on its own refresh
+    const ch = CHARTS['HDFCBANK.NS'].chart.result[0];
+    ch.meta.regularMarketPrice = 712; ch.indicators.quote[0].close[ch.indicators.quote[0].close.length - 1] = 712;
+    await t.eval(async () => { [...document.querySelectorAll('#lcTfs button')].find(b => b.textContent === '6M').click(); await new Promise(r => setTimeout(r, 400)); });
+    const r2 = await t.eval(async () => { await lexiChartRefresh(); const st = window._lexiChart; return {price: document.getElementById('lcPrice').textContent, last: st.bars[st.bars.length - 1][4], stamp: /refreshed \d\d:\d\d:\d\d/.test(document.getElementById('lcLive').innerText)}; });
+    ch.meta.regularMarketPrice = 707; ch.indicators.quote[0].close[ch.indicators.quote[0].close.length - 1] = 707;
+    if(r2.price !== '₹712' || r2.last !== 712 || !r2.stamp) throw new Error('refresh ' + JSON.stringify(r2));
+    const r3 = await t.eval(async () => { document.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape', bubbles: true})); return {closed: !document.getElementById('lexiChartOv'), state: window._lexiChart}; });
+    if(!r3.closed || r3.state !== null) throw new Error('Escape did not close it');
+    if(lastUser().includes('"history"')) throw new Error('the year of prices was sent to the model');
+    return 'candles + volume drawn, hover reads O/H/L/C, zoom and reset, ' + Object.keys(tfHit).join('/') + ' each read their own bars, refresh moved the price 707 → 712, Escape closes';
   });
   await t.step('a question about the CRM\'s records reads no prices', async () => {
     const before = hits.length;

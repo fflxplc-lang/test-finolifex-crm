@@ -56772,11 +56772,15 @@ function lexiQuoteCard(x, ti, qi){
     <div class="small-note" style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap"><span>Live from ${esc(x.source || 'the price feed')}${when ? ', price at ' + esc(when) : ''}</span>${open ? '<span style="color:var(--navy-ink);font-weight:600">Bigger chart ›</span>' : ''}</div></div>`;
 }
 
-/* A click on a price card opens the same prices larger: a line with a price
-   scale and dates, the 50- and 200-day averages where the history is long
-   enough, a range to pick, the figure under a finger or the pointer, the
-   numbers an advisor reads next to it, and a link to a full charting page. */
-const LEXI_CHART_RANGES = [['1M', 21], ['3M', 63], ['6M', 126], ['1Y', 0]];
+/* A click on a price card opens the same prices larger, as a trading chart:
+   candles with the volume under them, a price scale and a time scale, the
+   50- and 200-bar averages, the 52-week high and low, a crosshair that reads
+   the bar under it, the timeframes a trader reaches for, zoom and drag, and
+   a refresh every half minute while it is open so the last bar moves with
+   the price. Under it, the figures an advisor reads next to it, and a link
+   to a full charting page. */
+const LEXI_CHART_TFS = ['1D', '5D', '1M', '3M', '6M', 'YTD', '1Y', '5Y', 'All'];
+const LEXI_CHART_LIVE_MS = 30000;
 function lexiTradingViewSymbol(x){
   const s = String(x.symbol || '');
   const idx = {'^NSEI':'NSE:NIFTY', '^BSESN':'BSE:SENSEX', '^NSEBANK':'NSE:BANKNIFTY', '^CNXIT':'NSE:CNXIT', 'NIFTY':'NSE:NIFTY', 'BSESENSEX':'BSE:SENSEX', 'BANKNIFTY':'NSE:BANKNIFTY'};
@@ -56786,119 +56790,339 @@ function lexiTradingViewSymbol(x){
   if(/\.BO$/i.test(s)) return 'BSE:' + s.replace(/\.BO$/i, '');
   return (/^\d+$/.test(s) ? 'BSE:' : 'NSE:') + code(s.replace(/^\^/, ''));
 }
-function lexiChartSeries(x){ return (x.history && x.history.length > 1 ? x.history : x.closes || []).filter(c => c && c[1] != null); }
-function lexiChartRanges(n){
-  if(n <= 40) return [['All', 0]];
-  const out = LEXI_CHART_RANGES.filter(r => r[1] && n >= r[1] * 0.9 && n > r[1] * 0.9 + 1);
-  out.push(n >= 200 ? ['1Y', 0] : ['All', 0]);
-  return out.filter((r, i, a) => a.findIndex(q => q[0] === r[0]) === i);
+const lexiNum = (v, d = 2) => v == null || !isFinite(v) ? '—' : Number(v).toLocaleString('en-IN', {maximumFractionDigits: d});
+const lexiPct = v => v == null || !isFinite(v) ? '—' : (v > 0 ? '+' : '') + Number(v).toFixed(2) + '%';
+const lexiVol = v => !v ? '' : v >= 1e7 ? (v / 1e7).toFixed(2) + ' Cr' : v >= 1e5 ? (v / 1e5).toFixed(2) + ' L' : v >= 1e3 ? (v / 1e3).toFixed(1) + ' K' : String(v);
+function lexiChartSma(vals, w){
+  let sum = 0;
+  return vals.map((v, i) => { sum += v; if(i >= w) sum -= vals[i - w]; return i + 1 < w ? null : sum / w; });
 }
-function lexiChartSma(vals, w){ return vals.map((_, i) => i + 1 < w ? null : vals.slice(i + 1 - w, i + 1).reduce((a, b) => a + b, 0) / w); }
+function lexiChartTicks(lo, hi, want){
+  const span = hi - lo || Math.abs(hi) * .02 || 1, raw = span / want, mag = Math.pow(10, Math.floor(Math.log10(raw)));
+  const step = [1, 2, 2.5, 5, 10].map(m => m * mag).find(s => s >= raw) || raw, out = [];
+  for(let v = Math.ceil(lo / step) * step; v <= hi + step * 1e-9; v += step) out.push(Math.round(v / step * 1e6) / 1e6 * step);
+  return {ticks: out, step};
+}
+function lexiChartWhen(ms, tf, long){
+  const tz = {timeZone:'Asia/Kolkata'}, d = new Date(ms);
+  if(isNaN(d)) return '';
+  const intraday = tf === '1D' || tf === '5D';
+  if(long){
+    const o = {}; new Intl.DateTimeFormat('en-IN', Object.assign({weekday:'short', day:'2-digit', month:'short', year:'2-digit'}, intraday ? {hour:'2-digit', minute:'2-digit', hour12:false} : {}, tz))
+      .formatToParts(d).forEach(q => { o[q.type] = q.value; });
+    return o.weekday + ' ' + o.day + ' ' + o.month + " '" + o.year + (intraday ? '  ' + o.hour + ':' + o.minute : '');
+  }
+  if(tf === '1D') return d.toLocaleTimeString('en-IN', Object.assign({hour:'2-digit', minute:'2-digit', hour12:false}, tz));
+  if(tf === '5Y' || tf === 'All') return d.toLocaleDateString('en-IN', Object.assign({month:'short', year:'numeric'}, tz));
+  if(tf === '1Y' || tf === 'YTD') return d.toLocaleDateString('en-IN', Object.assign({day:'numeric', month:'short', year:'2-digit'}, tz));
+  return d.toLocaleDateString('en-IN', Object.assign({day:'numeric', month:'short'}, tz));
+}
 function lexiChartOpen(ti, qi){
   const t = ai.turns[ti], x = t && (t.market || [])[qi];
   if(!x) return;
-  const n = lexiChartSeries(x).length;
-  const rs = lexiChartRanges(n);
-  const pick = rs.filter(r => r[0] === '6M')[0] || rs.filter(r => r[0] === '3M')[0] || rs[rs.length - 1];
-  window._lexiChart = {x, range: pick[0]};
-  let ov = document.getElementById('lexiChartOv');
-  if(!ov){
-    ov = document.createElement('div'); ov.id = 'lexiChartOv';
-    ov.style.cssText = 'position:fixed;inset:0;z-index:1000;background:rgba(10,25,49,.55);display:flex;align-items:flex-start;justify-content:center;padding:24px 14px 72px;overflow-y:auto';
-    ov.addEventListener('click', e => { if(e.target === ov) lexiChartClose(); });
-    document.body.appendChild(ov);
-    document.addEventListener('keydown', e => { if(e.key === 'Escape' && document.getElementById('lexiChartOv')){ e.stopImmediatePropagation(); lexiChartClose(); } }, true);
-  }
-  lexiChartPaint();
-  const c = ov.querySelector('button'); if(c) c.focus({preventScroll:true});
+  lexiChartClose();
+  const st = window._lexiChart = {x: Object.assign({}, x), tf: '6M', type: 'candles', ma: true, bars: [], i0: 0, n: 0, cross: null, crossY: 0, drag: null,
+    cache: {}, err: '', note: '', loading: true, gen: 0, stamp: '', prevClose: null, timer: null};
+  const ov = document.createElement('div'); ov.id = 'lexiChartOv';
+  ov.style.cssText = 'position:fixed;inset:0;z-index:1000;background:rgba(10,25,49,.55);display:flex;align-items:flex-start;justify-content:center;padding:24px 14px 72px;overflow-y:auto';
+  ov.addEventListener('click', e => { if(e.target === ov) lexiChartClose(); });
+  document.body.appendChild(ov);
+  st.onKey = e => { if(e.key === 'Escape'){ e.stopImmediatePropagation(); lexiChartClose(); } };
+  st.onResize = () => lexiChartDraw();
+  document.addEventListener('keydown', st.onKey, true);
+  window.addEventListener('resize', st.onResize);
+  lexiChartShell();
+  lexiChartLoad('6M');
+  st.timer = setInterval(lexiChartRefresh, LEXI_CHART_LIVE_MS);
 }
-function lexiChartClose(){ const ov = document.getElementById('lexiChartOv'); if(ov) ov.remove(); window._lexiChart = null; }
-function lexiChartRange(r){ if(window._lexiChart){ window._lexiChart.range = r; lexiChartPaint(); } }
-function lexiChartPaint(){
-  const st = window._lexiChart, ov = document.getElementById('lexiChartOv');
-  if(!st || !ov) return;
-  const x = st.x, all = lexiChartSeries(x), ranges = lexiChartRanges(all.length);
-  const days = (LEXI_CHART_RANGES.filter(r => r[0] === st.range)[0] || [0, 0])[1];
-  const from = days ? Math.max(0, all.length - days) : 0;
-  const pts = all.slice(from), vals = pts.map(p => p[1]);
-  const sma = [50, 200].map(w => lexiChartSma(all.map(p => p[1]), w).slice(from));
-  const f = v => v == null ? '—' : Number(v).toLocaleString('en-IN', {maximumFractionDigits:2});
-  const pc = v => v == null ? '—' : (v > 0 ? '+' : '') + Number(v).toFixed(2) + '%';
-  const cur = x.currency === 'INR' ? '₹' : '';
-  const first = vals[0], last = vals[vals.length - 1], up = last >= first, col = up ? 'var(--ok)' : 'var(--danger)';
-  /* On a phone the drawing is made narrower, not shrunk, so the figures stay readable. */
-  const narrow = window.innerWidth < 600;
-  const W = narrow ? 400 : 760, H = narrow ? 250 : 300, L = narrow ? 46 : 58, R = 12, T = 12, B = 28;
-  const shown = vals.concat(sma[0].filter(v => v != null), sma[1].filter(v => v != null));
-  let lo = Math.min(...shown), hi = Math.max(...shown); const pad = (hi - lo || hi * .02 || 1) * .06; lo -= pad; hi += pad;
-  const X = i => L + (vals.length < 2 ? 0 : i * (W - L - R) / (vals.length - 1)), Y = v => T + (hi - v) / (hi - lo) * (H - T - B);
-  const line = a => { let d = '', pen = false; a.forEach((v, i) => { if(v == null){ pen = false; return; } d += (pen ? 'L' : 'M') + X(i).toFixed(1) + ' ' + Y(v).toFixed(1); pen = true; }); return d; };
-  const grid = [0, 1, 2, 3, 4].map(k => { const v = lo + (hi - lo) * k / 4; return `<line x1="${L}" x2="${W - R}" y1="${Y(v).toFixed(1)}" y2="${Y(v).toFixed(1)}" stroke="var(--line)" stroke-width="1"/><text x="${L - 6}" y="${(Y(v) + 4).toFixed(1)}" text-anchor="end" font-size="11" fill="var(--muted)">${Number(v).toLocaleString('en-IN', {maximumFractionDigits: hi > 500 ? 0 : 2})}</text>`; }).join('');
-  const fmtDay = (d, long) => { const dt = new Date(d + 'T00:00:00'); return isNaN(dt) ? d : dt.toLocaleDateString('en-IN', long ? {weekday:'short', day:'numeric', month:'short', year:'numeric'} : (pts.length > 150 ? {month:'short', year:'2-digit'} : {day:'numeric', month:'short'})); };
-  const nTicks = Math.min(5, pts.length);
-  const ticks = Array.from({length: nTicks}, (_, k) => Math.round(k * (pts.length - 1) / Math.max(1, nTicks - 1)));
-  const xlab = ticks.map((i, k) => `<text x="${X(i).toFixed(1)}" y="${H - 8}" text-anchor="${k === 0 ? 'start' : k === ticks.length - 1 ? 'end' : 'middle'}" font-size="11" fill="var(--muted)">${esc(fmtDay(pts[i][0]))}</text>`).join('');
-  const area = line(vals) + `L${X(vals.length - 1).toFixed(1)} ${H - B}L${X(0).toFixed(1)} ${H - B}Z`;
-  const tipAt = i => `${fmtDay(pts[i][0], true)} · <b>${cur}${f(vals[i])}</b> · <span style="color:${vals[i] >= first ? 'var(--ok)' : 'var(--danger)'}">${pc((vals[i] / first - 1) * 100)}</span> since ${esc(fmtDay(pts[0][0]))}`;
-  const smaNote = sma.map((a, k) => a.some(v => v != null) ? `<span style="color:${k ? 'var(--muted)' : 'var(--gold)'}">━ ${[50, 200][k]}-day average</span>` : '').filter(Boolean).join(' &nbsp; ');
-  const r = x.returnsPct || {}, pos = x.high52 > x.low52 ? Math.max(0, Math.min(100, (x.price - x.low52) / (x.high52 - x.low52) * 100)) : null;
-  const cell = (k, v) => `<div style="min-width:0"><div class="small-note">${k}</div><div style="font-weight:600">${v}</div></div>`;
-  const ret = (k, v) => v == null ? '' : cell(k, `<span style="color:${v >= 0 ? 'var(--ok)' : 'var(--danger)'}">${pc(v)}</span>`);
-  const rsi = x.rsi14 == null ? '' : cell('RSI (14)', `${x.rsi14} <span class="small-note">${x.rsi14 >= 70 ? 'overbought zone' : x.rsi14 <= 30 ? 'oversold zone' : 'mid-range'}</span>`);
-  const news = (x.news || []).filter(n => n && n.title).map(n => `<li style="margin:3px 0">${esc(n.title)} <span class="small-note">${esc(n.publisher || '')}${n.time ? ' · ' + esc(new Date(n.time).toLocaleDateString('en-IN', {day:'numeric', month:'short'})) : ''}</span></li>`).join('');
+function lexiChartClose(){
+  const st = window._lexiChart;
+  if(st){ clearInterval(st.timer); document.removeEventListener('keydown', st.onKey, true); window.removeEventListener('resize', st.onResize); }
+  const ov = document.getElementById('lexiChartOv'); if(ov) ov.remove();
+  window._lexiChart = null;
+}
+function lexiChartShell(){
+  const st = window._lexiChart, ov = document.getElementById('lexiChartOv'), x = st.x;
   const tv = 'https://www.tradingview.com/chart/?symbol=' + encodeURIComponent(lexiTradingViewSymbol(x));
-  ov.innerHTML = `<div class="lexi-bigchart" role="dialog" aria-modal="true" aria-label="${esc(x.name)} chart" style="background:var(--card);color:var(--text);border:1px solid var(--edge);border-radius:12px;width:100%;max-width:820px;box-shadow:0 30px 80px rgba(10,25,49,.35)">
+  ov.innerHTML = `<div class="lexi-bigchart" role="dialog" aria-modal="true" aria-label="${esc(x.name)} chart" style="background:var(--card);color:var(--text);border:1px solid var(--edge);border-radius:12px;width:100%;max-width:1000px;box-shadow:0 30px 80px rgba(10,25,49,.35)">
     <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;padding:14px 16px 6px">
       <div style="min-width:0"><div style="font-size:17px;font-weight:700">${esc(x.name)}</div>
         <div class="small-note">${esc(x.symbol)}${x.exchange ? ' · ' + esc(x.exchange) : ''}${x.sector ? ' · ' + esc(x.sector) : ''}</div></div>
-      <div style="text-align:right;white-space:nowrap"><div style="font-size:22px;font-weight:700">${cur}${f(x.price)}</div>
-        ${x.change == null ? '' : `<div style="color:${(x.change || 0) >= 0 ? 'var(--ok)' : 'var(--danger)'};font-weight:600">${(x.change || 0) >= 0 ? '▲' : '▼'} ${f(Math.abs(x.change))} (${pc(x.changePct)}) today</div>`}</div>
+      <div style="text-align:right;white-space:nowrap"><div id="lcPrice" style="font-size:22px;font-weight:700"></div><div id="lcChange" style="font-weight:600"></div></div>
       <button type="button" class="btn sm ghost" aria-label="Close" onclick="lexiChartClose()" style="flex:none">✕</button>
     </div>
     <div style="padding:0 16px">
-      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin:4px 0">
-        <div id="lexiChartTip" class="small-note" aria-live="off" style="min-height:18px">${tipAt(vals.length - 1)}</div>
-        <div role="group" aria-label="Range" style="display:flex;gap:4px">${ranges.map(rg => `<button type="button" class="btn sm ${rg[0] === st.range ? '' : 'ghost'}" aria-pressed="${rg[0] === st.range}" onclick="lexiChartRange('${rg[0]}')">${rg[0]}</button>`).join('')}</div>
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;min-height:22px">
+        <div id="lcOhlc" class="small-note" style="font-variant-numeric:tabular-nums"></div>
+        <div id="lcLive" class="small-note"></div>
       </div>
-      <svg id="lexiChartSvg" viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="${esc(x.name)} closing price, ${pts.length} sessions, from ${f(first)} to ${f(last)}" style="display:block;touch-action:pan-y;max-height:340px">
-        ${grid}${xlab}
-        <path d="${area}" fill="${col}" fill-opacity=".09" stroke="none"/>
-        ${sma[1].some(v => v != null) ? `<path d="${line(sma[1])}" fill="none" stroke="var(--muted)" stroke-width="1.5" stroke-dasharray="5 4"/>` : ''}
-        ${sma[0].some(v => v != null) ? `<path d="${line(sma[0])}" fill="none" stroke="var(--gold)" stroke-width="1.5" stroke-dasharray="5 4"/>` : ''}
-        <path d="${line(vals)}" fill="none" stroke="${col}" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round"/>
-        <g id="lexiChartCross" style="display:none"><line id="lexiChartV" y1="${T}" y2="${H - B}" stroke="var(--muted)" stroke-width="1" stroke-dasharray="3 3"/><circle id="lexiChartDot" r="4.5" fill="${col}" stroke="var(--card)" stroke-width="2"/></g>
-        <rect id="lexiChartHit" x="${L}" y="${T}" width="${W - L - R}" height="${H - T - B}" fill="transparent"/>
-      </svg>
-      <div class="small-note" style="margin:2px 0 8px">Daily closing prices${smaNote ? ' &nbsp;·&nbsp; ' + smaNote : ''}</div>
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(135px,1fr));gap:10px 14px;padding:10px 0;border-top:1px solid var(--line)">
-        ${x.dayLow != null && x.dayHigh != null ? cell('Day range', `${f(x.dayLow)} – ${f(x.dayHigh)}`) : ''}
-        ${cell('52-week range', `${f(x.low52)} – ${f(x.high52)}`)}
-        ${x.fromHigh52Pct != null ? cell('From 52-week high', `<span style="color:${x.fromHigh52Pct >= 0 ? 'var(--ok)' : 'var(--danger)'}">${pc(x.fromHigh52Pct)}</span>`) : ''}
-        ${ret('1 week', r.week)}${ret('1 month', r.month)}${ret('3 months', r.quarter)}${ret('6 months', r.halfYear)}${ret('1 year', r.year)}
-        ${rsi}
-        ${x.sma20 != null ? cell('20-day average', f(x.sma20)) : ''}${x.sma50 != null ? cell('50-day average', f(x.sma50)) : ''}${x.sma200 != null ? cell('200-day average', f(x.sma200)) : ''}
-        ${x.pe != null ? cell('P/E', f(x.pe)) : ''}${x.pb != null ? cell('P/B', f(x.pb)) : ''}${x.dividendYieldPct != null ? cell('Dividend yield', f(x.dividendYieldPct) + '%') : ''}
+      <div id="lcWrap" style="position:relative;margin:4px 0">
+        <canvas id="lcCanvas" tabindex="0" role="img" aria-label="${esc(x.name)} price chart" style="display:block;width:100%;touch-action:pan-y;cursor:crosshair;outline-offset:2px"></canvas>
+        <div id="lcMsg" class="small-note" style="position:absolute;left:0;right:0;top:40%;text-align:center;pointer-events:none"></div>
       </div>
-      ${pos != null ? `<div style="margin:0 0 10px"><div class="small-note" style="display:flex;justify-content:space-between"><span>52-week low ${f(x.low52)}</span><span>high ${f(x.high52)}</span></div>
-        <div style="position:relative;height:8px;border-radius:4px;background:var(--line)"><div style="position:absolute;left:calc(${pos.toFixed(1)}% - 6px);top:-3px;width:12px;height:14px;border-radius:4px;background:${col};border:2px solid var(--card)"></div></div></div>` : ''}
-      ${x.trend ? `<div style="margin:0 0 8px"><b>${esc(x.trend.split(':')[0][0].toUpperCase() + x.trend.split(':')[0].slice(1))}</b> <span class="small-note">${esc(x.trend.split(':').slice(1).join(':').trim())}</span></div>` : ''}
-      ${news ? `<div style="margin:0 0 8px"><div class="small-note">Recent headlines</div><ul style="margin:2px 0 0 18px;padding:0">${news}</ul></div>` : ''}
+      <div id="lcNote" class="small-note" style="min-height:16px"></div>
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin:6px 0 10px">
+        <div id="lcTfs" role="group" aria-label="Timeframe" style="display:flex;gap:4px;flex-wrap:wrap"></div>
+        <div id="lcTools" role="group" aria-label="Chart options" style="display:flex;gap:4px;flex-wrap:wrap"></div>
+      </div>
+      <div id="lcStats"></div>
     </div>
     <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;padding:10px 16px 14px;border-top:1px solid var(--line)">
       <span class="small-note">From ${esc(x.source || 'the price feed')}. For information, not a recommendation.</span>
       <span style="display:flex;gap:6px"><a class="btn sm ghost" href="${esc(tv)}" target="_blank" rel="noopener noreferrer">Open on TradingView ↗</a><button type="button" class="btn sm" onclick="lexiChartClose()">Close</button></span>
     </div></div>`;
-  const svg = document.getElementById('lexiChartSvg'), cross = document.getElementById('lexiChartCross'), tip = document.getElementById('lexiChartTip');
-  const at = ev => {
-    const b = svg.getBoundingClientRect(); if(!b.width) return;
-    const i = Math.max(0, Math.min(vals.length - 1, Math.round(((ev.clientX - b.left) * (W / b.width) - L) / ((W - L - R) / Math.max(1, vals.length - 1)))));
-    cross.style.display = ''; const v = document.getElementById('lexiChartV'), d = document.getElementById('lexiChartDot');
-    v.setAttribute('x1', X(i)); v.setAttribute('x2', X(i)); d.setAttribute('cx', X(i)); d.setAttribute('cy', Y(vals[i]));
-    tip.innerHTML = tipAt(i);
-  };
-  const hit = document.getElementById('lexiChartHit');
-  hit.addEventListener('pointermove', at); hit.addEventListener('pointerdown', at);
-  hit.addEventListener('pointerleave', () => { cross.style.display = 'none'; tip.innerHTML = tipAt(vals.length - 1); });
+  const cv = document.getElementById('lcCanvas');
+  cv.addEventListener('pointerdown', e => {
+    const s = window._lexiChart; if(!s || !s.bars.length) return;
+    s.drag = {x0: e.clientX, i0: s.i0, moved: false}; try{ cv.setPointerCapture(e.pointerId); }catch(_){}
+  });
+  cv.addEventListener('pointermove', e => lexiChartPointer(e));
+  const up = () => { const s = window._lexiChart; if(s){ s.drag = null; cv.style.cursor = 'crosshair'; } };
+  cv.addEventListener('pointerup', up); cv.addEventListener('pointercancel', up);
+  cv.addEventListener('pointerleave', e => { const s = window._lexiChart; if(s && !s.drag){ s.cross = null; lexiChartDraw(); lexiChartOhlc(); } });
+  cv.addEventListener('wheel', e => { e.preventDefault(); lexiChartZoom(e.deltaY < 0 ? 0.8 : 1.25, e); }, {passive: false});
+  cv.addEventListener('dblclick', () => lexiChartReset());
+  cv.addEventListener('keydown', e => {
+    const s = window._lexiChart; if(!s || !s.bars.length) return;
+    const k = e.key;
+    if(k === 'ArrowLeft' || k === 'ArrowRight'){
+      e.preventDefault();
+      const cur = s.cross == null ? s.bars.length - 1 : s.cross;
+      s.cross = Math.max(0, Math.min(s.bars.length - 1, cur + (k === 'ArrowLeft' ? -1 : 1)));
+      if(s.cross < s.i0) s.i0 = s.cross; if(s.cross >= s.i0 + s.n) s.i0 = s.cross - s.n + 1;
+      s.crossY = -1; lexiChartDraw(); lexiChartOhlc();
+    } else if(k === '+' || k === '='){ e.preventDefault(); lexiChartZoom(0.8); }
+    else if(k === '-'){ e.preventDefault(); lexiChartZoom(1.25); }
+    else if(k === 'Home'){ e.preventDefault(); lexiChartReset(); }
+  });
+  lexiChartHead(); lexiChartTfPaint(); lexiChartToolsPaint(); lexiChartStatsPaint(); lexiChartLiveBadge();
+}
+function lexiChartHead(){
+  const st = window._lexiChart; if(!st) return;
+  const x = st.x, up = (x.change || 0) >= 0, cur = x.currency === 'INR' ? '₹' : '';
+  const p = document.getElementById('lcPrice'), c = document.getElementById('lcChange');
+  if(p) p.textContent = cur + lexiNum(x.price);
+  if(c) c.innerHTML = x.change == null ? '' : `<span style="color:${up ? 'var(--ok)' : 'var(--danger)'}">${up ? '▲' : '▼'} ${lexiNum(Math.abs(x.change))} (${lexiPct(x.changePct)}) today</span>`;
+}
+function lexiChartLiveBadge(){
+  const st = window._lexiChart, el = document.getElementById('lcLive'); if(!st || !el) return;
+  const t = st.x.time ? new Date(st.x.time) : null, fresh = t && !isNaN(t) && Date.now() - t < 20 * 60000;
+  const at = t && !isNaN(t) ? t.toLocaleString('en-IN', {day:'numeric', month:'short', hour:'numeric', minute:'2-digit', timeZone:'Asia/Kolkata'}) : '';
+  el.innerHTML = `<span style="color:${fresh ? 'var(--ok)' : 'var(--muted)'};font-weight:700">${fresh ? '● LIVE' : '○ LAST PRICE'}</span> ${at ? 'price at ' + esc(at) : ''}${st.stamp ? ' · refreshed ' + esc(st.stamp) : ''}`;
+}
+function lexiChartTfPaint(){
+  const st = window._lexiChart, el = document.getElementById('lcTfs'); if(!st || !el) return;
+  el.innerHTML = LEXI_CHART_TFS.map(r => `<button type="button" class="btn sm ${r === st.tf ? '' : 'ghost'}" aria-pressed="${r === st.tf}" onclick="lexiChartLoad('${r}')">${r}</button>`).join('');
+}
+function lexiChartToolsPaint(){
+  const st = window._lexiChart, el = document.getElementById('lcTools'); if(!st || !el) return;
+  const b = (label, on, fn, aria) => `<button type="button" class="btn sm ${on ? '' : 'ghost'}" aria-pressed="${on}" aria-label="${aria}" onclick="${fn}">${label}</button>`;
+  el.innerHTML = b('Candles', st.type === 'candles', "lexiChartType('candles')", 'Candles') + b('Line', st.type === 'line', "lexiChartType('line')", 'Line')
+    + b('Averages', st.ma, 'lexiChartMa()', '50 and 200 bar averages')
+    + `<button type="button" class="btn sm ghost" aria-label="Zoom out" onclick="lexiChartZoom(1.25)">−</button><button type="button" class="btn sm ghost" aria-label="Zoom in" onclick="lexiChartZoom(0.8)">+</button><button type="button" class="btn sm ghost" onclick="lexiChartReset()">Reset</button>`;
+}
+function lexiChartType(t){ const st = window._lexiChart; if(st){ st.type = t; lexiChartToolsPaint(); lexiChartDraw(); } }
+function lexiChartMa(){ const st = window._lexiChart; if(st){ st.ma = !st.ma; lexiChartToolsPaint(); lexiChartDraw(); } }
+function lexiChartReset(){ const st = window._lexiChart; if(st){ st.i0 = 0; st.n = st.bars.length; lexiChartDraw(); } }
+function lexiChartZoom(f, ev){
+  const st = window._lexiChart; if(!st || !st.bars.length) return;
+  const cv = document.getElementById('lcCanvas'), b = cv.getBoundingClientRect(), geo = lexiChartGeo(b.width);
+  const frac = ev ? Math.max(0, Math.min(1, (ev.clientX - b.left) / geo.plotW)) : 1;   // the buttons and keys zoom toward the newest bars
+  const total = st.bars.length, n0 = Math.max(2, Math.min(total, Math.round(st.n)));
+  const n1 = Math.max(Math.min(total, 12), Math.min(total, Math.round(n0 * f)));
+  const anchor = st.i0 + frac * n0;
+  st.n = n1; st.i0 = Math.max(0, Math.min(total - n1, Math.round(anchor - frac * n1)));
+  lexiChartDraw();
+}
+function lexiChartGeo(cssW){
+  const narrow = cssW < 560, cssH = narrow ? 330 : 440, axisW = narrow ? 54 : 66, botH = 22, volH = Math.round(cssH * .2), gap = 8, top = 8;
+  const priceH = cssH - botH - volH - gap - top;
+  return {cssW, cssH, axisW, botH, volH, gap, top, plotW: cssW - axisW - 4, priceH, volTop: top + priceH + gap, narrow};
+}
+function lexiChartPointer(e){
+  const st = window._lexiChart; if(!st || !st.bars.length) return;
+  const cv = document.getElementById('lcCanvas'), b = cv.getBoundingClientRect(), geo = lexiChartGeo(b.width);
+  if(st.drag){
+    const step = geo.plotW / Math.max(2, st.n), dx = e.clientX - st.drag.x0;
+    if(Math.abs(dx) > 3) st.drag.moved = true;
+    if(st.drag.moved){ cv.style.cursor = 'grabbing'; st.i0 = Math.max(0, Math.min(st.bars.length - st.n, Math.round(st.drag.i0 - dx / step))); }
+  }
+  const step = geo.plotW / Math.max(2, st.n), i = Math.floor((e.clientX - b.left) / step);
+  st.cross = Math.max(0, Math.min(st.bars.length - 1, st.i0 + Math.max(0, Math.min(st.n - 1, i))));
+  st.crossY = e.clientY - b.top;
+  lexiChartDraw(); lexiChartOhlc();
+}
+function lexiChartOhlc(){
+  const st = window._lexiChart, el = document.getElementById('lcOhlc'); if(!st || !el) return;
+  const bars = st.bars; if(!bars.length){ el.textContent = ''; return; }
+  const i = st.cross == null ? bars.length - 1 : st.cross, b = bars[i], prev = i > 0 ? bars[i - 1][4] : (st.tf === '1D' && st.prevClose ? st.prevClose : b[1]);
+  const ch = b[4] - prev, up = ch >= 0, col = up ? 'var(--ok)' : 'var(--danger)';
+  el.innerHTML = `<span style="color:var(--muted)">${esc(lexiChartWhen(b[0], st.tf, true))}</span> &nbsp; O <b style="color:${col}">${lexiNum(b[1])}</b> H <b style="color:${col}">${lexiNum(b[2])}</b> L <b style="color:${col}">${lexiNum(b[3])}</b> C <b style="color:${col}">${lexiNum(b[4])}</b> <span style="color:${col}">${ch >= 0 ? '+' : '−'}${lexiNum(Math.abs(ch))} (${lexiPct(prev ? ch / prev * 100 : null)})</span>${b[5] ? ' &nbsp; Vol <b>' + lexiVol(b[5]) + '</b>' : ''}`;
+  const cv = document.getElementById('lcCanvas');
+  if(cv) cv.setAttribute('aria-label', `${st.x.name} ${st.tf} chart. ${lexiChartWhen(b[0], st.tf, true)}: open ${lexiNum(b[1])}, high ${lexiNum(b[2])}, low ${lexiNum(b[3])}, close ${lexiNum(b[4])}. Arrow keys move along the chart, plus and minus zoom.`);
+}
+async function lexiChartFetch(tf){
+  const st = window._lexiChart;
+  return fetch('/api/market/candles?symbol=' + encodeURIComponent(st.x.symbol) + '&range=' + encodeURIComponent(tf.toUpperCase()), {headers: apiHeaders()})
+    .then(r => r.json()).catch(() => ({ok: false, message: 'candles could not be read'}));
+}
+function lexiChartUse(r, reset){
+  const st = window._lexiChart; if(!st) return;
+  const oldLen = st.bars.length, atEnd = st.i0 + st.n >= oldLen;
+  st.bars = r.candles; st.prevClose = r.prevClose; st.note = r.note || ''; st.err = '';
+  if(reset || !oldLen){ st.i0 = 0; st.n = st.bars.length; }
+  else if(atEnd){ st.i0 = Math.max(0, st.bars.length - st.n); }
+  const el = document.getElementById('lcNote'); if(el) el.textContent = st.note;
+  lexiChartDraw(); lexiChartOhlc();
+}
+async function lexiChartLoad(tf){
+  const st = window._lexiChart; if(!st) return;
+  st.tf = tf; const gen = ++st.gen; st.cross = null;
+  lexiChartTfPaint();
+  const hit = st.cache[tf];
+  if(hit && Date.now() - hit.at < LEXI_CHART_LIVE_MS){ lexiChartUse(hit.r, true); return; }
+  st.loading = true; st.err = ''; st.bars = []; lexiChartDraw();
+  const r = await lexiChartFetch(tf);
+  if(window._lexiChart !== st || st.gen !== gen) return;
+  st.loading = false;
+  if(r.ok && r.candles && r.candles.length){ st.cache[tf] = {at: Date.now(), r}; lexiChartUse(r, true); return; }
+  /* No candles: draw the closing prices the card already holds, as a line. */
+  const h = (st.x.history && st.x.history.length > 1 ? st.x.history : st.x.closes || []).filter(c => c && c[1] != null);
+  st.err = (r && r.message) || 'candles are not available right now';
+  if(h.length > 1){ st.type = 'line'; lexiChartToolsPaint(); lexiChartUse({candles: h.map(c => [Date.parse(c[0] + 'T10:00:00Z'), c[1], c[1], c[1], c[1], 0]), prevClose: null, note: 'Candles are not available (' + st.err + '), so this shows the closing prices.'}, true); }
+  else { lexiChartDraw(); }
+}
+async function lexiChartRefresh(){
+  const st = window._lexiChart; if(!st || st.refreshing || st.loading || document.hidden) return;
+  st.refreshing = true;
+  try{
+    const [c, q] = await Promise.all([lexiChartFetch(st.tf),
+      fetch('/api/market/quote?symbol=' + encodeURIComponent(st.x.symbol), {headers: apiHeaders()}).then(r => r.json()).catch(() => null)]);
+    if(window._lexiChart !== st) return;
+    if(q && q.ok && q.quote){
+      st.x = Object.assign({}, st.x, q.quote, {sector: st.x.sector, industry: st.x.industry, source: q.source || st.x.source, news: st.x.news, history: q.quote.history || st.x.history});
+      lexiChartHead(); lexiChartStatsPaint();
+    }
+    if(c.ok && c.candles && c.candles.length){ st.cache[st.tf] = {at: Date.now(), r: c}; lexiChartUse(c, false); }
+    st.stamp = new Date().toLocaleTimeString('en-IN', {hour:'2-digit', minute:'2-digit', second:'2-digit', hour12:false, timeZone:'Asia/Kolkata'});
+    lexiChartLiveBadge();
+  } finally { st.refreshing = false; }
+}
+function lexiChartStatsPaint(){
+  const st = window._lexiChart, el = document.getElementById('lcStats'); if(!st || !el) return;
+  const x = st.x, r = x.returnsPct || {}, up = (x.change || 0) >= 0;
+  const pos = x.high52 > x.low52 ? Math.max(0, Math.min(100, (x.price - x.low52) / (x.high52 - x.low52) * 100)) : null;
+  const cell = (k, v) => `<div style="min-width:0"><div class="small-note">${k}</div><div style="font-weight:600">${v}</div></div>`;
+  const ret = (k, v) => v == null ? '' : cell(k, `<span style="color:${v >= 0 ? 'var(--ok)' : 'var(--danger)'}">${lexiPct(v)}</span>`);
+  const rsi = x.rsi14 == null ? '' : cell('RSI (14)', `${x.rsi14} <span class="small-note">${x.rsi14 >= 70 ? 'overbought zone' : x.rsi14 <= 30 ? 'oversold zone' : 'mid-range'}</span>`);
+  const news = (x.news || []).filter(n => n && n.title).map(n => `<li style="margin:3px 0">${esc(n.title)} <span class="small-note">${esc(n.publisher || '')}${n.time ? ' · ' + esc(new Date(n.time).toLocaleDateString('en-IN', {day:'numeric', month:'short'})) : ''}</span></li>`).join('');
+  const trend = x.trend ? x.trend.split(':') : null;
+  el.innerHTML = `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(135px,1fr));gap:10px 14px;padding:10px 0;border-top:1px solid var(--line)">
+      ${x.dayLow != null && x.dayHigh != null ? cell('Day range', `${lexiNum(x.dayLow)} – ${lexiNum(x.dayHigh)}`) : ''}
+      ${cell('52-week range', `${lexiNum(x.low52)} – ${lexiNum(x.high52)}`)}
+      ${x.fromHigh52Pct != null ? cell('From 52-week high', `<span style="color:${x.fromHigh52Pct >= 0 ? 'var(--ok)' : 'var(--danger)'}">${lexiPct(x.fromHigh52Pct)}</span>`) : ''}
+      ${ret('1 week', r.week)}${ret('1 month', r.month)}${ret('3 months', r.quarter)}${ret('6 months', r.halfYear)}${ret('1 year', r.year)}
+      ${rsi}
+      ${x.sma20 != null ? cell('20-day average', lexiNum(x.sma20)) : ''}${x.sma50 != null ? cell('50-day average', lexiNum(x.sma50)) : ''}${x.sma200 != null ? cell('200-day average', lexiNum(x.sma200)) : ''}
+      ${x.pe != null ? cell('P/E', lexiNum(x.pe)) : ''}${x.pb != null ? cell('P/B', lexiNum(x.pb)) : ''}${x.dividendYieldPct != null ? cell('Dividend yield', lexiNum(x.dividendYieldPct) + '%') : ''}
+    </div>
+    ${pos != null ? `<div style="margin:0 0 10px"><div class="small-note" style="display:flex;justify-content:space-between"><span>52-week low ${lexiNum(x.low52)}</span><span>high ${lexiNum(x.high52)}</span></div>
+      <div style="position:relative;height:8px;border-radius:4px;background:var(--line)"><div style="position:absolute;left:calc(${pos.toFixed(1)}% - 6px);top:-3px;width:12px;height:14px;border-radius:4px;background:${up ? 'var(--ok)' : 'var(--danger)'};border:2px solid var(--card)"></div></div></div>` : ''}
+    ${trend ? `<div style="margin:0 0 8px"><b>${esc(trend[0][0].toUpperCase() + trend[0].slice(1))}</b> <span class="small-note">${esc(trend.slice(1).join(':').trim())}</span></div>` : ''}
+    ${news ? `<div style="margin:0 0 8px"><div class="small-note">Recent headlines</div><ul style="margin:2px 0 0 18px;padding:0">${news}</ul></div>` : ''}`;
+}
+function lexiChartDraw(){
+  const st = window._lexiChart, cv = document.getElementById('lcCanvas'); if(!st || !cv) return;
+  const cssW = Math.max(280, cv.parentNode.clientWidth), geo = lexiChartGeo(cssW), dpr = Math.min(2, window.devicePixelRatio || 1);
+  const {cssH, axisW, botH, volH, top, plotW, priceH, volTop, narrow} = geo;
+  if(cv.width !== Math.round(cssW * dpr) || cv.height !== Math.round(cssH * dpr)){
+    cv.width = Math.round(cssW * dpr); cv.height = Math.round(cssH * dpr); cv.style.height = cssH + 'px';
+  }
+  const g = cv.getContext('2d'); g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, cssW, cssH);
+  const cs = getComputedStyle(document.body), css = (n, d) => cs.getPropertyValue(n).trim() || d;
+  const OK = css('--ok', '#047857'), BAD = css('--danger', '#B91C1C'), LINE = css('--line', '#EEE8E2'), TXT = css('--text', '#0A1931'), MUTED = css('--muted', '#5F6B7A'),
+    CARD = css('--card', '#fff'), GOLD = css('--gold', '#F25C2A'), INFO = css('--info', '#1E6B85');
+  const font = (px, w) => (w || 400) + ' ' + px + 'px ' + (cs.fontFamily || 'sans-serif');
+  const msg = document.getElementById('lcMsg'), bars = st.bars, total = bars.length;
+  if(!total){
+    if(msg) msg.textContent = st.loading ? 'Loading prices…' : (st.err ? 'Could not load the chart: ' + st.err : 'No prices for this timeframe.');
+    return;
+  }
+  if(msg) msg.textContent = '';
+  const n = Math.max(2, Math.min(total, Math.round(st.n || total))), i0 = Math.max(0, Math.min(total - n, Math.round(st.i0 || 0)));
+  st.n = n; st.i0 = i0;
+  const vis = bars.slice(i0, i0 + n), step = plotW / n, bw = Math.max(1, Math.min(16, step * .68)), xAt = i => (i - i0 + .5) * step;
+  const closes = bars.map(b => b[4]);
+  const mas = st.ma ? [[50, GOLD], [200, MUTED]].map(([w, c]) => ({w, c, v: total >= w ? lexiChartSma(closes, w) : null})).filter(m => m.v) : [];
+  let lo = Math.min(...vis.map(b => st.type === 'line' ? b[4] : b[3])), hi = Math.max(...vis.map(b => st.type === 'line' ? b[4] : b[2]));
+  mas.forEach(m => m.v.slice(i0, i0 + n).forEach(v => { if(v != null){ lo = Math.min(lo, v); hi = Math.max(hi, v); } }));
+  const pad = (hi - lo || hi * .02 || 1) * .06; lo -= pad; hi += pad;
+  const yAt = v => top + (hi - v) / (hi - lo) * priceH, valAt = y => hi - (y - top) / priceH * (hi - lo);
+  const tk = lexiChartTicks(lo, hi, narrow ? 5 : 7), dec = tk.step < 1 ? 2 : tk.step < 10 ? 1 : 0;
+  const tag = (txt, y, bg, fg) => { g.font = font(11, 600); const w = g.measureText(txt).width + 10; g.fillStyle = bg; g.fillRect(plotW + 4, y - 9, Math.min(axisW - 4, w), 18); g.fillStyle = fg; g.textAlign = 'left'; g.textBaseline = 'middle'; g.fillText(txt, plotW + 9, y + .5); };
+  // grid and the price scale
+  g.lineWidth = 1; g.textAlign = 'left'; g.textBaseline = 'middle';
+  tk.ticks.forEach(v => { const y = Math.round(yAt(v)) + .5; g.strokeStyle = LINE; g.beginPath(); g.moveTo(0, y); g.lineTo(plotW, y); g.stroke(); g.fillStyle = MUTED; g.font = font(11); g.fillText(Number(v).toLocaleString('en-IN', {minimumFractionDigits: dec, maximumFractionDigits: dec}), plotW + 8, y); });
+  // 52-week high and low
+  const x = st.x;
+  [[x.high52, '52w high'], [x.low52, '52w low']].forEach(([v]) => {
+    if(v == null || v < lo || v > hi) return;
+    const y = Math.round(yAt(v)) + .5; g.save(); g.strokeStyle = INFO; g.globalAlpha = .75; g.setLineDash([2, 4]); g.beginPath(); g.moveTo(0, y); g.lineTo(plotW, y); g.stroke(); g.restore();
+    tag(lexiNum(v, dec), y, INFO, '#fff');
+  });
+  // volume
+  const vmax = Math.max(...vis.map(b => b[5] || 0));
+  if(vmax > 0){
+    vis.forEach((b, k) => { const h = Math.max(1, (b[5] || 0) / vmax * (volH - 4)); g.globalAlpha = .42; g.fillStyle = b[4] >= b[1] ? OK : BAD; g.fillRect(Math.round(xAt(i0 + k) - bw / 2), volTop + volH - h, Math.max(1, Math.round(bw)), h); });
+    g.globalAlpha = 1; g.fillStyle = MUTED; g.font = font(10); g.textAlign = 'left'; g.fillText('Vol ' + lexiVol(vmax) + ' max', 4, volTop + 8);
+  }
+  g.globalAlpha = 1;
+  // the prices
+  if(st.type === 'line'){
+    const col = vis[vis.length - 1][4] >= vis[0][4] ? OK : BAD;
+    g.beginPath(); vis.forEach((b, k) => { const px = xAt(i0 + k), py = yAt(b[4]); k ? g.lineTo(px, py) : g.moveTo(px, py); });
+    g.strokeStyle = col; g.lineWidth = 2; g.lineJoin = 'round'; g.stroke();
+    g.lineTo(xAt(i0 + vis.length - 1), top + priceH); g.lineTo(xAt(i0), top + priceH); g.closePath(); g.globalAlpha = .09; g.fillStyle = col; g.fill(); g.globalAlpha = 1;
+  } else {
+    vis.forEach((b, k) => {
+      const px = Math.round(xAt(i0 + k)) + .5, up = b[4] >= b[1], col = up ? OK : BAD, yo = yAt(b[1]), yc = yAt(b[4]);
+      g.strokeStyle = col; g.fillStyle = col; g.lineWidth = 1;
+      g.beginPath(); g.moveTo(px, yAt(b[2])); g.lineTo(px, yAt(b[3])); g.stroke();
+      g.fillRect(Math.round(px - bw / 2), Math.min(yo, yc), Math.max(1, Math.round(bw)), Math.max(1, Math.abs(yc - yo)));
+    });
+  }
+  // moving averages
+  mas.forEach(m => {
+    g.beginPath(); let pen = false;
+    m.v.slice(i0, i0 + n).forEach((v, k) => { if(v == null){ pen = false; return; } const px = xAt(i0 + k), py = yAt(v); pen ? g.lineTo(px, py) : g.moveTo(px, py); pen = true; });
+    g.strokeStyle = m.c; g.lineWidth = 1.4; g.setLineDash([]); g.stroke();
+  });
+  // the day's opening reference on a one-day chart
+  if(st.tf === '1D' && st.prevClose != null && st.prevClose >= lo && st.prevClose <= hi){
+    const y = Math.round(yAt(st.prevClose)) + .5; g.save(); g.strokeStyle = MUTED; g.setLineDash([1, 3]); g.beginPath(); g.moveTo(0, y); g.lineTo(plotW, y); g.stroke(); g.restore();
+  }
+  // the last price
+  const last = bars[total - 1], lastUp = last[4] >= (total > 1 ? bars[total - 2][4] : last[1]);
+  if(last[4] >= lo && last[4] <= hi){
+    const y = Math.round(yAt(last[4])) + .5; g.save(); g.strokeStyle = lastUp ? OK : BAD; g.setLineDash([3, 3]); g.globalAlpha = .8; g.beginPath(); g.moveTo(0, y); g.lineTo(plotW, y); g.stroke(); g.restore();
+    tag(lexiNum(last[4], dec), y, lastUp ? OK : BAD, '#fff');
+  }
+  // the time scale
+  const m = Math.max(2, Math.min(7, Math.floor(plotW / (narrow ? 80 : 120)))); g.fillStyle = MUTED; g.font = font(11); g.textBaseline = 'alphabetic';
+  for(let k = 0; k < m; k++){
+    const i = i0 + Math.round(k * (n - 1) / (m - 1)), px = xAt(i), txt = lexiChartWhen(bars[i][0], st.tf, false);
+    g.textAlign = k === 0 ? 'left' : k === m - 1 ? 'right' : 'center'; g.fillText(txt, k === 0 ? Math.max(0, px - 4) : k === m - 1 ? Math.min(plotW, px + 4) : px, cssH - 6);
+  }
+  // the crosshair
+  if(st.cross != null && st.cross >= i0 && st.cross < i0 + n){
+    const px = Math.round(xAt(st.cross)) + .5; g.save(); g.strokeStyle = MUTED; g.setLineDash([3, 3]); g.lineWidth = 1;
+    g.beginPath(); g.moveTo(px, top); g.lineTo(px, cssH - botH); g.stroke();
+    if(st.crossY >= top && st.crossY <= top + priceH){ g.beginPath(); g.moveTo(0, Math.round(st.crossY) + .5); g.lineTo(plotW, Math.round(st.crossY) + .5); g.stroke(); }
+    g.restore();
+    if(st.crossY >= top && st.crossY <= top + priceH) tag(lexiNum(valAt(st.crossY), dec), st.crossY, TXT, CARD);
+    const lbl = lexiChartWhen(bars[st.cross][0], st.tf, true); g.font = font(11, 600); const w = g.measureText(lbl).width + 12, lx = Math.max(0, Math.min(plotW - w, px - w / 2));
+    g.fillStyle = TXT; g.fillRect(lx, cssH - botH + 1, w, 18); g.fillStyle = CARD; g.textAlign = 'left'; g.textBaseline = 'middle'; g.fillText(lbl, lx + 6, cssH - botH + 10.5);
+  }
 }
 
 /* LEXI AI: a question asking for a chart, and which grouping it names.
