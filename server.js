@@ -1673,6 +1673,138 @@ app.post('/api/market/nav', checkApiKey, async (req, res) => {
   }
 });
 
+/* ---------------------------------------------------------------------
+   LIVE MARKET PRICES
+
+   "HDFC Bank ka share live dikhao", "Reliance ya TCS, konsa loon?": LEXI
+   reads any listed company or index here. The page sends a name or a
+   symbol; this resolves it to an NSE (or BSE) listing, reads a year of
+   daily prices and works out what an advisor looks at: the day's move,
+   where it sits in its 52-week range, returns, RSI and the 20/50/200-day
+   averages. Headlines come with the search.
+
+   The source is Yahoo Finance's public chart and search endpoints, which
+   need no key. They are unofficial and can change or be rate-limited, so
+   everything that knows their shape is in the two functions below: a
+   licensed feed replaces them without touching anything else. Answers are
+   kept for a minute. CRM_MARKET_URL points it elsewhere (the tests).
+   --------------------------------------------------------------------- */
+const MARKET_URL = String(process.env.CRM_MARKET_URL || 'https://query1.finance.yahoo.com').replace(/\/+$/, '');
+const MARKET_SOURCE = 'Yahoo Finance';
+const marketCache = new Map();
+async function marketGet(path, ttl) {
+  const url = MARKET_URL + path;
+  const hit = marketCache.get(url);
+  if (hit && Date.now() - hit.at < ttl) return hit.json;
+  const res = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0 (compatible; Finowise-CRM/1.0)', Accept: 'application/json' },
+    signal: AbortSignal.timeout(12000) });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error('the price feed answered ' + res.status);
+  const json = await res.json();
+  marketCache.set(url, { at: Date.now(), json });
+  if (marketCache.size > 400) marketCache.delete(marketCache.keys().next().value);
+  return json;
+}
+// The names people use for the indices, mapped to the feed's symbols.
+const MARKET_ALIASES = {
+  'nifty': '^NSEI', 'nifty 50': '^NSEI', 'nifty50': '^NSEI', 'sensex': '^BSESN', 'bse sensex': '^BSESN',
+  'bank nifty': '^NSEBANK', 'banknifty': '^NSEBANK', 'nifty bank': '^NSEBANK', 'nifty it': '^CNXIT',
+  'nifty midcap': '^NSEMDCP50', 'midcap': '^NSEMDCP50', 'nifty pharma': '^CNXPHARMA', 'nifty auto': '^CNXAUTO',
+};
+const marketIndian = (s) => /\.(NS|BO)$/.test(s) || /^\^/.test(s);
+/* A name or a symbol to listings, best first: NSE before BSE, and the
+   headlines the search returned. */
+async function marketSearch(q) {
+  const key = q.toLowerCase().replace(/\s+/g, ' ').trim();
+  if (MARKET_ALIASES[key]) return { listings: [{ symbol: MARKET_ALIASES[key], name: q.toUpperCase(), type: 'INDEX' }], news: [] };
+  const json = await marketGet('/v1/finance/search?q=' + encodeURIComponent(q) + '&quotesCount=10&newsCount=6&lang=en-IN&region=IN', 10 * 60 * 1000);
+  const quotes = ((json && json.quotes) || []).filter((x) => x && x.symbol && marketIndian(x.symbol)
+    && /^(EQUITY|INDEX|ETF)$/i.test(x.quoteType || 'EQUITY'));
+  quotes.sort((a, b) => (/\.NS$/.test(b.symbol) - /\.NS$/.test(a.symbol)));
+  const seen = new Set(), listings = [];
+  quotes.forEach((x) => {
+    const base = x.symbol.replace(/\.(NS|BO)$/, '');
+    if (seen.has(base)) return; seen.add(base);
+    listings.push({ symbol: x.symbol, name: x.longname || x.shortname || x.symbol, type: x.quoteType || 'EQUITY',
+      sector: x.sectorDisp || x.sector || '', industry: x.industryDisp || x.industry || '' });
+  });
+  // A bare NSE code ("TCS", "HDFCBANK") that the search did not return still gets tried as itself.
+  if (!listings.length && /^[A-Z0-9&-]{2,20}$/i.test(q.trim())) listings.push({ symbol: q.trim().toUpperCase() + '.NS', name: q.trim().toUpperCase(), type: 'EQUITY' });
+  const news = ((json && json.news) || []).slice(0, 6).map((n) => ({ title: n.title, publisher: n.publisher || '',
+    time: n.providerPublishTime ? new Date(n.providerPublishTime * 1000).toISOString() : '' }));
+  return { listings, news };
+}
+const marketRound = (n, d = 2) => (n == null || !isFinite(n) ? null : Math.round(n * 10 ** d) / 10 ** d);
+function marketSma(c, n) { return c.length >= n ? c.slice(-n).reduce((a, b) => a + b, 0) / n : null; }
+function marketRsi(c, n = 14) {
+  if (c.length <= n) return null;
+  let gain = 0, loss = 0;
+  for (let i = 1; i <= n; i++) { const d = c[i] - c[i - 1]; if (d > 0) gain += d; else loss -= d; }
+  gain /= n; loss /= n;
+  for (let i = n + 1; i < c.length; i++) {
+    const d = c[i] - c[i - 1];
+    gain = (gain * (n - 1) + Math.max(d, 0)) / n; loss = (loss * (n - 1) + Math.max(-d, 0)) / n;
+  }
+  return loss === 0 ? 100 : 100 - 100 / (1 + gain / loss);
+}
+/* One listing's year of daily prices, read down to what an advisor uses. */
+async function marketQuote(symbol) {
+  const json = await marketGet('/v8/finance/chart/' + encodeURIComponent(symbol) + '?range=1y&interval=1d', 60 * 1000);
+  const r = json && json.chart && json.chart.result && json.chart.result[0];
+  if (!r || !r.meta) return null;
+  const m = r.meta, q = ((r.indicators || {}).quote || [])[0] || {};
+  const bars = (r.timestamp || []).map((t, i) => ({ t: t * 1000, c: (q.close || [])[i], h: (q.high || [])[i], l: (q.low || [])[i] }))
+    .filter((b) => b.c != null && isFinite(b.c));
+  if (!bars.length && m.regularMarketPrice == null) return null;
+  const price = m.regularMarketPrice != null ? m.regularMarketPrice : bars[bars.length - 1].c;
+  const time = m.regularMarketTime ? m.regularMarketTime * 1000 : bars[bars.length - 1].t;
+  // The previous session's close: the last bar from an earlier trading day than the price's own (in IST).
+  const istDay = (ms) => new Date(ms + 330 * 60000).toISOString().slice(0, 10);
+  const earlier = bars.filter((b) => istDay(b.t) < istDay(time));
+  const prev = earlier.length ? earlier[earlier.length - 1].c : (m.previousClose != null ? m.previousClose : null);
+  const closes = bars.map((b) => b.c);
+  if (closes.length && istDay(bars[bars.length - 1].t) === istDay(time)) closes[closes.length - 1] = price; else closes.push(price);
+  const back = (n) => (closes.length > n ? (price / closes[closes.length - 1 - n] - 1) * 100 : null);
+  const hi = m.fiftyTwoWeekHigh != null ? m.fiftyTwoWeekHigh : Math.max(...bars.map((b) => b.h || b.c));
+  const lo = m.fiftyTwoWeekLow != null ? m.fiftyTwoWeekLow : Math.min(...bars.map((b) => b.l || b.c));
+  const sma50 = marketSma(closes, 50), sma200 = marketSma(closes, 200);
+  return {
+    symbol: m.symbol || symbol, name: m.longName || m.shortName || symbol, exchange: m.fullExchangeName || m.exchangeName || '',
+    currency: m.currency || 'INR', price: marketRound(price), time: new Date(time).toISOString(),
+    prevClose: marketRound(prev), change: prev ? marketRound(price - prev) : null, changePct: prev ? marketRound((price / prev - 1) * 100) : null,
+    dayHigh: marketRound(m.regularMarketDayHigh), dayLow: marketRound(m.regularMarketDayLow),
+    high52: marketRound(hi), low52: marketRound(lo), fromHigh52Pct: hi ? marketRound((price / hi - 1) * 100) : null,
+    returnsPct: { week: marketRound(back(5)), month: marketRound(back(21)), quarter: marketRound(back(63)), halfYear: marketRound(back(126)),
+      year: closes.length > 200 ? marketRound((price / closes[0] - 1) * 100) : null },
+    rsi14: marketRound(marketRsi(closes), 1), sma20: marketRound(marketSma(closes, 20)), sma50: marketRound(sma50), sma200: marketRound(sma200),
+    trend: sma50 && sma200 ? (price > sma50 && sma50 > sma200 ? 'uptrend: above the 50-day average, which is above the 200-day'
+      : price < sma50 && sma50 < sma200 ? 'downtrend: below the 50-day average, which is below the 200-day'
+      : 'mixed: between its 50-day and 200-day averages') : null,
+    closes: bars.slice(-60).map((b, i, a) => [istDay(b.t), marketRound(i === a.length - 1 && istDay(b.t) === istDay(time) ? price : b.c)]),
+  };
+}
+// GET /api/market/quote?q=<company, index or symbol>
+app.get('/api/market/quote', checkApiKey, async (req, res) => {
+  const q = String(req.query.q || '').trim().slice(0, 80);
+  if (!q) return res.status(400).json({ ok: false, message: 'Say which company or index.' });
+  res.set('Cache-Control', 'no-store');
+  try {
+    const found = await marketSearch(q);
+    for (const l of found.listings.slice(0, 3)) {
+      const quote = await marketQuote(l.symbol);
+      if (!quote) continue;
+      if (l.sector) quote.sector = l.sector;
+      if (l.industry) quote.industry = l.industry;
+      return res.json({ ok: true, source: MARKET_SOURCE, fetchedAt: new Date().toISOString(), query: q, quote,
+        news: found.news, alternatives: found.listings.filter((x) => x.symbol !== l.symbol).slice(0, 3) });
+    }
+    res.json({ ok: false, notFound: true, query: q, message: 'No NSE or BSE listing matched "' + q + '".' });
+  } catch (e) {
+    // As with NAVs: the feed being down is an answer for LEXI to pass on, not a failed request.
+    res.json({ ok: false, query: q, message: e && e.name === 'TimeoutError' ? 'the price feed did not answer in time' : 'live prices could not be read: ' + (e && e.message || e) });
+  }
+});
+
 // One send, whether it came from the CRM or from a client's own page. `allowed`
 // is null for a signed-in sender and a list of addresses for a public one, so a
 // form link can write to the people it concerns and to nobody else.
