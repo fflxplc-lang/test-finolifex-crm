@@ -83,6 +83,7 @@ suite(async t => {
     if(!r.ok || x.symbol !== 'HDFCBANK.NS') throw new Error(JSON.stringify(r).slice(0, 300));
     if(x.price !== 707 || x.change !== 7 || x.changePct !== 1) throw new Error('day ' + JSON.stringify({price:x.price, change:x.change, pct:x.changePct}));
     if(!(x.rsi14 > 0 && x.rsi14 <= 100) || !x.sma50 || !x.sma200 || !/^uptrend/.test(x.trend || '')) throw new Error('technicals ' + JSON.stringify({rsi:x.rsi14, sma50:x.sma50, sma200:x.sma200, trend:x.trend}));
+    if((x.history || []).length < 250 || x.history[x.history.length - 1][1] !== 707) throw new Error('year of closes ' + JSON.stringify((x.history || []).slice(-2)));
     if((x.closes || []).length !== 60 || x.sector !== 'Financial Services' || !/52-week low/.test((r.news[0] || {}).title || '')) throw new Error('extras ' + JSON.stringify({closes:(x.closes||[]).length, sector:x.sector, news:r.news}));
     return 'HDFCBANK.NS ₹707, +7 (+1.00%), RSI ' + x.rsi14 + ', ' + x.trend.split(':')[0] + ', NSE chosen over BSE and the US listing';
   });
@@ -119,6 +120,41 @@ suite(async t => {
     if(r.cards.length !== 2 || !/₹707/.test(r.cards[0]) || !/▲ 7/.test(r.cards[0]) || !/▼ 10/.test(r.cards[1])) throw new Error('cards ' + JSON.stringify(r.cards));
     if(!/MOCK MARKET ANSWER/.test(r.answer)) throw new Error('answer not shown');
     return 'both quotes and the Fair Value zone in the data; cards: ' + r.cards.map(c => c.split(' · ')[0]).join(' | ');
+  });
+  await t.step('a click on a price card opens the bigger chart: range, hover, averages, key figures, and closes again', async () => {
+    const r = await t.eval(async () => {
+      const out = {};
+      document.querySelector('.lexi-quote').click();
+      const ov = document.getElementById('lexiChartOv'); out.open = !!ov;
+      out.ranges = [...ov.querySelectorAll('[role=group] button')].map(b => b.textContent + (b.getAttribute('aria-pressed') === 'true' ? '*' : ''));
+      out.label0 = document.getElementById('lexiChartSvg').getAttribute('aria-label');
+      out.avgs = ov.querySelectorAll('path[stroke-dasharray]').length;
+      const hit = document.getElementById('lexiChartHit'), b = hit.getBoundingClientRect();
+      const tip0 = document.getElementById('lexiChartTip').innerText;
+      hit.dispatchEvent(new PointerEvent('pointermove', {clientX: b.left + 2, clientY: b.top + 5, bubbles: true}));
+      out.tipFirst = document.getElementById('lexiChartTip').innerText; out.tipLast = tip0;
+      out.cross = document.getElementById('lexiChartCross').style.display !== 'none';
+      [...ov.querySelectorAll('[role=group] button')].find(x => x.textContent === '1M').click();
+      out.label1 = document.getElementById('lexiChartSvg').getAttribute('aria-label');
+      out.text = ov.innerText.replace(/\s+/g, ' ');
+      out.href = ov.querySelector('a[href*="tradingview"]').getAttribute('href');
+      out.sector = /Financial Services/.test(out.text); out.news = /52-week low/.test(out.text);
+      document.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape', bubbles: true}));
+      out.closed = !document.getElementById('lexiChartOv');
+      return out;
+    });
+    if(!r.open || r.ranges.join() !== '1M,3M,6M*,1Y') throw new Error('ranges ' + JSON.stringify(r.ranges));
+    if(!/251 sessions|250 sessions/.test(r.label0) && !/ 126 sessions/.test(r.label0)) throw new Error('6M should plot 126 sessions: ' + r.label0);
+    if(r.avgs < 1) throw new Error('no moving-average line');
+    if(!r.cross || r.tipFirst === r.tipLast || !/₹/.test(r.tipFirst)) throw new Error('hover ' + JSON.stringify([r.cross, r.tipFirst, r.tipLast]));
+    if(!/ 21 sessions/.test(r.label1)) throw new Error('1M should plot 21 sessions: ' + r.label1);
+    for(const w of ['52-week range', 'RSI (14)', '50-day average', '200-day average', '1 month']) if(!r.text.includes(w)) throw new Error('missing ' + w);
+    if(r.href !== 'https://www.tradingview.com/chart/?symbol=NSE%3AHDFCBANK') throw new Error('link ' + r.href);
+    if(!r.sector || !r.news) throw new Error('sector or headline missing');
+    if(!r.closed) throw new Error('Escape did not close it');
+    const u = lastUser();
+    if(u.includes('"history"')) throw new Error('the year of prices was sent to the model');
+    return 'ranges ' + r.ranges.join(' ') + '; hover moves the figure; 6M = 126 sessions, 1M = 21; Escape closes; the model never gets the year';
   });
   await t.step('a question about the CRM\'s records reads no prices', async () => {
     const before = hits.length;

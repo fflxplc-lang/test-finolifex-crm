@@ -1764,6 +1764,8 @@ async function marketQuote(symbol) {
   const prev = earlier.length ? earlier[earlier.length - 1].c : (m.previousClose != null ? m.previousClose : null);
   const closes = bars.map((b) => b.c);
   if (closes.length && istDay(bars[bars.length - 1].t) === istDay(time)) closes[closes.length - 1] = price; else closes.push(price);
+  const history = bars.map((b) => [istDay(b.t), marketRound(b.c)]);
+  if (history.length && history[history.length - 1][0] === istDay(time)) history[history.length - 1][1] = marketRound(price); else history.push([istDay(time), marketRound(price)]);
   const back = (n) => (closes.length > n ? (price / closes[closes.length - 1 - n] - 1) * 100 : null);
   const hi = m.fiftyTwoWeekHigh != null ? m.fiftyTwoWeekHigh : Math.max(...bars.map((b) => b.h || b.c));
   const lo = m.fiftyTwoWeekLow != null ? m.fiftyTwoWeekLow : Math.min(...bars.map((b) => b.l || b.c));
@@ -1781,6 +1783,8 @@ async function marketQuote(symbol) {
       : price < sma50 && sma50 < sma200 ? 'downtrend: below the 50-day average, which is below the 200-day'
       : 'mixed: between its 50-day and 200-day averages') : null,
     closes: bars.slice(-60).map((b, i, a) => [istDay(b.t), marketRound(i === a.length - 1 && istDay(b.t) === istDay(time) ? price : b.c)]),
+    // The whole year, for the large chart a click on the card opens. Not sent to the model.
+    history: history,
   };
 }
 // GET /api/market/quote?q=<company, index or symbol>

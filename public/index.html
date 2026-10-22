@@ -56086,7 +56086,7 @@ function bossTurnFoot(t){
       <div class="small-note" style="margin:2px 0 4px">${t.chart.total} records, counted live</div>
       ${analyticsBarSvg(t.chart.rows, ANALYTICS_COLORS[0], t.chart.title)}
       <button class="btn sm ghost" onclick="aiCloseP();${t.chart.src==='tasks' ? `navigate('analytics');setTimeout(()=>{const e=document.getElementById('anTasks');if(e)e.scrollIntoView({behavior:'smooth'})},50)` : `window._anSrc='${t.chart.src||'clients'}';navigate('analytics')`}">Open Analytics</button></div>` : '';
-  const mk = (t.market||[]).map(lexiQuoteCard).join('');
+  const mk = (t.market||[]).map((q, qi) => lexiQuoteCard(q, ai.turns.indexOf(t), qi)).join('');
   return (cl || sp || op || ch || mk) ? `${mk}${ch}<div class="ai-acts" style="flex-wrap:wrap">${op}${cl}</div>${sp}` : '';
 }
 
@@ -56743,13 +56743,13 @@ async function lexiMarketRead(names){
 }
 /* What the model reads: the same numbers, the price line cut to 30 closes. */
 function lexiMarketForAi(m, amount, shortlist){
-  const out = {quotes: m.quotes.map(x => Object.assign({}, x, {closes: (x.closes||[]).slice(-30).map(c => c[1])},
+  const out = {quotes: m.quotes.map(x => Object.assign({}, x, {closes: (x.closes||[]).slice(-30).map(c => c[1]), history: undefined},
     amount && x.price > 0 && !/^\^|^(NIFTY|BSESENSEX|BANKNIFTY)$/.test(x.symbol || '') ? {sharesAffordable: Math.floor(amount / x.price)} : {})), notFound: m.notFound, failed: m.failed};
   if(amount) out.investAmount = amount;
   if(shortlist) out.note = 'No company was named, so these are the Nifty 50 and five large, widely held companies chosen by default, not a screen of the whole market.';
   return out;
 }
-function lexiQuoteCard(x){
+function lexiQuoteCard(x, ti, qi){
   const up = (x.change || 0) >= 0, col = up ? 'var(--ok)' : 'var(--danger)';
   const f = v => v == null ? '—' : Number(v).toLocaleString('en-IN', {maximumFractionDigits:2});
   const pc = v => v == null ? '—' : (v > 0 ? '+' : '') + Number(v).toFixed(2) + '%';
@@ -56762,13 +56762,143 @@ function lexiQuoteCard(x){
   }
   const r = x.returnsPct || {};
   const when = x.time ? new Date(x.time).toLocaleString('en-IN', {day:'numeric', month:'short', hour:'numeric', minute:'2-digit'}) : '';
-  return `<div class="lexi-quote" style="margin:8px 0 4px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--card)">
+  const open = ti >= 0 && qi >= 0 ? ` role="button" tabindex="0" title="Open the bigger chart" onclick="lexiChartOpen(${ti},${qi})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();lexiChartOpen(${ti},${qi})}"` : '';
+  return `<div class="lexi-quote"${open} style="margin:8px 0 4px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--card);${open ? 'cursor:pointer' : ''}">
     <div style="display:flex;justify-content:space-between;gap:8px;align-items:baseline;flex-wrap:wrap">
       <div style="min-width:0"><b>${esc(x.name)}</b> <span class="small-note">${esc(x.symbol)}${x.exchange ? ' · ' + esc(x.exchange) : ''}</span></div>
       <div style="white-space:nowrap"><b style="font-size:16px">${x.currency === 'INR' ? '₹' : ''}${f(x.price)}</b>${x.change == null ? '' : ` <span style="color:${col};font-weight:600">${up ? '▲' : '▼'} ${f(Math.abs(x.change))} (${pc(x.changePct)})</span>`}</div>
     </div>${spark}
     <div class="small-note">52-week ${f(x.low52)} – ${f(x.high52)} · 1 month ${pc(r.month)} · 1 year ${pc(r.year)} · RSI ${x.rsi14 == null ? '—' : x.rsi14}${x.trend ? ' · ' + esc(x.trend.split(':')[0]) : ''}</div>
-    <div class="small-note">Live from ${esc(x.source || 'the price feed')}${when ? ', price at ' + esc(when) : ''}</div></div>`;
+    <div class="small-note" style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap"><span>Live from ${esc(x.source || 'the price feed')}${when ? ', price at ' + esc(when) : ''}</span>${open ? '<span style="color:var(--navy-ink);font-weight:600">Bigger chart ›</span>' : ''}</div></div>`;
+}
+
+/* A click on a price card opens the same prices larger: a line with a price
+   scale and dates, the 50- and 200-day averages where the history is long
+   enough, a range to pick, the figure under a finger or the pointer, the
+   numbers an advisor reads next to it, and a link to a full charting page. */
+const LEXI_CHART_RANGES = [['1M', 21], ['3M', 63], ['6M', 126], ['1Y', 0]];
+function lexiTradingViewSymbol(x){
+  const s = String(x.symbol || '');
+  const idx = {'^NSEI':'NSE:NIFTY', '^BSESN':'BSE:SENSEX', '^NSEBANK':'NSE:BANKNIFTY', '^CNXIT':'NSE:CNXIT', 'NIFTY':'NSE:NIFTY', 'BSESENSEX':'BSE:SENSEX', 'BANKNIFTY':'NSE:BANKNIFTY'};
+  if(idx[s]) return idx[s];
+  const code = c => c.replace(/[&-]/g, '_');
+  if(/\.NS$/i.test(s)) return 'NSE:' + code(s.replace(/\.NS$/i, ''));
+  if(/\.BO$/i.test(s)) return 'BSE:' + s.replace(/\.BO$/i, '');
+  return (/^\d+$/.test(s) ? 'BSE:' : 'NSE:') + code(s.replace(/^\^/, ''));
+}
+function lexiChartSeries(x){ return (x.history && x.history.length > 1 ? x.history : x.closes || []).filter(c => c && c[1] != null); }
+function lexiChartRanges(n){
+  if(n <= 40) return [['All', 0]];
+  const out = LEXI_CHART_RANGES.filter(r => r[1] && n >= r[1] * 0.9 && n > r[1] * 0.9 + 1);
+  out.push(n >= 200 ? ['1Y', 0] : ['All', 0]);
+  return out.filter((r, i, a) => a.findIndex(q => q[0] === r[0]) === i);
+}
+function lexiChartSma(vals, w){ return vals.map((_, i) => i + 1 < w ? null : vals.slice(i + 1 - w, i + 1).reduce((a, b) => a + b, 0) / w); }
+function lexiChartOpen(ti, qi){
+  const t = ai.turns[ti], x = t && (t.market || [])[qi];
+  if(!x) return;
+  const n = lexiChartSeries(x).length;
+  const rs = lexiChartRanges(n);
+  const pick = rs.filter(r => r[0] === '6M')[0] || rs.filter(r => r[0] === '3M')[0] || rs[rs.length - 1];
+  window._lexiChart = {x, range: pick[0]};
+  let ov = document.getElementById('lexiChartOv');
+  if(!ov){
+    ov = document.createElement('div'); ov.id = 'lexiChartOv';
+    ov.style.cssText = 'position:fixed;inset:0;z-index:1000;background:rgba(10,25,49,.55);display:flex;align-items:flex-start;justify-content:center;padding:24px 14px 72px;overflow-y:auto';
+    ov.addEventListener('click', e => { if(e.target === ov) lexiChartClose(); });
+    document.body.appendChild(ov);
+    document.addEventListener('keydown', e => { if(e.key === 'Escape' && document.getElementById('lexiChartOv')){ e.stopImmediatePropagation(); lexiChartClose(); } }, true);
+  }
+  lexiChartPaint();
+  const c = ov.querySelector('button'); if(c) c.focus({preventScroll:true});
+}
+function lexiChartClose(){ const ov = document.getElementById('lexiChartOv'); if(ov) ov.remove(); window._lexiChart = null; }
+function lexiChartRange(r){ if(window._lexiChart){ window._lexiChart.range = r; lexiChartPaint(); } }
+function lexiChartPaint(){
+  const st = window._lexiChart, ov = document.getElementById('lexiChartOv');
+  if(!st || !ov) return;
+  const x = st.x, all = lexiChartSeries(x), ranges = lexiChartRanges(all.length);
+  const days = (LEXI_CHART_RANGES.filter(r => r[0] === st.range)[0] || [0, 0])[1];
+  const from = days ? Math.max(0, all.length - days) : 0;
+  const pts = all.slice(from), vals = pts.map(p => p[1]);
+  const sma = [50, 200].map(w => lexiChartSma(all.map(p => p[1]), w).slice(from));
+  const f = v => v == null ? '—' : Number(v).toLocaleString('en-IN', {maximumFractionDigits:2});
+  const pc = v => v == null ? '—' : (v > 0 ? '+' : '') + Number(v).toFixed(2) + '%';
+  const cur = x.currency === 'INR' ? '₹' : '';
+  const first = vals[0], last = vals[vals.length - 1], up = last >= first, col = up ? 'var(--ok)' : 'var(--danger)';
+  /* On a phone the drawing is made narrower, not shrunk, so the figures stay readable. */
+  const narrow = window.innerWidth < 600;
+  const W = narrow ? 400 : 760, H = narrow ? 250 : 300, L = narrow ? 46 : 58, R = 12, T = 12, B = 28;
+  const shown = vals.concat(sma[0].filter(v => v != null), sma[1].filter(v => v != null));
+  let lo = Math.min(...shown), hi = Math.max(...shown); const pad = (hi - lo || hi * .02 || 1) * .06; lo -= pad; hi += pad;
+  const X = i => L + (vals.length < 2 ? 0 : i * (W - L - R) / (vals.length - 1)), Y = v => T + (hi - v) / (hi - lo) * (H - T - B);
+  const line = a => { let d = '', pen = false; a.forEach((v, i) => { if(v == null){ pen = false; return; } d += (pen ? 'L' : 'M') + X(i).toFixed(1) + ' ' + Y(v).toFixed(1); pen = true; }); return d; };
+  const grid = [0, 1, 2, 3, 4].map(k => { const v = lo + (hi - lo) * k / 4; return `<line x1="${L}" x2="${W - R}" y1="${Y(v).toFixed(1)}" y2="${Y(v).toFixed(1)}" stroke="var(--line)" stroke-width="1"/><text x="${L - 6}" y="${(Y(v) + 4).toFixed(1)}" text-anchor="end" font-size="11" fill="var(--muted)">${Number(v).toLocaleString('en-IN', {maximumFractionDigits: hi > 500 ? 0 : 2})}</text>`; }).join('');
+  const fmtDay = (d, long) => { const dt = new Date(d + 'T00:00:00'); return isNaN(dt) ? d : dt.toLocaleDateString('en-IN', long ? {weekday:'short', day:'numeric', month:'short', year:'numeric'} : (pts.length > 150 ? {month:'short', year:'2-digit'} : {day:'numeric', month:'short'})); };
+  const nTicks = Math.min(5, pts.length);
+  const ticks = Array.from({length: nTicks}, (_, k) => Math.round(k * (pts.length - 1) / Math.max(1, nTicks - 1)));
+  const xlab = ticks.map((i, k) => `<text x="${X(i).toFixed(1)}" y="${H - 8}" text-anchor="${k === 0 ? 'start' : k === ticks.length - 1 ? 'end' : 'middle'}" font-size="11" fill="var(--muted)">${esc(fmtDay(pts[i][0]))}</text>`).join('');
+  const area = line(vals) + `L${X(vals.length - 1).toFixed(1)} ${H - B}L${X(0).toFixed(1)} ${H - B}Z`;
+  const tipAt = i => `${fmtDay(pts[i][0], true)} · <b>${cur}${f(vals[i])}</b> · <span style="color:${vals[i] >= first ? 'var(--ok)' : 'var(--danger)'}">${pc((vals[i] / first - 1) * 100)}</span> since ${esc(fmtDay(pts[0][0]))}`;
+  const smaNote = sma.map((a, k) => a.some(v => v != null) ? `<span style="color:${k ? 'var(--muted)' : 'var(--gold)'}">━ ${[50, 200][k]}-day average</span>` : '').filter(Boolean).join(' &nbsp; ');
+  const r = x.returnsPct || {}, pos = x.high52 > x.low52 ? Math.max(0, Math.min(100, (x.price - x.low52) / (x.high52 - x.low52) * 100)) : null;
+  const cell = (k, v) => `<div style="min-width:0"><div class="small-note">${k}</div><div style="font-weight:600">${v}</div></div>`;
+  const ret = (k, v) => v == null ? '' : cell(k, `<span style="color:${v >= 0 ? 'var(--ok)' : 'var(--danger)'}">${pc(v)}</span>`);
+  const rsi = x.rsi14 == null ? '' : cell('RSI (14)', `${x.rsi14} <span class="small-note">${x.rsi14 >= 70 ? 'overbought zone' : x.rsi14 <= 30 ? 'oversold zone' : 'mid-range'}</span>`);
+  const news = (x.news || []).filter(n => n && n.title).map(n => `<li style="margin:3px 0">${esc(n.title)} <span class="small-note">${esc(n.publisher || '')}${n.time ? ' · ' + esc(new Date(n.time).toLocaleDateString('en-IN', {day:'numeric', month:'short'})) : ''}</span></li>`).join('');
+  const tv = 'https://www.tradingview.com/chart/?symbol=' + encodeURIComponent(lexiTradingViewSymbol(x));
+  ov.innerHTML = `<div class="lexi-bigchart" role="dialog" aria-modal="true" aria-label="${esc(x.name)} chart" style="background:var(--card);color:var(--text);border:1px solid var(--edge);border-radius:12px;width:100%;max-width:820px;box-shadow:0 30px 80px rgba(10,25,49,.35)">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;padding:14px 16px 6px">
+      <div style="min-width:0"><div style="font-size:17px;font-weight:700">${esc(x.name)}</div>
+        <div class="small-note">${esc(x.symbol)}${x.exchange ? ' · ' + esc(x.exchange) : ''}${x.sector ? ' · ' + esc(x.sector) : ''}</div></div>
+      <div style="text-align:right;white-space:nowrap"><div style="font-size:22px;font-weight:700">${cur}${f(x.price)}</div>
+        ${x.change == null ? '' : `<div style="color:${(x.change || 0) >= 0 ? 'var(--ok)' : 'var(--danger)'};font-weight:600">${(x.change || 0) >= 0 ? '▲' : '▼'} ${f(Math.abs(x.change))} (${pc(x.changePct)}) today</div>`}</div>
+      <button type="button" class="btn sm ghost" aria-label="Close" onclick="lexiChartClose()" style="flex:none">✕</button>
+    </div>
+    <div style="padding:0 16px">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin:4px 0">
+        <div id="lexiChartTip" class="small-note" aria-live="off" style="min-height:18px">${tipAt(vals.length - 1)}</div>
+        <div role="group" aria-label="Range" style="display:flex;gap:4px">${ranges.map(rg => `<button type="button" class="btn sm ${rg[0] === st.range ? '' : 'ghost'}" aria-pressed="${rg[0] === st.range}" onclick="lexiChartRange('${rg[0]}')">${rg[0]}</button>`).join('')}</div>
+      </div>
+      <svg id="lexiChartSvg" viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="${esc(x.name)} closing price, ${pts.length} sessions, from ${f(first)} to ${f(last)}" style="display:block;touch-action:pan-y;max-height:340px">
+        ${grid}${xlab}
+        <path d="${area}" fill="${col}" fill-opacity=".09" stroke="none"/>
+        ${sma[1].some(v => v != null) ? `<path d="${line(sma[1])}" fill="none" stroke="var(--muted)" stroke-width="1.5" stroke-dasharray="5 4"/>` : ''}
+        ${sma[0].some(v => v != null) ? `<path d="${line(sma[0])}" fill="none" stroke="var(--gold)" stroke-width="1.5" stroke-dasharray="5 4"/>` : ''}
+        <path d="${line(vals)}" fill="none" stroke="${col}" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round"/>
+        <g id="lexiChartCross" style="display:none"><line id="lexiChartV" y1="${T}" y2="${H - B}" stroke="var(--muted)" stroke-width="1" stroke-dasharray="3 3"/><circle id="lexiChartDot" r="4.5" fill="${col}" stroke="var(--card)" stroke-width="2"/></g>
+        <rect id="lexiChartHit" x="${L}" y="${T}" width="${W - L - R}" height="${H - T - B}" fill="transparent"/>
+      </svg>
+      <div class="small-note" style="margin:2px 0 8px">Daily closing prices${smaNote ? ' &nbsp;·&nbsp; ' + smaNote : ''}</div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(135px,1fr));gap:10px 14px;padding:10px 0;border-top:1px solid var(--line)">
+        ${x.dayLow != null && x.dayHigh != null ? cell('Day range', `${f(x.dayLow)} – ${f(x.dayHigh)}`) : ''}
+        ${cell('52-week range', `${f(x.low52)} – ${f(x.high52)}`)}
+        ${x.fromHigh52Pct != null ? cell('From 52-week high', `<span style="color:${x.fromHigh52Pct >= 0 ? 'var(--ok)' : 'var(--danger)'}">${pc(x.fromHigh52Pct)}</span>`) : ''}
+        ${ret('1 week', r.week)}${ret('1 month', r.month)}${ret('3 months', r.quarter)}${ret('6 months', r.halfYear)}${ret('1 year', r.year)}
+        ${rsi}
+        ${x.sma20 != null ? cell('20-day average', f(x.sma20)) : ''}${x.sma50 != null ? cell('50-day average', f(x.sma50)) : ''}${x.sma200 != null ? cell('200-day average', f(x.sma200)) : ''}
+        ${x.pe != null ? cell('P/E', f(x.pe)) : ''}${x.pb != null ? cell('P/B', f(x.pb)) : ''}${x.dividendYieldPct != null ? cell('Dividend yield', f(x.dividendYieldPct) + '%') : ''}
+      </div>
+      ${pos != null ? `<div style="margin:0 0 10px"><div class="small-note" style="display:flex;justify-content:space-between"><span>52-week low ${f(x.low52)}</span><span>high ${f(x.high52)}</span></div>
+        <div style="position:relative;height:8px;border-radius:4px;background:var(--line)"><div style="position:absolute;left:calc(${pos.toFixed(1)}% - 6px);top:-3px;width:12px;height:14px;border-radius:4px;background:${col};border:2px solid var(--card)"></div></div></div>` : ''}
+      ${x.trend ? `<div style="margin:0 0 8px"><b>${esc(x.trend.split(':')[0][0].toUpperCase() + x.trend.split(':')[0].slice(1))}</b> <span class="small-note">${esc(x.trend.split(':').slice(1).join(':').trim())}</span></div>` : ''}
+      ${news ? `<div style="margin:0 0 8px"><div class="small-note">Recent headlines</div><ul style="margin:2px 0 0 18px;padding:0">${news}</ul></div>` : ''}
+    </div>
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;padding:10px 16px 14px;border-top:1px solid var(--line)">
+      <span class="small-note">From ${esc(x.source || 'the price feed')}. For information, not a recommendation.</span>
+      <span style="display:flex;gap:6px"><a class="btn sm ghost" href="${esc(tv)}" target="_blank" rel="noopener noreferrer">Open on TradingView ↗</a><button type="button" class="btn sm" onclick="lexiChartClose()">Close</button></span>
+    </div></div>`;
+  const svg = document.getElementById('lexiChartSvg'), cross = document.getElementById('lexiChartCross'), tip = document.getElementById('lexiChartTip');
+  const at = ev => {
+    const b = svg.getBoundingClientRect(); if(!b.width) return;
+    const i = Math.max(0, Math.min(vals.length - 1, Math.round(((ev.clientX - b.left) * (W / b.width) - L) / ((W - L - R) / Math.max(1, vals.length - 1)))));
+    cross.style.display = ''; const v = document.getElementById('lexiChartV'), d = document.getElementById('lexiChartDot');
+    v.setAttribute('x1', X(i)); v.setAttribute('x2', X(i)); d.setAttribute('cx', X(i)); d.setAttribute('cy', Y(vals[i]));
+    tip.innerHTML = tipAt(i);
+  };
+  const hit = document.getElementById('lexiChartHit');
+  hit.addEventListener('pointermove', at); hit.addEventListener('pointerdown', at);
+  hit.addEventListener('pointerleave', () => { cross.style.display = 'none'; tip.innerHTML = tipAt(vals.length - 1); });
 }
 
 /* LEXI AI: a question asking for a chart, and which grouping it names.
