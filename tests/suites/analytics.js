@@ -73,6 +73,28 @@ suite(async t => {
     return '"' + r.field + '" charted automatically';
   });
 
+  await t.step('the timeline narrows the charts, and the trend counts arrivals over time', async () => {
+    const r = await t.eval(() => {
+      const old = {id: uid('CMS'), cmsName:'An Old', kycStatus:'Validated', assignedTo: me().id, branch:'Pune', createdAt: new Date(Date.now() - 800*86400000).toISOString()};
+      initState('CMS', old); DB.clients.push(old);
+      navigate('analytics');
+      const all = analyticsCharts('clients', true).total;
+      const trendAll = analyticsTrend(applyTimeline('AN', analyticsRecords('clients')));
+      setTimelineRange('AN', 'month');
+      const month = analyticsCharts('clients', true).total;
+      const trendMonth = analyticsTrend(applyTimeline('AN', analyticsRecords('clients')));
+      const page = {bar: !!document.getElementById('tl_AN'), live: /Live · updated/.test(document.body.innerText), perDay: /New clients per day/.test(document.body.innerText)};
+      setTimelineRange('AN', 'all');
+      return {all, month, months: trendAll.rows.length, sumAll: trendAll.rows.reduce((a,x)=>a+x.count,0), byDay: trendMonth.byDay,
+        sumMonth: trendMonth.rows.reduce((a,x)=>a+x.count,0), page};
+    });
+    if(r.month !== r.all - 1) throw new Error('month ' + r.month + ' of ' + r.all);
+    if(r.months !== 12 || r.sumAll !== r.all - 1) throw new Error('trend ' + JSON.stringify(r));
+    if(!r.byDay || r.sumMonth !== r.month) throw new Error('daily trend ' + JSON.stringify(r));
+    if(!r.page.bar || !r.page.live || !r.page.perDay) throw new Error(JSON.stringify(r.page));
+    return r.all + ' clients in all, ' + r.month + ' this month, drawn per day';
+  });
+
   t.section('task work by Assign To');
   await t.step('the task tables under the charts count DST tasks per assignee', async () => {
     const r = await t.eval(() => {
@@ -99,6 +121,19 @@ suite(async t => {
     for(const h of ["Today's Work", "Yesterday's Work", 'Total Incomplete Tasks', 'Completed Tasks (This Week)', 'Assign To', 'Record Count'])
       if(!r.text.toLowerCase().includes(h.toLowerCase())) throw new Error('page lacks ' + h);
     return 'today 3, yesterday 2, overdue 1, completed this week 1';
+  });
+
+  await t.step('a record somebody adds redraws the page by itself', async () => {
+    const r = await t.eval(() => {
+      navigate('analytics');
+      const before = document.querySelector('#anTasks').innerText;
+      DB.tasks.push({id: uid('DST'), taskType:'Live task', overallStatus:'Not Started', assignTo: me().id, dueDate: '2099-01-01'});
+      liveWriteUntil = 0; if(document.activeElement) document.activeElement.blur();   // nobody mid-edit
+      liveDraw();
+      return {changed: document.querySelector('#anTasks').innerText !== before};
+    });
+    if(!r.changed) throw new Error('task tables did not move');
+    return 'redrawn on the change';
   });
 
   t.section('Boss Bot draws charts');

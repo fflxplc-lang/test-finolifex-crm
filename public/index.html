@@ -56119,18 +56119,20 @@ function analyticsAutoDims(src, rows){
     return vals.size >= 2 && vals.size <= 25 ? {id:'f:'+f.k, label:f.l, words:[], value:r=>r[f.k], auto:true} : null;
   }).filter(Boolean);
 }
-function analyticsCharts(src){
-  const rows = analyticsRecords(src);
+function analyticsCharts(src, period){
+  let rows = analyticsRecords(src);
   if(!rows) return null;
+  if(period) rows = applyTimeline('AN', rows);
   const dims = ANALYTICS_SOURCES[src].dims.concat(analyticsAutoDims(src, rows));
   return {total: rows.length, charts: dims.map(d=>({id:d.id, label:d.label, auto:!!d.auto, rows: analyticsGroup(rows, d.value)}))};
 }
 /* A vertical bar chart, counts on top, names slanted underneath. Drawn as
    SVG so it needs nothing loaded and follows the theme's colours. */
 const ANALYTICS_COLORS = ['#f2865e','#3ecf7e','#f5a623','#4a90d9','#9b6ad6','#e0607e','#2bb3b3','#8d9b3a'];
-function analyticsBarSvg(rows, color, title){
-  const data = (rows||[]).slice(0, 14);
-  const W = 520, H = 280, L = 44, R = 12, T = 22, B = 92;
+function analyticsBarSvg(rows, color, title, all){
+  const data = all ? (rows||[]) : (rows||[]).slice(0, 14);
+  const every = Math.max(1, Math.ceil(data.length / 16));
+  const W = all ? 1040 : 520, H = all ? 250 : 280, L = 44, R = 12, T = 22, B = all ? 60 : 92;
   const max = Math.max(1, ...data.map(d=>d.count));
   const step = Math.pow(10, Math.floor(Math.log10(max))) * (max / Math.pow(10, Math.floor(Math.log10(max))) > 5 ? 2 : 1);
   const top = Math.ceil(max / step) * step || 1;
@@ -56145,8 +56147,8 @@ function analyticsBarSvg(rows, color, title){
     ${grid.join('')}
     ${data.map((d,i)=>`<g><title>${esc(d.label)}: ${d.count}</title>
       <rect x="${x(i)-bw/2}" y="${y(d.count)}" width="${bw}" height="${Math.max(1, y(0)-y(d.count))}" rx="2" fill="${color}"/>
-      <text x="${x(i)}" y="${y(d.count)-5}" text-anchor="middle" font-size="11" style="fill:var(--text)">${d.count}</text>
-      <text transform="translate(${x(i)+4},${y(0)+12}) rotate(-38)" text-anchor="end" font-size="10.5" style="fill:var(--muted)">${esc(cut(d.label))}</text></g>`).join('')}
+      ${data.length <= 20 || d.count ? `<text x="${x(i)}" y="${y(d.count)-5}" text-anchor="middle" font-size="${data.length > 20 ? 9 : 11}" style="fill:var(--text)">${d.count}</text>` : ''}
+      ${i % every ? '' : `<text transform="translate(${x(i)+4},${y(0)+12}) rotate(-38)" text-anchor="end" font-size="10.5" style="fill:var(--muted)">${esc(cut(d.label))}</text>`}</g>`).join('')}
   </svg>${(rows||[]).length > data.length ? `<div class="small-note">Showing the 14 largest of ${rows.length} values.</div>` : ''}`;
 }
 function analyticsCard(c, i){
@@ -56159,23 +56161,77 @@ function analyticsCard(c, i){
   </div>`;
 }
 function setAnalyticsSource(s){ window._anSrc = s; render(); }
+/* The Analytics page's own timeline: clients and leads placed in time by
+   when they arrived, the same rule the LMS and CMS dashboards use. */
+TIMELINE_DATE_OF.AN = r => r && r.createdAt;
+/* How many arrived in each day (a period of two months or less) or each
+   month (longer, or since inception: the last twelve months). */
+function analyticsTrend(rows){
+  const iso = d => d.toISOString().slice(0,10);
+  const dayOf = v => { if(!v) return ''; const d = new Date(v); if(isNaN(d)) return String(v).slice(0,10); d.setHours(12,0,0,0); return iso(d); };
+  const w = timelineWindow('AN');
+  const now = new Date(); now.setHours(12,0,0,0);
+  const MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const keys = [], label = {};
+  const byDay = w && w.from > '1000' && w.to < '9000' && (new Date(w.to) - new Date(w.from)) / 86400000 <= 62;
+  if(byDay){
+    const end = w.to < iso(now) ? new Date(w.to + 'T12:00:00') : now;
+    for(let d = new Date(w.from + 'T12:00:00'); d <= end; d.setDate(d.getDate() + 1)){ const k = iso(d); keys.push(k); label[k] = d.getDate() + ' ' + MON[d.getMonth()]; }
+  } else {
+    let start = new Date(now.getFullYear(), now.getMonth() - 11, 1, 12), end = new Date(now.getFullYear(), now.getMonth(), 1, 12);
+    if(w && w.from > '1000') start = new Date(Math.max(new Date(w.from.slice(0,7) + '-01T12:00:00'), new Date(now.getFullYear() - 5, 0, 1, 12)));
+    if(w && w.to < '9000' && w.to < iso(now)) end = new Date(w.to.slice(0,7) + '-01T12:00:00');
+    for(let d = new Date(start); d <= end; d.setMonth(d.getMonth() + 1)){ const k = iso(d).slice(0,7); keys.push(k); label[k] = MON[d.getMonth()] + ' ' + String(d.getFullYear()).slice(2); }
+  }
+  const count = {}; keys.forEach(k=>count[k] = 0);
+  rows.forEach(r=>{ const d = dayOf(r.createdAt); const k = byDay ? d : d.slice(0,7); if(k in count) count[k]++; });
+  return {byDay, rows: keys.map(k=>({label: label[k], count: count[k]}))};
+}
+/* The page is drawn from the records every time it renders, and a change
+   anybody makes arrives through the live stream and redraws it. The one
+   thing no record change announces is the date turning over, which moves
+   "today", "yesterday" and "this week"; a light check once a minute
+   redraws the page when it does. */
+function analyticsKeepFresh(){
+  window._anDay = analyticsDays().today;
+  window._anDrawnAt = new Date();
+  if(window._anTimer) return;
+  window._anTimer = setInterval(()=>{
+    if(currentView !== 'analytics'){ clearInterval(window._anTimer); window._anTimer = 0; return; }
+    if(analyticsDays().today !== window._anDay && !(typeof liveBusy==='function' && liveBusy())) render();
+  }, 60000);
+}
+function analyticsLiveNote(){
+  const t = new Date();
+  return `<span class="small-note" style="margin:0"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#3ecf7e;margin-right:5px;vertical-align:middle"></span>Live · updated ${esc(t.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit'}))}</span>`;
+}
 function viewAnalytics(){
   const srcs = Object.keys(ANALYTICS_SOURCES).filter(s=>can(ANALYTICS_SOURCES[s].perm, 'view'));
   const tasks = can('DST','view');
   if(!srcs.length && !tasks) return permissionWall('CMS', {title:'Analytics', subtitle:'Charts from your records'});
-  const head = moduleHeader({title:'Analytics', subtitle:'Charts drawn from the live records you can see, refreshed every time you open this page'});
+  analyticsKeepFresh();
+  const head = moduleHeader({title:'Analytics', subtitle:'Charts drawn from the live records you can see. They redraw by themselves whenever anybody changes a record.'});
   if(!srcs.length) return head + analyticsTaskSection();
   const src = srcs.includes(window._anSrc) ? window._anSrc : srcs[0];
-  const a = analyticsCharts(src);
+  const a = analyticsCharts(src, true);
+  const trend = analyticsTrend(applyTimeline('AN', analyticsRecords(src)));
+  const what = ANALYTICS_SOURCES[src].label;
   const shown = a.charts.filter(c=>c.rows.some(r=>r.label!==ANALYTICS_BLANK));
   const empty = a.charts.filter(c=>!shown.includes(c));
   return `${head}
     <div class="row" style="gap:8px;margin:0 0 14px;flex-wrap:wrap;align-items:center">
       ${srcs.map(s=>`<button class="btn sm ${s===src?'':'ghost'}" onclick="setAnalyticsSource('${s}')">${esc(ANALYTICS_SOURCES[s].label)}</button>`).join('')}
-      <span class="small-note" style="margin:0 0 0 6px">${a.total} ${esc(ANALYTICS_SOURCES[src].label.toLowerCase())} counted</span>
+      <span class="small-note" style="margin:0 0 0 6px">${a.total} ${esc(what.toLowerCase())} counted</span>
+      <span style="margin-left:auto">${analyticsLiveNote()}</span>
+    </div>
+    ${timelineBarHtml('AN')}
+    <div class="card" style="margin:12px 0 14px;padding:14px 16px">
+      <h3 style="margin:0;font-size:15px">New ${esc(what.toLowerCase())} ${trend.byDay ? 'per day' : 'per month'}</h3>
+      <div class="small-note" style="margin:2px 0 4px">Counted by the date each one was added${timelineWindow('AN') ? ', inside the timeline picked above' : ', over the last twelve months'}.</div>
+      ${analyticsBarSvg(trend.rows, '#4a90d9', 'New ' + what + ' over time', true)}
     </div>
     ${a.total ? `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,420px),1fr));gap:14px">
-      ${shown.map(analyticsCard).join('')}</div>` : `<div class="empty">No ${esc(ANALYTICS_SOURCES[src].label.toLowerCase())} yet. The charts appear as soon as there are records.</div>`}
+      ${shown.map(analyticsCard).join('')}</div>` : `<div class="empty">No ${esc(what.toLowerCase())} ${timelineWindow('AN') ? 'in this period' : 'yet'}. The charts appear as soon as there are records.</div>`}
     ${empty.length && a.total ? `<p class="small-note" style="margin-top:12px">No data recorded yet for: ${empty.map(c=>esc(c.label)).join(', ')}.</p>` : ''}
     <p class="small-note">Ask LEXI AI for a chart in words, for example "KYC status ka chart banao" or "branch wise clients graph".</p>
     ${tasks ? analyticsTaskSection() : ''}`;
@@ -56253,7 +56309,8 @@ function analyticsTaskSection(){
   const rows = applyBranchTab(all, '_anTaskBranch', analyticsTaskBranch);
   const cards = ANALYTICS_TASK_CARDS.map(c=>analyticsTaskCard(c, rows));
   return `<div id="anTasks" style="margin-top:22px">
-    <h3 style="margin:0 0 4px">Task work by Assign To</h3>
+    <div style="display:flex;justify-content:space-between;gap:8px;align-items:baseline;flex-wrap:wrap">
+      <h3 style="margin:0 0 4px">Task work by Assign To</h3>${analyticsLiveNote()}</div>
     <div class="small-note" style="margin:0 0 10px">Counted from DST tasks (sub-tasks left out), per person and per branch.</div>
     ${branchTabs({rows:all, stateKey:'_anTaskBranch', branchOf:analyticsTaskBranch, note:'tasks you can see'})}
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr));gap:14px;margin-top:12px">
