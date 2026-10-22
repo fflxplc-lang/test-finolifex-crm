@@ -202,6 +202,67 @@ a{color:inherit}
   border-bottom:1px solid var(--line);font-size:13px}
 .notif-list{max-height:380px;overflow:auto}
 .notif-row{padding:10px 14px;border-bottom:1px solid var(--line);cursor:pointer}
+/* My Attendance History: totals, filters and the detail panels */
+.ah-card{--ah-red:var(--danger);--ah-green:var(--ok);--ah-blue:#1D5FBF}
+html.dark .ah-card{--ah-blue:#7FB0F5}
+.ah-head{display:flex;align-items:center;gap:12px;cursor:pointer;user-select:none}
+.ah-head-ico{color:var(--navy);display:inline-flex}
+html.dark .ah-head-ico{color:var(--info)}
+.ah-title{font-size:18px;font-weight:700}
+.ah-chev{border:1px solid var(--line);background:var(--card);color:var(--text);width:32px;height:32px;border-radius:50%;
+  display:inline-flex;align-items:center;justify-content:center;cursor:pointer;flex:none}
+.ah-chev:hover{background:var(--bg)}
+.ah-who{display:flex;align-items:center;gap:10px;margin-top:12px;font-size:13px}
+.ah-who label{color:var(--muted);font-weight:600}
+.ah-who select{max-width:280px;border:1px solid var(--line);border-radius:var(--radius-sm);padding:7px 10px;background:var(--card);color:var(--text);font:inherit}
+.ah-tiles{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;margin-top:14px}
+.ah-tile{display:flex;align-items:center;gap:14px;padding:16px 18px;border-radius:var(--radius-sm);
+  border:1px solid color-mix(in srgb,var(--c) 32%,var(--card));background:color-mix(in srgb,var(--c) 9%,var(--card));
+  cursor:pointer;text-align:left;font:inherit;color:var(--text);transition:box-shadow var(--nav-t,180ms) var(--ease),transform var(--nav-t,180ms) var(--ease)}
+.ah-tile:hover{transform:translateY(-1px);box-shadow:var(--shadow-soft)}
+.ah-tile.on{box-shadow:0 0 0 2px var(--c)}
+.ah-card .ah-present{--c:var(--ah-green)} .ah-card .ah-leave{--c:var(--ah-blue)} .ah-card .ah-absent{--c:var(--ah-red)}
+.ah-ico{width:52px;height:52px;border-radius:50%;background:var(--c);color:#fff;display:inline-flex;align-items:center;
+  justify-content:center;flex:none}
+html.dark .ah-ico{color:var(--card)}
+.ah-tile-txt{display:flex;flex-direction:column;flex:1;min-width:0}
+.ah-tile-lbl{font-weight:700;color:var(--c);font-size:15px}
+.ah-tile-num{font-size:30px;font-weight:800;color:var(--c);line-height:1.1}
+.ah-arrow{font-size:26px;color:var(--c);line-height:1}
+.ah-filter-box{border:1px solid var(--line);border-radius:var(--radius-sm);padding:12px 14px;margin-top:14px}
+.ah-filter{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end}
+.ah-fld{display:flex;flex-direction:column;gap:4px;flex:1 1 180px;min-width:150px}
+.ah-fld label{font-size:12.5px;font-weight:600;color:var(--text)}
+.ah-date{display:flex;align-items:center;gap:8px;border:1px solid var(--line);border-radius:var(--radius-sm);padding:0 10px;
+  background:var(--card);color:var(--muted)}
+.ah-date input{border:0;background:transparent;padding:9px 0;flex:1;min-width:0;box-shadow:none;color:var(--text)}
+.ah-date input:focus{outline:none}
+.ah-date:focus-within{box-shadow:var(--ring)}
+.ah-btn{display:inline-flex;align-items:center;gap:8px;height:40px;padding:0 18px;border-radius:var(--radius-sm)}
+.ah-reset{border-color:var(--navy);color:var(--navy)}
+html.dark .ah-reset{border-color:var(--info);color:var(--info)}
+.ah-filter.compact .ah-fld{flex:1 1 130px;min-width:120px}
+.ah-filter.compact .ah-btn{height:38px;padding:0 12px;font-size:12.5px}
+.ah-table th{font-size:12.5px}
+.ah-table td{vertical-align:middle}
+.ah-go{color:var(--muted);font-size:20px;text-align:right}
+.ah-panel{margin-top:14px;border:1px solid color-mix(in srgb,var(--c) 40%,var(--card));border-radius:var(--radius-sm);
+  overflow:hidden;background:var(--card)}
+.ah-panel-head{display:flex;align-items:center;gap:12px;padding:12px 14px;background:color-mix(in srgb,var(--c) 9%,var(--card));
+  border-bottom:1px solid color-mix(in srgb,var(--c) 25%,var(--card))}
+.ah-panel .ah-ico{width:44px;height:44px}
+.ah-panel-title{font-weight:700;font-size:17px;color:var(--c)}
+.ah-count{min-width:40px;height:32px;padding:0 10px;border-radius:var(--pill);background:color-mix(in srgb,var(--c) 18%,var(--card));
+  color:var(--c);font-weight:800;font-size:17px;display:inline-flex;align-items:center;justify-content:center}
+.ah-x{border:0;background:transparent;font-size:22px;color:var(--muted);cursor:pointer;line-height:1;padding:2px 6px}
+.ah-pager{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-top:10px}
+.ah-pages{display:flex;gap:6px}
+.ah-pg{min-width:32px;height:32px;border:1px solid var(--line);background:var(--card);color:var(--text);border-radius:8px;cursor:pointer;font:inherit}
+.ah-pg.on{background:var(--navy);border-color:var(--navy);color:#fff}
+.ah-pg:disabled{opacity:.4;cursor:default}
+@media (max-width:860px){ .ah-tiles{grid-template-columns:1fr} }
+.notif-flash{animation:notifFlash 2.2s var(--ease)}
+@keyframes notifFlash{0%,60%{box-shadow:0 0 0 3px var(--gold)}100%{box-shadow:none}}
 .notif-row:last-child{border-bottom:0}
 .notif-row:hover{background:var(--bg)}
 .notif-row.unread{border-left:3px solid var(--navy)}
@@ -34667,22 +34728,46 @@ async function notifyUsers(userIds, o){
   await save('notifications');
   return made;
 }
+/* What the bell shows: unread messages from the last seven days. A
+   message leaves the bar once it is read, and an unread one leaves it
+   after seven days. Nothing is deleted; the record stays in the store. */
+const NOTIF_KEEP_DAYS = 7;
+function notificationCurrent(n){
+  if(!n || n.readAt || n.deletedAt) return false;
+  const at = new Date(n.at || 0).getTime();
+  return isFinite(at) && Date.now() - at < NOTIF_KEEP_DAYS * 86400000;
+}
 function myNotifications(){
-  return DB.notifications.filter(n=>n.userId===currentUser && !n.deletedAt)
+  return DB.notifications.filter(n=>n && n.userId===currentUser && notificationCurrent(n))
     .slice().sort((a,b)=>String(b.at||'').localeCompare(String(a.at||'')));
 }
-function unreadNotifications(){ return myNotifications().filter(n=>!n.readAt); }
+function unreadNotifications(){ return myNotifications(); }
 async function markNotificationRead(id){
   const n = DB.notifications.find(x=>x.id===id); if(!n) return;
   n.readAt = new Date().toISOString();
   await save('notifications');
 }
+/* Opening one goes to where it points first, and marks it read after:
+   a save that is slow or fails must not leave the person where they
+   were. Attendance messages also scroll to the card they are about. */
+const NOTIF_FOCUS = {
+  'hr-leave-decided':'hrMyLeaveCard', 'hr-leave-request':'hrLeaveInboxCard',
+  'hr-regularize-decided':'hrRegMineCard', 'hr-regularize-request':'hrRegInboxCard'};
 async function openNotification(id){
   const n = DB.notifications.find(x=>x.id===id);
   if(!n) return;
-  await markNotificationRead(id);
   window._notifOpen = false;
+  n.readAt = n.readAt || new Date().toISOString();
   if(n.view) navigate(n.view, n.arg || undefined); else render();
+  const target = NOTIF_FOCUS[n.kind];
+  if(target) setTimeout(()=>{
+    const el = document.getElementById(target);
+    if(!el) return;
+    el.scrollIntoView({behavior:'smooth', block:'start'});
+    el.classList.add('notif-flash');
+    setTimeout(()=>el.classList.remove('notif-flash'), 2200);
+  }, 120);
+  try { await save('notifications'); } catch(e){}
 }
 async function markAllNotificationsRead(){
   const now = new Date().toISOString();
@@ -35504,7 +35589,7 @@ function toggleNotifPanel(ev){
 function notifPanelHtml(){
   if(!window._notifOpen) return '';
   const all = myNotifications().slice(0, 30);
-  const unread = all.filter(n=>!n.readAt).length;
+  const unread = all.length;
   return `<div class="notif-panel" onclick="event.stopPropagation()">
     <div class="notif-head">
       <b>Notifications</b>
@@ -35515,7 +35600,7 @@ function notifPanelHtml(){
         <div class="notif-title">${esc(n.title)}</div>
         ${n.body? `<div class="notif-body">${esc(String(n.body).slice(0,160))}</div>`:''}
         <div class="notif-when">${fmtDateTime(n.at)}</div>
-      </div>`).join('') || `<div class="empty" style="padding:22px">Nothing to read.</div>`}
+      </div>`).join('') || `<div class="empty" style="padding:22px">Nothing new. Read messages leave this list, and unread ones leave it after ${NOTIF_KEEP_DAYS} days.</div>`}
     </div>
   </div>`;
 }
@@ -77222,7 +77307,6 @@ function viewHrAttendance(){
   const late = hrLateMinutes(rec);
   /* Every date of the last thirty, worked or not, so a day with no
      punch at all can still be regularized or taken as leave. */
-  const history = hrDatesBack(30).map(date=>({date, rec: hrAttendanceOf(u.id, date)}));
   const cfg = hrCfg();
   const month = hrMonthDays(u.id);
   return `
@@ -77269,44 +77353,7 @@ function viewHrAttendance(){
         administrator sets those in HR Setup.</div>`:''}
     </div>
 
-    <div class="card" style="margin-top:14px">
-      <div class="section-title" style="margin-top:0">\u{1F4C5} My attendance history</div>
-      <div class="small-note" style="margin:0 0 8px">Click any date to <b>Regularize Attendance</b> or
-        <b>Apply Leave</b> for it.</div>
-      <div class="table-wrap"><table><thead><tr>
-          <th>Name</th><th>Date</th><th>Status</th><th>In</th><th>In at</th><th>Out</th><th>Out at</th>
-          <th>Worked</th><th>Attendance %</th><th>Counts as</th><th>Late</th><th>Regularization</th>
-        </tr></thead><tbody>
-        ${history.map(({date, rec: r})=>{
-          const s = hrDayStatus(u.id, date, r);
-          const l = r ? hrLateMinutes(r) : null;
-          const first = (r && r.sessions || [])[0] || {};
-          const closed = (r && r.sessions || []).filter(x=>x && x.out);
-          const last = closed[closed.length - 1] || {};
-          const credit = hrDayCredit(u.id, date, r);
-          const regs = hrRegsOn(u.id, date);
-          const reg = regs[regs.length - 1];
-          return `<tr class="clickable" style="cursor:pointer" data-hrdate="${esc(date)}"
-              onclick="hrDayActions('${esc(date)}')" title="Regularize attendance or apply leave for this date">
-            <td><b>${esc(u.name || u.id)}</b></td>
-            <td>${esc(fmtDate(date))}</td>
-            <td><span class="badge ${s.tone}">${esc(s.label)}</span></td>
-            <td>${hrClock(hrFirstIn(r))}</td>
-            <td>${r ? hrLocCellHtml(first.inLoc, u.id) : '—'}</td>
-            <td>${hrClock(hrLastOut(r))}</td>
-            <td>${r ? hrLocCellHtml(last.outLoc, u.id) : '—'}</td>
-            <td>${hrDuration(hrWorkedMinutes(r))}</td>
-            <td>${hrClosedDayWhy(date) ? '—' : hrDayPct(u.id, date, r) + '%'}</td>
-            <td>${hrClosedDayWhy(date) ? '—' : esc(hrDaysText(credit.credit))}${credit.leave ? ' <span class="small-note" style="display:inline;margin:0">(leave)</span>' : ''}</td>
-            <td>${l === null ? '—' : l > 0 ? l + ' min' : 'On time'}</td>
-            <td>${reg ? `<span class="badge ${hrRegTone(reg.status)}">${esc(reg.status)}</span>` : '—'}</td>
-          </tr>`;
-        }).join('')}
-      </tbody></table></div>
-      <div class="small-note" style="margin-top:8px">Your own timestamps are not editable here, by you or by anybody
-        else — an attendance record is only worth keeping if nobody can move it after the fact. Time that was
-        missed is added by a regularization, which HR approves, and the record keeps both.</div>
-    </div>
+    ${hrAttHistoryHtml()}
 
     ${hrRegMineHtml(u.id)}
     ${hrRegInboxHtml()}
@@ -77315,11 +77362,286 @@ function viewHrAttendance(){
     ${hrIsStaff()? hrTeamAttendanceHtml() : ''}`;
 }
 
+/* MY ATTENDANCE HISTORY — filters, totals and the detail behind them.
+
+   One range drives everything on the card: the three totals, the day
+   table and whichever detail panel is open. It starts on the current
+   month; Apply Filter sets it, Reset Filter puts the month back. Days
+   after today are never counted.
+
+   Every date lands in at most one total, so nothing is counted twice:
+   approved leave first (a half-day type is worth ½), then any time
+   worked or approved by a regularization (Present), then a working day
+   with neither (Absent). Sundays, weekly offs, holidays and a today
+   not yet punched are in none of them.
+
+   Staff with HR access can pick another employee; everybody else sees
+   their own records only, as hrMaySeeUser already rules. */
+function hrAhMonthRange(){
+  const t = hrToday(), d = new Date(t.slice(0, 7) + '-01T00:00:00');
+  d.setMonth(d.getMonth() + 1); d.setDate(0);
+  return {from: t.slice(0, 7) + '-01', to: hrDateKey(d)};
+}
+function hrAhState(){
+  const s = window._ah || (window._ah = Object.assign({user: currentUser, panel: '', page: 1, dpage: 1}, hrAhMonthRange()));
+  if(!s.user || !hrMaySeeUser(s.user)) s.user = currentUser;
+  if(s.collapsed === undefined){
+    try { s.collapsed = localStorage.getItem('boss.ahCollapsed') === '1'; } catch(e){ s.collapsed = false; }
+  }
+  return s;
+}
+function hrAhDates(from, to){
+  const out = [], end = to < hrToday() ? to : hrToday();
+  const d = new Date(from + 'T00:00:00');
+  if(isNaN(d) || !end) return out;
+  while(hrDateKey(d) <= end){ out.push(hrDateKey(d)); d.setDate(d.getDate() + 1); }
+  return out.reverse();
+}
+function hrAhLeaveOverlapping(userId, date, statuses){
+  return (DB.hrLeave || []).filter(l=>l && l.userId === userId && statuses.indexOf(l.status) >= 0
+    && String(l.from || '') <= date && date <= String(l.to || l.from || ''));
+}
+/* One date, read once: which total it belongs to, what the chip says,
+   and the one line of remarks worth showing. */
+function hrAhDay(userId, date){
+  const r = hrAttendanceOf(userId, date);
+  const st = hrDayStatus(userId, date, r);
+  const lv = hrLeaveOn(userId, date);
+  const regs = hrRegsOn(userId, date);
+  const regPending = regs.some(x=>x.status === 'Pending');
+  const pendingLeave = hrAhLeaveOverlapping(userId, date, ['Pending'])[0];
+  const declined = hrAhLeaveOverlapping(userId, date, ['Rejected', 'Declined'])[0];
+  const worked = hrEligibleMinutes(userId, date, r);
+  const day = {date, rec: r, bucket: '', units: 0, chip: st.label, tone: 'muted', remarks: '', reason: ''};
+  if(lv){
+    const half = (lv.unit || hrLeaveTypeUnit(lv.type)) === 'half';
+    day.bucket = 'leave'; day.units = half ? 0.5 : 1;
+    day.chip = lv.type || 'Leave'; day.tone = half ? 'warn' : 'info';
+    day.remarks = 'Approved leave' + (lv.reason ? ': ' + lv.reason : '');
+  } else if(st.code === 'in' || st.code === 'present' || st.code === 'incomplete' || worked > 0){
+    day.bucket = 'present'; day.units = 1;
+    day.chip = st.code === 'in' ? 'Punched in' : st.code === 'incomplete' ? 'Incomplete' : 'Present';
+    day.tone = st.code === 'incomplete' ? 'warn' : 'ok';
+  } else if(st.code === 'absent'){
+    day.bucket = 'absent'; day.units = 1; day.chip = 'Absent'; day.tone = 'danger';
+    day.reason = pendingLeave ? 'Leave request pending' + (pendingLeave.reason ? ': ' + pendingLeave.reason : '')
+      : declined ? 'Leave declined' + (declined.remarks ? ': ' + declined.remarks : '')
+      : regPending ? 'Regularization pending' : '';
+  }
+  const notes = [];
+  if(day.remarks) notes.push(day.remarks);
+  if(regPending) notes.push('Regularization pending');
+  else if(regs.some(x=>x.status === 'Approved')) notes.push('Regularized');
+  if(!lv && pendingLeave) notes.push('Leave pending');
+  if(day.bucket === 'absent' && declined) notes.push('Leave declined');
+  const late = r ? hrLateMinutes(r) : null;
+  if(late > 0) notes.push('Late by ' + late + ' min');
+  day.remarks = notes.filter((x, i, a)=>a.indexOf(x) === i).join(' · ');
+  return day;
+}
+function hrAhData(){
+  const s = hrAhState();
+  const days = hrAhDates(s.from, s.to).map(d=>hrAhDay(s.user, d));
+  const sum = b => Math.round(days.filter(d=>d.bucket === b).reduce((n, d)=>n + d.units, 0) * 100) / 100;
+  const leaves = hrLeaveOf(s.user).filter(l=>l && String(l.from || '') <= s.to && s.from <= String(l.to || l.from || ''))
+    .slice().sort((a, b)=>String(b.from || '').localeCompare(String(a.from || '')));
+  return {s, days, absent: sum('absent'), present: sum('present'), leave: sum('leave'), leaves};
+}
+const HR_AH_ICONS = {
+  absent: '<svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="9" cy="8" r="4"/><path d="M2 21c0-4 3-7 7-7s7 3 7 7"/><path d="M17 8l5 5M22 8l-5 5"/></svg>',
+  present: '<svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="4"/><path d="M2 21c0-4 3-7 7-7s7 3 7 7"/><path d="M16 11l2.5 2.5L23 9"/></svg>',
+  leave: '<svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/><path d="M8 14h.01M12 14h.01M16 14h.01M8 18h.01M12 18h.01"/></svg>',
+  cal: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></svg>'};
+const HR_AH_TILES = [
+  {k:'absent', label:'Total Absents', sub:'View all your absent dates and details'},
+  {k:'present', label:'Total Present', sub:'View all your present days and working hours'},
+  {k:'leave', label:'Total Leave Taken', sub:'View your leave history and approval status'}];
+const HR_AH_PAGE = 10;
+function hrAhNum(n){ return String(Math.round(n * 100) / 100); }
+function hrAhWeekday(date){ return ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][new Date(date + 'T00:00:00').getDay()]; }
+function hrAhPager(total, page, fn){
+  const pages = Math.max(1, Math.ceil(total / HR_AH_PAGE));
+  const p = Math.min(Math.max(1, page), pages);
+  const a = total ? (p - 1) * HR_AH_PAGE + 1 : 0, b = Math.min(total, p * HR_AH_PAGE);
+  const nums = [];
+  for(let i = Math.max(1, p - 2); i <= Math.min(pages, p + 2); i++) nums.push(i);
+  return {p, slice: [a ? a - 1 : 0, b], html: `<div class="ah-pager">
+    <span class="small-note" style="margin:0">Showing ${a}–${b} of ${total} record${total === 1 ? '' : 's'}</span>
+    <div class="ah-pages">
+      <button class="ah-pg" ${p <= 1 ? 'disabled' : ''} onclick="${fn}(${p - 1})" aria-label="Previous page">‹</button>
+      ${nums.map(i=>`<button class="ah-pg ${i === p ? 'on' : ''}" onclick="${fn}(${i})">${i}</button>`).join('')}
+      <button class="ah-pg" ${p >= pages ? 'disabled' : ''} onclick="${fn}(${p + 1})" aria-label="Next page">›</button>
+    </div></div>`};
+}
+function hrAhTimeCell(iso, loc, userId){
+  const t = hrClock(iso);
+  return loc && loc.status === 'captured' && iso
+    ? t + `<div class="small-note" style="margin:0">${hrLocCellHtml(loc, userId)}</div>` : t;
+}
+function hrAhFilterHtml(s, compact){
+  return `<div class="ah-filter${compact ? ' compact' : ''}">
+    <div class="ah-fld"><label>From Date</label><div class="ah-date">${HR_AH_ICONS.cal}
+      <input type="date" ${compact ? 'data-ahp="from"' : 'id="ahFrom"'} value="${esc(s.from)}"${dateBoundsAttr()}
+        ${compact ? 'onchange="hrAhPanelDates()"' : ''}></div></div>
+    <div class="ah-fld"><label>To Date</label><div class="ah-date">${HR_AH_ICONS.cal}
+      <input type="date" ${compact ? 'data-ahp="to"' : 'id="ahTo"'} value="${esc(s.to)}"${dateBoundsAttr()}
+        ${compact ? 'onchange="hrAhPanelDates()"' : ''}></div></div>
+    ${compact ? '' : `<button class="btn primary ah-btn" onclick="hrAhApply()">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>
+      Apply Filter</button>`}
+    <button class="btn ah-btn ah-reset" onclick="hrAhReset()">
+      <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg>
+      Reset Filter</button>
+  </div>`;
+}
+function hrAhPanelHtml(data){
+  const s = data.s, k = s.panel;
+  if(!k) return '';
+  const tile = HR_AH_TILES.find(x=>x.k === k);
+  const mine = s.user === currentUser;
+  const sub = mine ? tile.sub : tile.sub.replace(/your/g, 'their');
+  let head = '', rows = [], count = data[k];
+  if(k === 'absent'){
+    head = '<th>Date</th><th>Day</th><th>Status</th><th>Reason</th>';
+    rows = data.days.filter(d=>d.bucket === 'absent').map(d=>`<tr><td>${esc(fmtDate(d.date))}</td>
+      <td>${hrAhWeekday(d.date)}</td><td><span class="badge danger">Absent</span></td>
+      <td>${esc(d.reason || '—')}</td></tr>`);
+  } else if(k === 'present'){
+    head = '<th>Date</th><th>Day</th><th>In Time</th><th>Out Time</th><th>Working Hours</th><th>Attendance %</th>';
+    rows = data.days.filter(d=>d.bucket === 'present').map(d=>`<tr><td>${esc(fmtDate(d.date))}</td>
+      <td>${hrAhWeekday(d.date)}</td><td>${hrClock(hrFirstIn(d.rec))}</td><td>${hrClock(hrLastOut(d.rec))}</td>
+      <td>${hrDuration(hrEligibleMinutes(s.user, d.date, d.rec))}</td><td>${hrDayPct(s.user, d.date, d.rec)}%</td></tr>`);
+  } else {
+    head = '<th>Leave Date</th><th>Leave Type</th><th>Duration</th><th>Status</th><th>Reason</th>';
+    const tone = st => st === 'Approved' ? 'ok' : st === 'Pending' ? 'warn' : 'danger';
+    rows = data.leaves.map(l=>`<tr><td>${esc(fmtDate(l.from))}${l.to && l.to !== l.from ? ' – ' + esc(fmtDate(l.to)) : ''}</td>
+      <td>${esc(l.type || '—')}</td><td>${esc(hrDaysLabel(hrLeaveDays(l)))}</td>
+      <td><span class="badge ${tone(l.status)}">${esc(l.status || '—')}</span></td>
+      <td>${esc(l.reason || '—')}${l.remarks ? `<div class="small-note" style="margin:0">${esc(l.remarks)}</div>` : ''}</td></tr>`);
+  }
+  const pg = hrAhPager(rows.length, s.dpage, 'hrAhDetailPage');
+  const empty = {absent: 'No absent days in this range.', present: 'No present days in this range.',
+    leave: 'No leave requests in this range.'}[k];
+  return `<div class="ah-panel ah-${k}" id="ahPanel">
+    <div class="ah-panel-head">
+      <span class="ah-ico">${HR_AH_ICONS[k]}</span>
+      <div style="flex:1;min-width:0"><div class="ah-panel-title">${tile.label}</div>
+        <div class="small-note" style="margin:0">${esc(sub)}</div></div>
+      <span class="ah-count">${hrAhNum(count)}</span>
+      <button class="ah-x" onclick="hrAhOpenPanel('')" aria-label="Close">×</button>
+    </div>
+    <div style="padding:12px 14px 14px">
+      ${hrAhFilterHtml(s, true)}
+      ${rows.length ? `<div class="table-wrap" style="margin-top:10px"><table class="ah-table"><thead><tr>${head}</tr></thead>
+        <tbody>${rows.slice(pg.slice[0], pg.slice[1]).join('')}</tbody></table></div>${pg.html}`
+        : `<div class="empty" style="padding:18px">${empty}</div>`}
+    </div></div>`;
+}
+function hrAttHistoryHtml(){
+  const data = hrAhData(), s = data.s;
+  const mine = s.user === currentUser;
+  const staff = hrIsStaff();
+  const people = staff ? (DB.team || []).filter(t=>t && t.status !== 'Inactive' && !t.deletedAt)
+    .slice().sort((a, b)=>String(a.name || '').localeCompare(String(b.name || ''))) : [];
+  const pg = hrAhPager(data.days.length, s.page, 'hrAhPage');
+  return `<div class="card ah-card" id="hrAhCard" style="margin-top:14px">
+    <div class="ah-head" onclick="hrAhToggle()" role="button" aria-expanded="${s.collapsed ? 'false' : 'true'}">
+      <span class="ah-head-ico">${HR_AH_ICONS.leave}</span>
+      <div style="flex:1;min-width:0">
+        <div class="ah-title">${mine ? 'My Attendance History' : 'Attendance History — ' + esc(teamName(s.user))}</div>
+        ${s.collapsed ? '' : `<div class="small-note" style="margin:2px 0 0">View ${mine ? 'your' : 'the'} attendance records, filter by date and check detailed history.</div>`}
+      </div>
+      <button class="ah-chev" aria-label="${s.collapsed ? 'Expand' : 'Minimize'}" title="${s.collapsed ? 'Expand' : 'Minimize'}">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+          <path d="${s.collapsed ? 'M6 9l6 6 6-6' : 'M6 15l6-6 6 6'}"/></svg></button>
+    </div>
+    ${s.collapsed ? '' : `
+    ${staff ? `<div class="ah-who"><label>Employee</label>
+      <select onchange="hrAhPickUser(this.value)">${people.map(t=>`<option value="${esc(t.id)}" ${t.id === s.user ? 'selected' : ''}>${esc(t.name || t.id)}${t.id === currentUser ? ' (you)' : ''}</option>`).join('')}</select></div>` : ''}
+    <div class="ah-tiles">
+      ${HR_AH_TILES.map(t=>`<button class="ah-tile ah-${t.k} ${s.panel === t.k ? 'on' : ''}" data-ahtile="${t.k}"
+          onclick="hrAhOpenPanel('${t.k}')" aria-pressed="${s.panel === t.k}">
+        <span class="ah-ico">${HR_AH_ICONS[t.k]}</span>
+        <span class="ah-tile-txt"><span class="ah-tile-lbl">${t.label}</span><span class="ah-tile-num">${hrAhNum(data[t.k])}</span></span>
+        <span class="ah-arrow">›</span></button>`).join('')}
+    </div>
+    <div class="ah-filter-box">${hrAhFilterHtml(s, false)}
+      <div class="small-note" style="margin:6px 0 0">Showing ${esc(fmtDate(s.from))} to ${esc(fmtDate(s.to))}.
+        To check one day, set both dates to it.${mine ? ' Click a date to <b>Regularize Attendance</b> or <b>Apply Leave</b> for it.' : ''}</div></div>
+    ${hrAhPanelHtml(data)}
+    ${data.days.length ? `<div class="table-wrap" style="margin-top:12px"><table class="ah-table"><thead><tr>
+        <th>Date</th><th>Day</th><th>Status</th><th>In Time</th><th>Out Time</th><th>Working Hours</th>
+        <th>Attendance %</th><th>Remarks</th>${mine ? '<th></th>' : ''}
+      </tr></thead><tbody>
+      ${data.days.slice(pg.slice[0], pg.slice[1]).map(d=>{
+        const sess = (d.rec && d.rec.sessions) || [];
+        const first = sess[0] || {}, closed = sess.filter(x=>x && x.out), last = closed[closed.length - 1] || {};
+        return `<tr ${mine ? `class="clickable" style="cursor:pointer" data-hrdate="${esc(d.date)}"
+            onclick="hrDayActions('${esc(d.date)}')" title="Regularize attendance or apply leave for this date"` : `data-hrdate="${esc(d.date)}"`}>
+          <td>${esc(fmtDate(d.date))}</td><td>${hrAhWeekday(d.date)}</td>
+          <td><span class="badge ${d.tone}">${esc(d.chip)}</span></td>
+          <td>${hrAhTimeCell(hrFirstIn(d.rec), first.inLoc, s.user)}</td>
+          <td>${hrAhTimeCell(hrLastOut(d.rec), last.outLoc, s.user)}</td>
+          <td>${hrDuration(hrEligibleMinutes(s.user, d.date, d.rec))}</td>
+          <td>${hrClosedDayWhy(d.date) ? '—' : hrDayPct(s.user, d.date, d.rec) + '%'}</td>
+          <td>${esc(d.remarks || '—')}</td>
+          ${mine ? '<td class="ah-go">›</td>' : ''}
+        </tr>`;
+      }).join('')}
+      </tbody></table></div>${pg.html}`
+      : `<div class="empty" style="padding:22px">No attendance records match these dates.</div>`}
+    <div class="small-note" style="margin-top:8px">Your own timestamps are not editable here, by you or by anybody
+      else — an attendance record is only worth keeping if nobody can move it after the fact. Time that was
+      missed is added by a regularization, which HR approves, and the record keeps both.</div>`}
+  </div>`;
+}
+function hrAhRedraw(){
+  const el = document.getElementById('hrAhCard');
+  if(el) el.outerHTML = hrAttHistoryHtml(); else render();
+}
+function hrAhToggle(){
+  const s = hrAhState(); s.collapsed = !s.collapsed;
+  try { localStorage.setItem('boss.ahCollapsed', s.collapsed ? '1' : '0'); } catch(e){}
+  hrAhRedraw();
+}
+function hrAhSetRange(from, to){
+  if(!from || !to){ alert('Choose both a From Date and a To Date.'); return false; }
+  const bad = dateRangeProblem('From Date', from) || dateRangeProblem('To Date', to);
+  if(bad){ alert(bad); return false; }
+  if(to < from){ alert('The To Date is before the From Date.'); return false; }
+  const s = hrAhState(); s.from = from; s.to = to; s.page = 1; s.dpage = 1;
+  return true;
+}
+function hrAhApply(){
+  const g = id => (document.getElementById(id) || {}).value || '';
+  if(hrAhSetRange(g('ahFrom'), g('ahTo'))) hrAhRedraw();
+}
+function hrAhPanelDates(){
+  const g = k => (document.querySelector('#ahPanel [data-ahp="' + k + '"]') || {}).value || '';
+  if(hrAhSetRange(g('from'), g('to'))) hrAhRedraw();
+}
+function hrAhReset(){
+  Object.assign(hrAhState(), hrAhMonthRange(), {page: 1, dpage: 1});
+  hrAhRedraw();
+}
+function hrAhOpenPanel(k){
+  const s = hrAhState(); s.panel = s.panel === k ? '' : k; s.dpage = 1;
+  hrAhRedraw();
+  if(s.panel) setTimeout(()=>{ const p = document.getElementById('ahPanel');
+    if(p && p.scrollIntoView) p.scrollIntoView({behavior:'smooth', block:'nearest'}); }, 30);
+}
+function hrAhPage(n){ hrAhState().page = n; hrAhRedraw(); }
+function hrAhDetailPage(n){ hrAhState().dpage = n; hrAhRedraw(); }
+function hrAhPickUser(id){
+  const s = hrAhState(); s.user = hrMaySeeUser(id) ? id : currentUser; s.page = 1; s.dpage = 1;
+  hrAhRedraw();
+}
+
 function hrLeaveCardHtml(userId){
   const rows = hrLeaveOf(userId);
   const mine = userId === currentUser;
   const types = hrCfg().leaveTypes;
-  return `<div class="card" style="margin-top:14px">
+  return `<div id="hrMyLeaveCard" class="card" style="margin-top:14px">
     <div class="between"><div class="section-title" style="margin:0">\u{1F3D6} My leave</div>
       ${mine? `<button class="btn sm primary" onclick="hrOpenLeaveRequest()">+ Leave Request</button>`:''}</div>
     ${rows.length? `<div class="table-wrap" style="margin-top:8px"><table><thead><tr>
@@ -77349,7 +77671,7 @@ function hrLeaveCardHtml(userId){
 function hrLeaveInboxHtml(){
   const rows = hrLeavePendingForMe();
   if(!rows.length) return '';
-  return `<div class="card" style="margin-top:14px;border-left:3px solid var(--warn)">
+  return `<div id="hrLeaveInboxCard" class="card" style="margin-top:14px;border-left:3px solid var(--warn)">
     <div class="section-title" style="margin-top:0">\u{1F4E5} Leave requests waiting on you (${rows.length})</div>
     <div class="table-wrap"><table><thead><tr>
       <th>Person</th><th>From</th><th>To</th><th>Days</th><th>Type</th><th>Reason</th><th>Asked</th><th></th>
@@ -77964,7 +78286,7 @@ function hrRegMineHtml(userId){
   const rows = hrRegsAll().filter(r=>r && r.userId === userId)
     .slice().sort((a, b)=>String(b.requestedAt || '').localeCompare(String(a.requestedAt || ''))).slice(0, 20);
   if(!rows.length) return '';
-  return `<div class="card" style="margin-top:14px">
+  return `<div id="hrRegMineCard" class="card" style="margin-top:14px">
     <div class="section-title" style="margin-top:0">\u{1F552} My regularization requests</div>
     <div class="table-wrap"><table><thead><tr>
       <th>Date</th><th>Periods</th><th>Adds</th><th>Reason</th><th>Status</th><th>Decided</th><th>Remarks</th>
@@ -77983,7 +78305,7 @@ function hrRegInboxHtml(){
   const rows = hrRegsAll().filter(hrMayDecideReg)
     .slice().sort((a, b)=>String(a.date).localeCompare(String(b.date)));
   if(!rows.length) return '';
-  return `<div class="card" style="margin-top:14px;border-left:3px solid var(--warn)">
+  return `<div id="hrRegInboxCard" class="card" style="margin-top:14px;border-left:3px solid var(--warn)">
     <div class="section-title" style="margin-top:0">\u{1F4E5} Regularization requests waiting on HR (${rows.length})</div>
     <div class="table-wrap"><table><thead><tr>
       <th>Person</th><th>Date</th><th>Recorded</th><th>Periods asked for</th><th>Adds</th><th>Reason</th><th></th>
