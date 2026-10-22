@@ -1666,7 +1666,10 @@ app.post('/api/market/nav', checkApiKey, async (req, res) => {
     });
     res.set('Cache-Control', 'no-store').json({ ok: true, source: 'AMFI', fetchedAt: list.fetchedAt, results });
   } catch (e) {
-    res.status(502).json({ ok: false, message: e && e.name === 'TimeoutError' ? 'AMFI did not answer in time' : 'the AMFI NAV list could not be read: ' + (e && e.message || e) });
+    // A 200 with ok:false, not a 5xx: AMFI being down is an answer the
+    // client card shows ("statement values shown"), not a failed request
+    // for the browser to log against the page.
+    res.set('Cache-Control', 'no-store').json({ ok: false, message: e && e.name === 'TimeoutError' ? 'AMFI did not answer in time' : 'the AMFI NAV list could not be read: ' + (e && e.message || e) });
   }
 });
 
