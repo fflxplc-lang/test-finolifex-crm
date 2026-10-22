@@ -2,7 +2,7 @@
    assistant is actually sent when it answers a question.
 
    The model is a stand-in that speaks the OpenAI-compatible protocol the
-   "BOSS AI (your own model)" connector uses. It records every request, so
+   "LEXI AI (your own model)" connector uses. It records every request, so
    the steps below can read what BOSS put in front of it — which is the
    thing worth testing: the right client, the right SOPs, masked PAN, no
    Aadhaar, and nothing the user could not see. */

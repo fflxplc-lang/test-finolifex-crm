@@ -2617,7 +2617,7 @@ tr.alloc-sub td{font-weight:700;background:var(--soft)}
 .cg-help:focus-visible{outline:2px solid var(--info);outline-offset:2px;color:var(--ink)}
 @media (max-width:700px){ .cg-help{width:34px;height:34px;flex-basis:34px} }
 @media (max-width:700px){ .cg-step{grid-template-columns:22px 1fr} .cg-num{width:22px;height:22px;font-size:11px} }
-/* ---- the BOSS AI Assistant ----
+/* ---- the LEXI AI Assistant ----
    A panel beside the page rather than a page of its own, so opening it
    never costs the work in progress behind it. */
 /* The way in. A labelled button rather than one more glyph in a row of
@@ -2630,7 +2630,7 @@ tr.alloc-sub td{font-weight:700;background:var(--soft)}
 .ai-open-btn:focus-visible{outline:2px solid var(--info);outline-offset:2px}
 @media (max-width:820px){ .ai-open-btn span{display:none} .ai-open-btn{padding:0 9px} }
 .ai-scrim{position:fixed;inset:0;background:rgba(10,20,30,.18);z-index:900}
-/* Boss Insights on a client's page: what needs doing, each row opening to the SOP that does it. */
+/* LEXI Insights on a client's page: what needs doing, each row opening to the SOP that does it. */
 .boss-ins{margin:10px 0;padding:10px 12px;border:1px solid var(--gold-deep);border-radius:10px;background:var(--gold-light)}
 .boss-ins-ok{font-size:12.5px;color:var(--muted)}
 .boss-ins-h{display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:11.5px;font-weight:800;letter-spacing:.4px;color:var(--gold-deep);margin-bottom:6px}
@@ -32251,7 +32251,7 @@ const PERM_DEFAULT_ON = {changeStage: 1};
    that list is what opens the Setup panel and using the assistant is not a
    reason to be shown the firm's configuration. */
 const USER_FLAGS = ['useAiAssistant'];
-const USER_FLAG_LABELS = {useAiAssistant:'Use the BOSS AI Assistant'};
+const USER_FLAG_LABELS = {useAiAssistant:'Use the LEXI AI Assistant'};
 /* "manage Fields" is a variable name with a space in it. These are what
    the capability is called and what it actually opens. */
 const ADMIN_FLAG_LABELS = {
@@ -34064,8 +34064,8 @@ function render(){
              firm asked for and then asked to have back: the rail is for
              modules you navigate to, and the assistant is a panel that opens
              beside whatever you are already on. -->
-        ${aiAvailable()? `<button class="ai-open-btn ${ai.open?'on':''}" title="BOSS AI Assistant — ask, draft, reframe, report"
-          aria-label="Open the BOSS AI Assistant" onclick="aiTogglePanel()">${iconSparkle()}<span>Ask AI</span></button>`:''}
+        ${aiAvailable()? `<button class="ai-open-btn ${ai.open?'on':''}" title="LEXI AI Assistant — ask, draft, reframe, report"
+          aria-label="Open the LEXI AI Assistant" onclick="aiTogglePanel()">${iconSparkle()}<span>Ask AI</span></button>`:''}
         <button class="topnav-icon-btn" title="Toggle dark mode" onclick="toggleDarkMode()">${darkMode?'☀':'☾'}</button>
         <div style="position:relative">
           <button class="topnav-icon-btn notif-badge" title="Notifications" onclick="toggleNotifPanel(event)">🔔${notifCount?`<span class="count">${notifCount>99?'99+':notifCount}</span>`:''}</button>
@@ -40634,7 +40634,7 @@ function viewClientDetail(id){
          new ISEQ, the C&T. The lead card has always had this; the client
          card sent them to the stage or nowhere. */
       {label:'Send Form', icon:'📝', onclick:`openSendCustomFormModal('CMS','${id}')`},
-      aiAvailable() && {label:'Ask Boss', icon:'✨', onclick:`bossAskAbout('${id}')`},
+      aiAvailable() && {label:'Ask LEXI', icon:'✨', onclick:`bossAskAbout('${id}')`},
       can('CMS','edit') && {label:'Edit', icon:'✎', onclick:`openClientForm('${id}')`},
       can('CMS','delete') && {label:'Delete', icon:'🗑', onclick:`softDeleteRecord('CMS','${id}')`},
       {label:'Print', icon:'🖨', onclick:'window.print()'},
@@ -54484,7 +54484,7 @@ const CONNECTOR_CATALOG = [
      can only call in. The first two are tested by calling them; the last
      two are Not Connected until an editor has actually called, whatever is
      stored against them. */
-  {id:'bossai', kind:'selfhosted', name:'BOSS AI (your own model)', channel:'AI Insights',
+  {id:'bossai', kind:'selfhosted', name:'LEXI AI (your own model)', channel:'AI Insights',
    desc:'A model the firm runs, or an enterprise endpoint it contracts for, behind an OpenAI-compatible API. The only connector through which BOSS data never reaches a shared service.',
    selfNote:'Ollama, vLLM, LM Studio and every enterprise gateway worth the name speak the OpenAI chat format, so one setting covers them all: the base URL (usually ending <b>/v1</b>) and the model it serves. A key is needed only if your own server asks for one. Because the endpoint is yours, nothing sent through it leaves your infrastructure \u2014 which is why this connector is privacy-verified by what it is, and the public APIs below are not.'},
   {id:'claude', kind:'https', name:'Claude (Anthropic)', channel:'AI Insights',
@@ -54755,7 +54755,7 @@ function toggleConnector(id){
 }
 
 /* =====================================================================
-   THE BOSS AI ASSISTANT
+   THE LEXI AI ASSISTANT
 
    One assistant, reachable from anywhere, that can see exactly what the
    person using it can see and nothing else. It drafts, reframes,
@@ -54841,7 +54841,7 @@ function aiSystemBrief(){
   const house = (DB.config.aiKnowledge||[]).filter(k=>k.active!==false)
     .map(k=>'- '+k.title+': '+k.body).join('\n');
   return [
-    'You are the BOSS assistant inside Finowise BOSS, the wealth-management CRM of '+(DB.config.company.name||'this firm')+'.',
+    'You are LEXI AI, the assistant inside Finowise BOSS, the wealth-management CRM of '+(DB.config.company.name||'this firm')+'.',
     'You are speaking to '+(u.name||'a user')+', whose role is '+(roleOf(u)||'unknown')+' and whose record scope is "'+(u.scope||'own')+'".',
     '',
     'HOW BOSS IS ORGANISED',
@@ -55281,10 +55281,10 @@ function aiDrawPanel(){
   const sel = ai.selection;
   host.innerHTML = `
     <div class="ai-scrim" onclick="aiCloseP()"></div>
-    <aside class="ai-panel" role="dialog" aria-label="BOSS AI Assistant">
+    <aside class="ai-panel" role="dialog" aria-label="LEXI AI Assistant">
       <div class="ai-head">
         <div>
-          <b>BOSS AI Assistant</b>
+          <b>LEXI AI Assistant</b>
           <div class="ai-sub">${esc(aiContextLine(ai.context)||'Ask about anything you can already see.')}</div>
         </div>
         <div class="row" style="gap:6px">
@@ -55311,7 +55311,7 @@ function aiDrawPanel(){
                   .map(q=>`<button class="quick-chip" onclick="aiPrefill(${JSON.stringify(q).replace(/"/g,'&quot;')})">${esc(q)}</button>`).join('')}
               </div>
             </div>`}
-        ${ai.busy && !ai.turns.some(t=>t.live)? `<div class="ai-turn ai-bot"><div class="ai-bubble ai-thinking"><span class="ai-dots" aria-hidden="true"><i></i><i></i><i></i></span>${esc(ai.phase || 'Boss is thinking')}</div></div>`:''}
+        ${ai.busy && !ai.turns.some(t=>t.live)? `<div class="ai-turn ai-bot"><div class="ai-bubble ai-thinking"><span class="ai-dots" aria-hidden="true"><i></i><i></i><i></i></span>${esc(ai.phase || 'LEXI is thinking')}</div></div>`:''}
         ${ai.error? `<div class="ai-turn ai-bot"><div class="ai-bubble ai-err">${esc(ai.error)}</div></div>`:''}
         ${ai.report? aiReportCardHtml(ai.report) : ''}
       </div>
@@ -55737,12 +55737,12 @@ function bossClientAlerts(c){
    person reading it does not have to go and find the process. */
 function bossInsightsHtml(c){
   const alerts = bossClientAlerts(c);
-  if(!alerts.length) return `<div class="boss-ins boss-ins-ok">🤖 <b>Boss:</b> Nothing is pending on this client.</div>`;
+  if(!alerts.length) return `<div class="boss-ins boss-ins-ok">🤖 <b>LEXI:</b> Nothing is pending on this client.</div>`;
   const tone = {blocker:'danger', high:'warn', medium:'info', low:''};
   const word = {blocker:'Blocker', high:'Urgent', medium:'Pending', low:'Opportunity'};
   return `<div class="boss-ins">
-    <div class="boss-ins-h">🤖 BOSS INSIGHTS (${alerts.length})
-      ${aiAvailable()? `<button class="btn sm ghost" onclick="bossAskAbout('${esc(c.id)}')">Ask Boss</button>`:''}</div>
+    <div class="boss-ins-h">🤖 LEXI INSIGHTS (${alerts.length})
+      ${aiAvailable()? `<button class="btn sm ghost" onclick="bossAskAbout('${esc(c.id)}')">Ask LEXI</button>`:''}</div>
     ${alerts.map(a=>{ const s = bossSopById(a.sop); return `<details class="boss-ins-row">
       <summary><span class="badge ${tone[a.sev]}">${word[a.sev]}</span> ${esc(a.text)}</summary>
       <div class="boss-ins-sop">
@@ -55986,7 +55986,7 @@ async function bossRunChat(q){
   let chart = bossChartFor(chartQ);
   if(chart){ data.chart = chart; if(!bossLooksLikeHowTo(q)) sops = []; }
   if(!people.length && !chart && ((chartQ && !policyQ) || (!policyQ && bossLooksLikeData(q) && !(sops.length && bossLooksLikeHowTo(q))))){
-    ai.phase = 'Boss is checking the records'; aiDrawPanel();
+    ai.phase = 'LEXI is checking the records'; aiDrawPanel();
     const plan = await bossPlanReads(q);
     if(plan.error) return {error: plan.error};
     if(plan.client) bossClientsNamedIn(plan.client).forEach(c=>{ if(!people.includes(c)) people.push(c); });
@@ -56004,7 +56004,7 @@ async function bossRunChat(q){
   const ask = (sops.length ? '<sops>\n' + sops.map(bossSopText).join('\n\n') + '\n</sops>\n\n' : '')
     + (Object.keys(data).length ? '<data>\n' + dataText + '\n</data>\n\n' : '<data>none read for this question</data>\n\n')
     + 'Question: ' + q;
-  ai.phase = 'Boss is typing'; aiDrawPanel();
+  ai.phase = 'LEXI is typing'; aiDrawPanel();
   const turn = {role:'assistant', content:'', live:true,
     clients: people.slice(0,3).map(c=>({id:c.id, name:clientDisplayName(c)})),
     sops: sops.map(s=>({id:s.id, t:s.t})), chart: chart || undefined};
@@ -56071,7 +56071,7 @@ function bossTurnFoot(t){
    actually holds two or more different values gets a chart of its own, so
    a field the firm adds in Setup shows up here without anybody wiring it.
 
-   Boss Bot uses the same groupings: "KYC status ka chart banao" is
+   LEXI AI uses the same groupings: "KYC status ka chart banao" is
    answered with the chart, built here from live records, not by the
    model, so a bar can never be a number the model made up.
    ===================================================================== */
@@ -56177,7 +56177,7 @@ function viewAnalytics(){
     ${a.total ? `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,420px),1fr));gap:14px">
       ${shown.map(analyticsCard).join('')}</div>` : `<div class="empty">No ${esc(ANALYTICS_SOURCES[src].label.toLowerCase())} yet. The charts appear as soon as there are records.</div>`}
     ${empty.length && a.total ? `<p class="small-note" style="margin-top:12px">No data recorded yet for: ${empty.map(c=>esc(c.label)).join(', ')}.</p>` : ''}
-    <p class="small-note">Ask Boss AI for a chart in words, for example "KYC status ka chart banao" or "branch wise clients graph".</p>
+    <p class="small-note">Ask LEXI AI for a chart in words, for example "KYC status ka chart banao" or "branch wise clients graph".</p>
     ${tasks ? analyticsTaskSection() : ''}`;
 }
 /* ---------------------------------------------------------------------
@@ -56258,10 +56258,10 @@ function analyticsTaskSection(){
     ${branchTabs({rows:all, stateKey:'_anTaskBranch', branchOf:analyticsTaskBranch, note:'tasks you can see'})}
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr));gap:14px;margin-top:12px">
       ${cards.map((c,i)=>analyticsRankHtml(c, ANALYTICS_COLORS[i % ANALYTICS_COLORS.length])).join('')}</div>
-    <p class="small-note">Ask Boss AI, for example "aaj ke tasks assign to wise chart".</p>
+    <p class="small-note">Ask LEXI AI, for example "aaj ke tasks assign to wise chart".</p>
   </div>`;
 }
-/* Boss Bot: a question asking for a chart, and which grouping it names.
+/* LEXI AI: a question asking for a chart, and which grouping it names.
    Returns null when the question does not ask for a chart. */
 function bossChartIntent(q){
   const t = ' ' + String(q||'').toLowerCase().replace(/[^a-z0-9]+/g,' ') + ' ';
@@ -56292,7 +56292,7 @@ function bossChartFor(intent){
   return {title: intent.dim.label + ' (' + ANALYTICS_SOURCES[intent.src].label + ')', total: intent.rows.length,
     rows: analyticsGroup(intent.rows, intent.dim.value), src: intent.src};
 }
-/* A chart out of a read Boss planned (grouped by one column), for a chart
+/* A chart out of a read LEXI planned (grouped by one column), for a chart
    question none of the named groupings matched. */
 function bossChartFromReads(reads){
   const g = (reads||[]).find(r=>r && r.groups && r.groups.length && r.groupBy && r.groupBy.length);
@@ -56453,15 +56453,15 @@ const CONNECTOR_GUIDES = {
          title:'Models served', rows:[{t:'the model your server serves', v:'ready', hl:1}]}),
        cap:'If this does not answer from the BOSS server, nothing below will.'},
       {t:'Point BOSS at it',
-       d:'Setup → Developer Hub → Connections → BOSS AI (your own model) → Configure. The base URL is the address plus /v1. The model is the name your server serves it under. A key only if your own server asks for one; most do not.',
-       art:()=>artBoss({name:'BOSS AI (your own model)', btn:'Close', open:1, testHl:1, rows:[
+       d:'Setup → Developer Hub → Connections → LEXI AI (your own model) → Configure. The base URL is the address plus /v1. The model is the name your server serves it under. A key only if your own server asks for one; most do not.',
+       art:()=>artBoss({name:'LEXI AI (your own model)', btn:'Close', open:1, testHl:1, rows:[
          {l:'Endpoint (base URL)', v:'http://10.0.0.21:11434/v1', mono:1},
          {l:'Model', v:'the model your server serves', hl:1},
          {l:'Key, if your server wants one', v:'(usually blank)'}]}),
        cap:'Plain http is accepted here and only here: the traffic never leaves your network.'},
       {t:'Save, then test',
        d:'The test asks your server what it serves. A model name that does not match what came back is caught here, with the real list printed, rather than at the first question somebody asks the assistant.',
-       art:()=>artResult({name:'BOSS AI (your own model)', ok:true,
+       art:()=>artResult({name:'LEXI AI (your own model)', ok:true,
          message:'Connected. Your own model server answered and serves 1 model(s). Nothing from BOSS leaves your infrastructure through this connector.'}),
        cap:'This is the only connector whose pass includes that last sentence.'},
     ],
@@ -71165,7 +71165,7 @@ function renderSettingsAiAssistant(){
     </div>
     <div class="card">
       <div class="section-title" style="margin-top:0">Who can use it</div>
-      <div class="small-note" style="margin:0 0 8px">Granted per person under Roles and Permissions, as “Use the BOSS AI Assistant”.
+      <div class="small-note" style="margin:0 0 8px">Granted per person under Roles and Permissions, as “Use the LEXI AI Assistant”.
         Anyone without it never sees the ✨ at all.</div>
       ${who.length? `<div class="row" style="gap:6px;flex-wrap:wrap">${who.map(t=>`<span class="badge info">${esc(t.name)}</span>`).join('')}</div>`
         : `<div class="small-note" style="margin:0">Nobody but administrators, so far.</div>`}
