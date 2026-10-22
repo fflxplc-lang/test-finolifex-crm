@@ -91,6 +91,22 @@ suite(async t => {
     return 'equity ' + r.pct[0] + '%: sell about ₹' + sell.amount;
   });
 
+  await t.step('the Nifty 50 PE sets the zone through the firm\'s bands', async () => {
+    const r = await t.eval(async () => {
+      await lexiSetPe('19.1', '2026-10-22');
+      const a = lexiZone().zone;
+      await lexiSetBands('15, 17, 18, 19');
+      const b = lexiZone().zone;
+      await lexiSetBands('17, 19, 22, 24');
+      await lexiSetPe('26');
+      const c = lexiZone().zone, label = lexiZoneLabel();
+      await lexiSetZone('');
+      return {a, b, c, label, cleared: lexiZone()};
+    });
+    if(r.a !== 'Fair Value' || r.b !== 'Expensive' || r.c !== 'Expensive' || !/Nifty 50 PE 26/.test(r.label) || r.cleared) throw new Error(JSON.stringify(r));
+    return 'PE 19.1 Fair Value; the same PE Expensive on tighter bands; PE 26 Expensive';
+  });
+
   t.section('Analytics and LEXI AI');
   await t.step('Analytics lists the clients to act on', async () => {
     const r = await t.eval(() => { navigate('analytics'); const el = document.getElementById('anSignals'); return el ? el.innerText : ''; });

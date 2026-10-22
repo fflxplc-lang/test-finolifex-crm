@@ -56002,7 +56002,7 @@ async function bossRunChat(q){
   if(!people.length && /\b(buy|sell|hold|switch|rebalanc\w*|signals?|exit|redeem|kharid\w*|bech\w*)\b/i.test(q) && can('CMS','view')){
     data.portfolioSignals = lexiBookSignals().filter(x=>x.need).slice(0, 15).map(x=>({client: clientDisplayName(x.client), profile: x.profile,
       rebalance: x.moves.map(m=>m.action+' '+m.asset+' ~'+Math.round(m.amount)), funds: x.rows.filter(r=>r.action!=='Hold').map(r=>r.action+': '+r.scheme+' ('+r.why+')')}));
-    data.marketZone = lexiZone() ? lexiZone().zone : 'not set';
+    data.marketZone = lexiZoneLabel();
   }
   if(people.length > 3) data.note = (people.length-3)+' more clients matched the name; ask for a fuller name to see them.';
   let dataText = JSON.stringify(data);
@@ -56444,8 +56444,47 @@ const LEXI_ZONES = ['Expensive','Fair Value Plus','Fair Value','Attractive','Und
 function lexiZone(){ const z = (DB.config||{}).marketZone; return z && LEXI_ZONES.includes(z.zone) ? z : null; }
 async function lexiSetZone(zone){
   if(!isAdmin()) return alert('Only an administrator sets the market valuation zone.');
-  DB.config.marketZone = LEXI_ZONES.includes(zone) ? {zone, setOn: new Date().toISOString(), by: currentUser} : null;
+  DB.config.marketZone = LEXI_ZONES.includes(zone) ? {zone, setOn: new Date().toISOString(), by: currentUser, source:'manual'} : null;
   await save('config'); render();
+}
+/* The zone can also be read off the Nifty 50 PE: the firm's own bands
+   (Setup-free: edited right here) turn the number into the matrix row.
+   The default bands sit around the index's long-run average PE of about
+   20 and are the firm's to change. */
+const LEXI_PE_BANDS_DEFAULT = [17, 19, 22, 24];
+function lexiPeBands(){
+  const b = (DB.config||{}).marketPeBands;
+  return Array.isArray(b) && b.length===4 && b.every((x,i)=>isFinite(x) && (!i || x > b[i-1])) ? b.map(Number) : LEXI_PE_BANDS_DEFAULT;
+}
+function lexiZoneFromPe(pe){
+  const [a, b, c, d] = lexiPeBands();
+  return pe < a ? 'Undervalued' : pe < b ? 'Attractive' : pe < c ? 'Fair Value' : pe < d ? 'Fair Value Plus' : 'Expensive';
+}
+function lexiBandsText(){
+  const [a, b, c, d] = lexiPeBands();
+  return 'below ' + a + ' Undervalued · ' + a + '–' + b + ' Attractive · ' + b + '–' + c + ' Fair Value · ' + c + '–' + d + ' Fair Value Plus · ' + d + '+ Expensive';
+}
+async function lexiSetPe(value, asOf){
+  if(!isAdmin()) return alert('Only an administrator sets the market valuation.');
+  const pe = parseFloat(value);
+  if(!(pe > 0 && pe < 200)) return alert('Enter the Nifty 50 PE as a number, for example 19.1.');
+  DB.config.marketZone = {zone: lexiZoneFromPe(pe), setOn: new Date().toISOString(), by: currentUser,
+    source:'Nifty 50 PE', pe, peAsOf: asOf || new Date().toISOString().slice(0,10)};
+  await save('config'); render();
+}
+async function lexiSetBands(text){
+  if(!isAdmin()) return alert('Only an administrator changes the PE bands.');
+  const b = String(text||'').split(/[,\s]+/).filter(Boolean).map(Number);
+  if(b.length !== 4 || b.some((x,i)=>!isFinite(x) || (i && x <= b[i-1]))) return alert('Give four rising numbers, for example 17, 19, 22, 24.');
+  DB.config.marketPeBands = b;
+  const z = lexiZone();
+  if(z && z.pe) z.zone = lexiZoneFromPe(z.pe);   // the same PE, read against the new bands
+  await save('config'); render();
+}
+function lexiZoneLabel(z){
+  z = z || lexiZone();
+  if(!z) return 'not set';
+  return z.zone + (z.pe ? ' (Nifty 50 PE ' + z.pe + ' on ' + fmtDate(String(z.peAsOf||z.setOn).slice(0,10)) + ')' : '');
 }
 /* Strategic mix by risk profile (3-asset model) and the equity range allowed. */
 const LEXI_TARGET = {Conservative:{mix:[28,61,11], eq:[10,40]}, Moderate:{mix:[55,31,14], eq:[20,80]}, Aggressive:{mix:[75,14,11], eq:[40,100]}};
@@ -56532,14 +56571,15 @@ function lexiClientSignals(c){
     'Fair Value':'Market marked Fair Value: invest partly in hybrids and pure equity; hold equity at the strategic level.',
     'Attractive':'Market marked Attractive: invest and switch into pure equity; hold equity above the strategic level.',
     'Undervalued':'Market marked Undervalued: invest and switch into pure equity aggressively.'})[zone.zone] : '';
+  const zoneNoteFull = zoneNote && zone.pe ? zoneNote.replace(/^Market marked ([^:]+):/, 'Market marked $1 (Nifty 50 PE ' + zone.pe + '):') : zoneNote;
   const need = rows.filter(r=>r.action!=='Hold').length + moves.length;
-  return {client: c, profile, target, zone, zoneNote, total, pct, rows, moves, need,
+  return {client: c, profile, target, zone, zoneNote: zoneNoteFull, total, pct, rows, moves, need,
     navDate: (rows.find(r=>r.nav)||{nav:{}}).nav.date || '', live: rows.some(r=>r.live)};
 }
 /* What LEXI AI is given about a client's signals: the same figures. */
 function lexiSignalsForAi(c){
   const s = lexiClientSignals(c);
-  return {profile: s.profile || 'not recorded', marketZone: s.zone ? s.zone.zone : 'not set', allocationPct: {equity:s.pct[0], debt:s.pct[1], gold:s.pct[2]},
+  return {profile: s.profile || 'not recorded', marketZone: lexiZoneLabel(s.zone), allocationPct: {equity:s.pct[0], debt:s.pct[1], gold:s.pct[2]},
     strategicPct: s.target ? {equity:s.target.mix[0], debt:s.target.mix[1], gold:s.target.mix[2]} : null, totalValue: Math.round(s.total),
     navDate: s.navDate || 'statement values', holdings: s.rows.map(r=>({scheme:r.scheme, category:r.cat, value:Math.round(r.value), action:r.action, why:r.why})),
     rebalance: s.moves, note: s.zoneNote};
@@ -56583,8 +56623,11 @@ function analyticsSignalsSection(){
       <label class="tl-lbl" for="lexiZone">Market valuation zone</label>
       <select id="lexiZone" class="branch-team" style="margin-left:0" ${isAdmin() ? '' : 'disabled'} onchange="lexiSetZone(this.value)">
         <option value="">Not set</option>${LEXI_ZONES.map(x=>`<option ${z && z.zone===x ? 'selected' : ''}>${esc(x)}</option>`).join('')}</select>
-      <span class="small-note" style="margin:0">${z ? 'Set ' + esc(fmtDate(z.setOn.slice(0,10))) + ' by ' + esc(teamName(z.by)) + '.' : 'Set by an administrator from the firm\'s market view (the policy\'s valuation matrix).'}</span>
+      <label class="tl-lbl" for="lexiPe" style="margin-left:8px">or Nifty 50 PE</label>
+      <input id="lexiPe" type="number" step="0.1" min="1" class="tl-date" style="width:90px" value="${z && z.pe ? esc(String(z.pe)) : ''}" ${isAdmin() ? '' : 'disabled'} placeholder="e.g. 19.1">
+      ${isAdmin() ? `<button class="btn sm" onclick="lexiSetPe(document.getElementById('lexiPe').value)">Apply PE</button>` : ''}
     </div>
+    <div class="small-note" style="margin:-6px 0 12px">${z ? 'Zone ' + esc(lexiZoneLabel(z)) + ', set ' + esc(fmtDate(z.setOn.slice(0,10))) + ' by ' + esc(teamName(z.by)) + '. ' : 'Set by an administrator from the firm\'s market view (the policy\'s valuation matrix), or from the Nifty 50 PE. '}PE bands: ${esc(lexiBandsText())}${isAdmin() ? ` · <a href="javascript:void(0)" onclick="const v=prompt('Four rising Nifty 50 PE cut-offs (Undervalued | Attractive | Fair Value | Fair Value Plus | Expensive):', lexiPeBands().join(', ')); if(v!==null) lexiSetBands(v)">Edit bands</a>` : ''}</div>
     ${all.length ? `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,420px),1fr));gap:14px">
       <div class="card" style="margin:0;padding:14px 16px"><h3 style="margin:0;font-size:15px">Signals across the book</h3>
         ${analyticsBarSvg(rows, '#9b6ad6', 'Signals across the book')}</div>
