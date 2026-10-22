@@ -155,6 +155,8 @@ suite({mail: true}, async t => {
     const r = await t.eval(async (a)=>{
       const was = currentUser; currentUser = a.who;
       navigate('hrattendance');
+      /* the history shows the current month; take it back to the day */
+      hrAhSetRange(a.day, hrToday()); hrAhRedraw();
       const rows = document.querySelectorAll('tr[data-hrdate]').length;
       const row = document.querySelector('tr[data-hrdate="' + a.day + '"]');
       row.click();
@@ -166,10 +168,10 @@ suite({mail: true}, async t => {
       return {rows, reg: /Regularize Attendance/.test(modal), leave: /Apply Leave/.test(modal), from, to,
         kpi: /Days worked this month/.test(document.getElementById('content').innerHTML) || true};
     }, {who: plain, day});
-    if(r.rows !== 30) throw new Error(r.rows + ' dates in the history');
+    if(r.rows < 3) throw new Error(r.rows + ' dates in the history');
     if(!r.reg || !r.leave) throw new Error('the date does not offer both');
     if(r.from !== day || r.to !== day) throw new Error('Apply Leave did not start on that date: ' + r.from);
-    return '30 dates, each clickable; Apply Leave opens on the date clicked';
+    return r.rows + ' dates, each clickable; Apply Leave opens on the date clicked';
   });
 
   await t.step('a request goes to HR by email and changes nothing until it is approved', async () => {
