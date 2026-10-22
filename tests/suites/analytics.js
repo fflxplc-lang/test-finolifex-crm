@@ -74,7 +74,7 @@ suite(async t => {
   });
 
   t.section('task work by Assign To');
-  await t.step('the Tasks tab counts DST tasks per assignee', async () => {
+  await t.step('the task tables under the charts count DST tasks per assignee', async () => {
     const r = await t.eval(() => {
       const d = analyticsDays(), mine = me().id;
       const other = 'TM-AN2'; DB.team.push({id:other, name:'An Other', branch:'Pune'});
@@ -84,19 +84,20 @@ suite(async t => {
       T({assignTo:other, dueDate:d.yesterday, overallStatus:'Completed', completedAt:new Date().toISOString()});
       T({assignTo:mine, dueDate:d.today, parentTaskId:'X'});                    // a sub-task: not counted
       T({assignTo:mine, dueDate:d.today, deletedAt:new Date().toISOString()}); // deleted: not counted
-      setAnalyticsSource('tasks');
+      setAnalyticsSource('clients');
       const rows = analyticsTaskRows();
       const card = id => analyticsTaskCard(ANALYTICS_TASK_CARDS.find(c=>c.id===id), rows).rows;
       return {mineName: teamName(mine), today: card('today'), yest: card('yesterday'), week: card('week'),
-        overdue: card('overdue'), text: document.body.innerText};
+        overdue: card('overdue'), text: document.body.innerText,
+        under: !!(document.querySelector('#anTasks') && document.querySelector('svg[role=img]') && (document.querySelector('svg[role=img]').compareDocumentPosition(document.querySelector('#anTasks')) & 4))};
     });
     const sum = rows => rows.reduce((s,x)=>s+x.count, 0);
     const mineToday = (r.today.find(x=>x.label===r.mineName)||{}).count;
     if(mineToday !== 2 || sum(r.today) !== 3) throw new Error('today ' + JSON.stringify(r.today));
     if(sum(r.yest) !== 2 || sum(r.overdue) !== 1 || sum(r.week) !== 1) throw new Error(JSON.stringify({y:r.yest, o:r.overdue, w:r.week}));
+    if(!r.under) throw new Error('task tables not under the charts');
     for(const h of ["Today's Work", "Yesterday's Work", 'Total Incomplete Tasks', 'Completed Tasks (This Week)', 'Assign To', 'Record Count'])
       if(!r.text.toLowerCase().includes(h.toLowerCase())) throw new Error('page lacks ' + h);
-    await t.eval(() => setAnalyticsSource('clients'));
     return 'today 3, yesterday 2, overdue 1, completed this week 1';
   });
 
