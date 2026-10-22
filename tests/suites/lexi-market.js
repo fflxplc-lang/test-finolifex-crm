@@ -25,12 +25,18 @@ const CHARTS = {
   'ICICIBANK.NS': chart('ICICIBANK.NS', 'ICICI Bank Limited', 1400, 1210, 1200),
   '^NSEI': chart('^NSEI', 'NIFTY 50', 25800, 22888.95, 22811.35),
   '^BSESN': chart('^BSESN', 'S&P BSE SENSEX', 84000, 74800, 74550),
+  'RELIANCE.NS': chart('RELIANCE.NS', 'Reliance Industries Limited', 1500, 1400, 1410),
+  'TCS.NS': chart('TCS.NS', 'Tata Consultancy Services Limited', 4200, 3100, 3120),
+  'INFY.NS': chart('INFY.NS', 'Infosys Limited', 1900, 1500, 1490),
 };
 const SEARCH = {
   'hdfc bank': {quotes:[{symbol:'HDFCBANK.BO', shortname:'HDFC BANK', quoteType:'EQUITY'}, {symbol:'HDB', shortname:'HDFC Bank ADR', quoteType:'EQUITY'},
     {symbol:'HDFCBANK.NS', longname:'HDFC Bank Limited', quoteType:'EQUITY', sectorDisp:'Financial Services'}],
     news:[{title:'HDFC Bank shares near 52-week low', publisher:'Business Line', providerPublishTime:Math.floor(Date.now() / 1000) - 3600}]},
   'icici bank': {quotes:[{symbol:'ICICIBANK.NS', longname:'ICICI Bank Limited', quoteType:'EQUITY'}], news:[]},
+  'reliance industries': {quotes:[{symbol:'RELIANCE.NS', longname:'Reliance Industries Limited', quoteType:'EQUITY'}], news:[]},
+  'tcs': {quotes:[{symbol:'TCS.NS', longname:'Tata Consultancy Services Limited', quoteType:'EQUITY'}], news:[]},
+  'infosys': {quotes:[{symbol:'INFY.NS', longname:'Infosys Limited', quoteType:'EQUITY'}], news:[]},
   'nothing like this': {quotes:[], news:[]},
 };
 const hits = [];
@@ -120,11 +126,38 @@ suite(async t => {
     if(hits.length !== before || lastUser().includes('liveMarket')) throw new Error('read prices for a records question');
     return 'no price read';
   });
-  await t.step('"konsa share loon?" with no company reads the market itself', async () => {
+  await t.step('"konsa share loon?" with no company reads the Nifty 50 and a default list, and says so', async () => {
     await t.eval(async () => { document.getElementById('aiInput').value = 'Konsa share loon abhi?'; await aiSend(); });
     const u = lastUser();
-    if(!u.includes('^NSEI') || !u.includes('^BSESN')) throw new Error(u.slice(0, 400));
-    return 'Nifty 50 and Sensex read';
+    for(const sym of ['^NSEI', 'HDFCBANK.NS', 'ICICIBANK.NS', 'RELIANCE.NS', 'TCS.NS', 'INFY.NS']) if(!u.includes(sym)) throw new Error('missing ' + sym + ': ' + u.slice(0, 300));
+    if(!/not a screen of the whole market/.test(u)) throw new Error('the default list is not flagged');
+    return 'Nifty 50 and five large companies read, flagged as a default list';
+  });
+  await t.step('a balance in the question sizes the answer: amount, shares each would buy, no junk lookups', async () => {
+    await t.eval(async () => { document.getElementById('aiInput').value = 'Mere paas 5 lakh rupaye balance hai, konsa company ka share loon?'; await aiSend(); });
+    const u = lastUser(), h = hits.filter(x => x.startsWith('/v1/finance/search')).map(x => decodeURIComponent(x.split('q=')[1].split('&')[0]));
+    if(!u.includes('"investAmount":500000')) throw new Error('amount not sent: ' + u.slice(0, 300));
+    if(!u.includes('"sharesAffordable":707')) throw new Error('shares for HDFC Bank (500000 / 707) not worked out');
+    if(h.some(x => /mere|paas|balance|rupaye/i.test(x))) throw new Error('looked up filler words: ' + h.join(' | '));
+    if(!/investAmount/.test(lastSys())) throw new Error('rule missing from the brief');
+    return 'investAmount 500000, 707 HDFC Bank shares affordable, and no search was for "mere paas", "balance" or "rupaye" (searched: ' + [...new Set(h)].join(', ') + ')';
+  });
+  await t.step('amounts and words around the company are not read as company names', async () => {
+    const r = await t.eval(() => ({
+      amt: ['5 lakh', '₹2.5 cr', '50k', 'Rs 75,000', '1,00,000 hain', 'Nifty 50', 'Adani Ports 1', 'TCS 3500 ka share'].map(x => lexiMoneyIn(x)),
+      two: lexiMarketAsk('5 lakh ka balance hai HDFC Bank lun ya ICICI Bank?', []),
+      lag: lexiMarketAsk('Mera balance 1,00,000 hai, HDFC Bank aur ICICI Bank mein kitna lagaun?', []),
+      client: lexiMarketAsk('Ek client ke account mein 2 lakh balance hai, konsa share loon?', [{}]),
+      byName: lexiMarketAsk('Priya Sharma ke account mein 2 lakh balance hai, HDFC Bank lun ya ICICI Bank?', [{cmsName:'Priya Sharma'}]),
+      records: ['Aaj kitne clients ne share kharide', 'Client ka report share karo', 'Konsa fund loon 5 lakh ke liye?', 'Ye document lagana hai'].map(x => lexiMarketAsk(x, [])),
+      named: [lexiMarketAsk('Priya ka KYC share karo', [{}]), lexiMarketAsk('Priya ke liye kya buy karna hai', [{cmsName:'Priya Sharma'}])],
+    }));
+    if(JSON.stringify(r.amt) !== JSON.stringify([500000, 25000000, 50000, 75000, 100000, 0, 0, 0])) throw new Error('amounts ' + JSON.stringify(r.amt));
+    if(JSON.stringify(r.two) !== '["HDFC Bank","ICICI Bank"]' || JSON.stringify(r.lag) !== '["HDFC Bank","ICICI Bank"]') throw new Error('names ' + JSON.stringify([r.two, r.lag]));
+    if(!r.client || r.client[0] !== 'NIFTY 50') throw new Error('a named client lost the market read: ' + JSON.stringify(r.client));
+    if(JSON.stringify(r.byName) !== '["HDFC Bank","ICICI Bank"]') throw new Error('the client\'s own name was looked up as a company: ' + JSON.stringify(r.byName));
+    if(r.records.some(x => x !== null) || r.named.some(x => x !== null)) throw new Error('a records question read prices: ' + JSON.stringify([r.records, r.named]));
+    return 'amounts parsed; a client plus "konsa share loon" reads the market; funds, reports and tasks do not';
   });
   } finally { feed.close(); mock.close(); }
 });
