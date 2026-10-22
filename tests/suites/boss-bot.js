@@ -42,8 +42,33 @@ suite(async t => {
   await t.step('all 71 SOPs and the investment policy are in the page', async () => {
     const n = await t.eval(() => ({ops: BOSS_SOPS.filter(s=>!bossIsPolicy(s)).length, policy: BOSS_POLICY.length}));
     if(n.ops !== 71) throw new Error(n.ops + ' SOPs');
-    if(n.policy < 14) throw new Error(n.policy + ' policy entries');
+    if(n.policy < 20) throw new Error(n.policy + ' policy entries');
     return n.ops + ' SOPs + ' + n.policy + ' policy entries';
+  });
+  await t.step('a question about the fund-list SOP finds its stages, a records question does not', async () => {
+    const got = await t.eval(() => ({
+      stages: bossSopSearch('sop recommended mutual fund scheme ke stages kya hain').map(s=>s.id),
+      risk: bossSopSearch('sortino alpha capture ratio ka filter kya hai').map(s=>s.id),
+      eligible: bossSopSearch('fund eligibility ke liye minimum AUM aur fund age kya chahiye').map(s=>s.id),
+      sign: bossSopSearch('due diligence aur investment committee sign off kaise hota hai').map(s=>s.id),
+      src: bossSopSearch('NAV history aur TRI data kahan se lete hain').map(s=>s.id),
+      rec: bossSopSearch('Large cap mein kaunsa fund recommend hai').map(s=>s.id),
+      book: bossSopSearch('top 5 clients by AUM').map(s=>s.id),
+    }));
+    if(got.stages[0] !== 'policy-sop-funnel') throw new Error('stages → ' + got.stages);
+    if(got.risk[0] !== 'policy-sop-risk') throw new Error('risk → ' + got.risk);
+    if(got.eligible[0] !== 'policy-sop-eligibility') throw new Error('eligible → ' + got.eligible);
+    if(got.sign[0] !== 'policy-sop-signoff') throw new Error('sign → ' + got.sign);
+    if(got.src[0] !== 'policy-sop-data') throw new Error('src → ' + got.src);
+    if(got.rec.join() !== 'policy-reco-equity') throw new Error('the recommended list question now matches ' + got.rec);
+    if(got.book.length) throw new Error('book question matched ' + got.book);
+    return 'stages → ' + got.stages.join(', ');
+  });
+  await t.step('the SOP says what is true: no run on market data, and the older process differs', async () => {
+    const f = await t.eval(() => bossSopById('policy-sop-funnel').f.join(' | '));
+    if(!/no run of this funnel on market data/.test(f)) throw new Error('missing the no-run note');
+    if(!/Rs 1,000 cr/.test(f) || !/Rs 500 cr/.test(f)) throw new Error('missing the threshold difference');
+    return 'notes present';
   });
   await t.step('a policy question finds the policy, a book question does not', async () => {
     const got = await t.eval(() => ({
