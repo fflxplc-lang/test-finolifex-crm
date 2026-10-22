@@ -1599,6 +1599,77 @@ app.get('/api/lookup/ifsc/:code', checkApiKey, (req, res) => {
   }, res);
 });
 
+/* ---------------------------------------------------------------------
+   LIVE NAVs
+
+   AMFI publishes every scheme's latest NAV in one public text file, once
+   each business day. The page cannot read it (no CORS), so it asks here:
+   it sends the scheme names (and ISINs, when an import gave them) of the
+   holdings it is drawing, and gets back each one's latest NAV and its
+   date. The file is read at most once every thirty minutes. The URL can be
+   pointed elsewhere by environment variable, which is how the tests run
+   without the internet.
+   --------------------------------------------------------------------- */
+const NAV_URL = process.env.CRM_NAV_URL || 'https://www.amfiindia.com/spages/NAVAll.txt';
+let navCache = null, navLoading = null;
+const NAV_DROP = new Set(['fund', 'plan', 'option', 'growth', 'the', 'india', 'scheme', 'of', 'mutual', 'mf']);
+function navTokens(name) {
+  return String(name || '').toLowerCase().replace(/&/g, ' and ').replace(/[^a-z0-9]+/g, ' ').trim().split(' ')
+    .filter((w) => w && !NAV_DROP.has(w));
+}
+async function navList() {
+  if (navCache && Date.now() - navCache.at < 30 * 60 * 1000) return navCache;
+  if (navLoading) return navLoading;
+  navLoading = (async () => {
+    const res = await fetch(NAV_URL, { headers: { 'User-Agent': 'Finowise-CRM/1.0' }, signal: AbortSignal.timeout(20000) });
+    if (!res.ok) throw new Error('AMFI answered ' + res.status);
+    const rows = [];
+    String(await res.text()).split(/\r?\n/).forEach((line) => {
+      const f = line.split(';');
+      if (f.length < 6 || !/^\d+$/.test(f[0].trim())) return;
+      const nav = parseFloat(f[4]);
+      if (!isFinite(nav)) return;
+      const name = f[3].trim();
+      rows.push({ code: f[0].trim(), isin: [f[1].trim(), f[2].trim()].filter((x) => x && x !== '-'), name, nav, date: f[5].trim(),
+        toks: new Set(navTokens(name)), direct: /\bdirect\b/i.test(name), growth: /growth/i.test(name) && !/idcw|dividend|bonus/i.test(name) });
+    });
+    if (!rows.length) throw new Error('the NAV file had no schemes in it');
+    navCache = { at: Date.now(), fetchedAt: new Date().toISOString(), rows };
+    return navCache;
+  })();
+  try { return await navLoading; } finally { navLoading = null; }
+}
+/* The scheme a holding is: by ISIN when there is one; otherwise the AMFI
+   name holding every word of the holding's name, the same plan (direct
+   or regular) and the growth option preferred, the shortest name winning. */
+function navMatch(list, q) {
+  const isin = String(q.isin || '').trim().toUpperCase();
+  if (isin) { const hit = list.rows.find((r) => r.isin.includes(isin)); if (hit) return hit; }
+  const want = navTokens(q.name).filter((w) => !['direct', 'regular', 'idcw', 'dividend', 'payout', 'reinvestment'].includes(w));
+  if (!want.length) return null;
+  const direct = /\bdirect\b/i.test(q.name || '');
+  let best = null, score = -1;
+  for (const r of list.rows) {
+    if (!want.every((w) => r.toks.has(w))) continue;
+    const s = (r.direct === direct ? 4 : 0) + (r.growth ? 2 : 0) - r.toks.size / 100;
+    if (s > score) { score = s; best = r; }
+  }
+  return best;
+}
+app.post('/api/market/nav', checkApiKey, async (req, res) => {
+  const items = Array.isArray((req.body || {}).items) ? req.body.items.slice(0, 500) : [];
+  try {
+    const list = await navList();
+    const results = items.map((q) => {
+      const hit = navMatch(list, q || {});
+      return hit ? { name: q.name, isin: q.isin || '', code: hit.code, scheme: hit.name, nav: hit.nav, date: hit.date } : { name: q.name, isin: q.isin || '', missing: true };
+    });
+    res.set('Cache-Control', 'no-store').json({ ok: true, source: 'AMFI', fetchedAt: list.fetchedAt, results });
+  } catch (e) {
+    res.status(502).json({ ok: false, message: e && e.name === 'TimeoutError' ? 'AMFI did not answer in time' : 'the AMFI NAV list could not be read: ' + (e && e.message || e) });
+  }
+});
+
 // One send, whether it came from the CRM or from a client's own page. `allowed`
 // is null for a signed-in sender and a list of addresses for a public one, so a
 // form link can write to the people it concerns and to nobody else.
