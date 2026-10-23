@@ -56770,7 +56770,7 @@ function lexiQuoteCard(x, ti, qi){
       <div style="white-space:nowrap"><b style="font-size:16px">${x.currency === 'INR' ? '₹' : ''}${f(x.price)}</b>${x.change == null ? '' : ` <span style="color:${col};font-weight:600">${up ? '▲' : '▼'} ${f(Math.abs(x.change))} (${pc(x.changePct)})</span>`}</div>
     </div>${spark}
     <div class="small-note">52-week ${f(x.low52)} – ${f(x.high52)} · 1 month ${pc(r.month)} · 1 year ${pc(r.year)} · RSI ${x.rsi14 == null ? '—' : x.rsi14}${x.trend ? ' · ' + esc(x.trend.split(':')[0]) : ''}</div>
-    <div class="small-note" style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap"><span>Live from ${esc(x.source || 'the price feed')}${when ? ', price at ' + esc(when) : ''}</span>${open ? '<span style="color:var(--navy-ink);font-weight:600">Bigger chart ›</span>' : ''}</div></div>`;
+    <div class="small-note" style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap"><span>${x.time && Date.now() - new Date(x.time) < 20 * 60000 ? 'Live from' : 'Last price from'} ${esc(x.source || 'the price feed')}${when ? ', price at ' + esc(when) : ''}</span>${open ? '<span style="color:var(--navy-ink);font-weight:600">Bigger chart ›</span>' : ''}</div></div>`;
 }
 
 /* A click on a price card opens the same prices larger, as a trading chart:
