@@ -256,5 +256,22 @@ suite(async t => {
     if(r.records.some(x => x !== null) || r.named.some(x => x !== null)) throw new Error('a records question read prices: ' + JSON.stringify([r.records, r.named]));
     return 'amounts parsed; a client plus "konsa share loon" reads the market; funds, reports and tasks do not';
   });
+  await t.step('a policy question that names no company is answered against the live Nifty 50 and the zone', async () => {
+    const ask = async (text) => { const n0 = hits.length; await t.eval(async (text) => { navigate('dashboard'); ai.turns = []; document.getElementById('aiInput').value = text; await aiSend(); }, text); return hits.slice(n0); };
+    const h1 = await ask('I have 10 lakh as lump sum for a Moderate client, should it go into equity now?');
+    const u = lastUser();
+    if(!h1.some(h => h.includes('/%5ENSEI') || h.includes('/^NSEI'))) throw new Error('the Nifty 50 was not read: ' + JSON.stringify(h1));
+    if(!u.includes('"marketNow"') || !u.includes('^NSEI') || !u.includes('"technical"') || !u.includes('"marketZone"')) throw new Error(u.slice(0, 400));
+    if(!u.includes('policy-valuation-matrix') || !u.includes('policy-risk-allocation')) throw new Error('the valuation matrix and the allocation were not sent');
+    if(!/marketNow/.test(lastSys())) throw new Error('rule missing from the brief');
+    const h2 = await ask('kitne clients ke KYC pending hain');
+    if(h2.some(h => /finance\/chart/.test(h))) throw new Error('a records question read prices: ' + JSON.stringify(h2));
+    const h3 = await ask('SIP mandate kaise banate hain');
+    if(h3.some(h => /finance\/chart/.test(h))) throw new Error('a how-to read prices: ' + JSON.stringify(h3));
+    // a live PE from the feed sets the zone; the firm's own entry is kept beside it when it differs
+    const z = await t.eval(() => ({live: lexiLiveZoneLabel([{symbol:'NIFTY', name:'Nifty 50', pe:25.4, source:'Trendlyne'}]), none: lexiLiveZoneLabel([{symbol:'NIFTY', name:'Nifty 50'}]), set: lexiZoneLabel()}));
+    if(!/^Expensive \(live Nifty 50 PE 25\.4 from Trendlyne\)/.test(z.live) || !z.live.includes('the firm') || z.none !== z.set) throw new Error(JSON.stringify(z));
+    return 'a lump-sum question read the Nifty 50 and sent marketNow + the zone; a records question and a how-to read no prices; a live PE of 25.4 gives "' + z.live.split(' (')[0] + '"';
+  });
   } finally { feed.close(); mock.close(); }
 });
