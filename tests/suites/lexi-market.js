@@ -153,7 +153,7 @@ suite(async t => {
     if(r.cards.length !== 2 || !/₹707/.test(r.cards[0]) || !/▲ 7/.test(r.cards[0]) || !/▼ 10/.test(r.cards[1])) throw new Error('cards ' + JSON.stringify(r.cards));
     if(!u.includes('"technical"') || !u.includes('"checklist"') || !u.includes('"trendStrength"')) throw new Error('the technical block was not sent');
     const sys = lastSys();
-    for(const w of ['forty years', 'Read:', 'What would change this view', 'not price targets', 'againstTheLean', 'last close']) if(!sys.includes(w)) throw new Error('the brief lacks "' + w + '"');
+    for(const w of ['forty years', 'CMT', 'invalidat', 'Read:', 'What would change this view', 'not price targets', 'againstTheLean', 'last close']) if(!sys.includes(w)) throw new Error('the brief lacks "' + w + '"');
     if(r.cards.some(c => !/Technical: \w+.*checks up.*MACD.*ADX.*support.*resistance/i.test(c))) throw new Error('the cards carry no technical line ' + JSON.stringify(r.cards));
     if(!/MOCK MARKET ANSWER/.test(r.answer)) throw new Error('answer not shown');
     return 'both quotes and the Fair Value zone in the data; cards: ' + r.cards.map(c => c.split(' · ')[0]).join(' | ');
