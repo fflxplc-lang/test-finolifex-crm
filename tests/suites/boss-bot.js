@@ -64,11 +64,19 @@ suite(async t => {
     if(got.book.length) throw new Error('book question matched ' + got.book);
     return 'stages → ' + got.stages.join(', ');
   });
-  await t.step('the SOP says what is true: no run on market data, and the older process differs', async () => {
-    const f = await t.eval(() => bossSopById('policy-sop-funnel').f.join(' | '));
-    if(!/no run of this funnel on market data/.test(f)) throw new Error('missing the no-run note');
-    if(!/Rs 1,000 cr/.test(f) || !/Rs 500 cr/.test(f)) throw new Error('missing the threshold difference');
-    return 'notes present';
+  await t.step('the SOP governs: no run on market data yet, and the older seven-step process is marked replaced', async () => {
+    const got = await t.eval(() => ({
+      funnel: bossSopById('policy-sop-funnel').f.join(' | '),
+      old: bossSopById('policy-fund-selection'),
+      debt: bossSopById('policy-debt-tenure').f.join(' | '),
+      ask: bossSopSearch('fund selection process kya hai').map(s=>s.id),
+    }));
+    if(!/no run of this funnel on market data/.test(got.funnel)) throw new Error('missing the no-run note');
+    if(!/this SOP governs/.test(got.funnel) || !/Rs 500 cr/.test(got.funnel)) throw new Error('funnel does not say the SOP governs: ' + got.funnel);
+    if(!/replaced by the SOP/.test(got.old.t) || !/Replaced from 23 Oct 2026/.test(got.old.f[0])) throw new Error('old process not marked replaced');
+    if(!/Rs 300 cr/.test(got.debt)) throw new Error('debt note still on the old threshold: ' + got.debt);
+    if(!got.ask.includes('policy-sop-funnel') || !got.ask.includes('policy-fund-selection')) throw new Error('a selection question must see the SOP and the replaced note: ' + got.ask);
+    return 'SOP governs; old process marked replaced';
   });
   await t.step('a policy question finds the policy, a book question does not', async () => {
     const got = await t.eval(() => ({
