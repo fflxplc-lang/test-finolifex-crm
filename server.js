@@ -1749,13 +1749,115 @@ function marketRsi(c, n = 14) {
   }
   return loss === 0 ? 100 : 100 - 100 / (1 + gain / loss);
 }
+/* The checks a chartist runs, computed here so the model reads them and never
+   works them out: trend strength (ADX), momentum (MACD, RSI), volatility (ATR,
+   Bollinger Bands), the nearest levels, volume against its norm and how many
+   of the standard checks lean up. A checklist of what the chart shows, not a
+   forecast. */
+function marketEma(c, n) {
+  if (c.length < n) return [];
+  const k = 2 / (n + 1), out = new Array(c.length).fill(null);
+  let e = c.slice(0, n).reduce((a, b) => a + b, 0) / n; out[n - 1] = e;
+  for (let i = n; i < c.length; i++) { e = c[i] * k + e * (1 - k); out[i] = e; }
+  return out;
+}
+function marketAdx(H, L, C, n = 14) {
+  if (C.length < n * 2 + 1) return null;
+  let tr = 0, pdm = 0, ndm = 0; const dx = [];
+  for (let i = 1; i <= C.length - 1; i++) {
+    const up = H[i] - H[i - 1], dn = L[i - 1] - L[i];
+    const t = Math.max(H[i] - L[i], Math.abs(H[i] - C[i - 1]), Math.abs(L[i] - C[i - 1]));
+    const p = up > dn && up > 0 ? up : 0, m = dn > up && dn > 0 ? dn : 0;
+    if (i <= n) { tr += t; pdm += p; ndm += m; }
+    else { tr = tr - tr / n + t; pdm = pdm - pdm / n + p; ndm = ndm - ndm / n + m; }
+    if (i >= n && tr > 0) {
+      const pdi = 100 * pdm / tr, ndi = 100 * ndm / tr;
+      dx.push({ dx: pdi + ndi === 0 ? 0 : 100 * Math.abs(pdi - ndi) / (pdi + ndi), pdi, ndi });
+    }
+  }
+  if (dx.length < n) return null;
+  let adx = dx.slice(0, n).reduce((a, b) => a + b.dx, 0) / n;
+  for (let i = n; i < dx.length; i++) adx = (adx * (n - 1) + dx[i].dx) / n;
+  const last = dx[dx.length - 1];
+  return { adx, plusDi: last.pdi, minusDi: last.ndi };
+}
+function marketAtr(H, L, C, n = 14) {
+  if (C.length <= n) return null;
+  const tr = (i) => Math.max(H[i] - L[i], Math.abs(H[i] - C[i - 1]), Math.abs(L[i] - C[i - 1]));
+  let a = 0; for (let i = 1; i <= n; i++) a += tr(i); a /= n;
+  for (let i = n + 1; i < C.length; i++) a = (a * (n - 1) + tr(i)) / n;
+  return a;
+}
+function marketTechnicals(C, H, L, V, price, rsi, sma50, sma200) {
+  const R = marketRound, t = {};
+  const e12 = marketEma(C, 12), e26 = marketEma(C, 26);
+  if (e26.length) {
+    const line = []; for (let i = 0; i < C.length; i++) if (e26[i] != null) line.push(e12[i] - e26[i]);
+    const sig = marketEma(line, 9);
+    if (sig.length) {
+      const m = line[line.length - 1], sg = sig[sig.length - 1], h = m - sg, hp = line[line.length - 2] - sig[sig.length - 2];
+      t.macd = { line: R(m, 2), signal: R(sg, 2), histogram: R(h, 2), histogramRising: h > hp,
+        state: m > sg ? (m > 0 ? 'above its signal line and above zero: bullish momentum' : 'above its signal line but still below zero: a recovery attempt')
+          : (m < 0 ? 'below its signal line and below zero: bearish momentum' : 'below its signal line but above zero: momentum fading') };
+    }
+  }
+  if (C.length >= 20) {
+    const w = C.slice(-20), mid = w.reduce((a, b) => a + b, 0) / 20, sd = Math.sqrt(w.reduce((a, b) => a + (b - mid) ** 2, 0) / 20);
+    const up = mid + 2 * sd, lo = mid - 2 * sd;
+    t.bollinger = { upper: R(up), middle: R(mid), lower: R(lo), percentB: sd ? R((price - lo) / (up - lo) * 100, 0) : null, bandwidthPct: mid ? R(4 * sd / mid * 100, 1) : null };
+  }
+  const adx = marketAdx(H, L, C);
+  if (adx) t.trendStrength = { adx: R(adx.adx, 0), plusDi: R(adx.plusDi, 0), minusDi: R(adx.minusDi, 0),
+    reading: adx.adx >= 40 ? 'very strong trend' : adx.adx >= 25 ? 'a trending market' : adx.adx >= 20 ? 'a trend is forming' : 'no real trend: a range-bound market',
+    direction: adx.plusDi > adx.minusDi ? 'buyers lead' : 'sellers lead' };
+  const atr = marketAtr(H, L, C);
+  if (atr) t.atr14 = { value: R(atr), pctOfPrice: price ? R(atr / price * 100, 1) : null };
+  if (C.length > 20) {
+    const r = []; for (let i = C.length - 60 > 0 ? C.length - 60 : 1; i < C.length; i++) r.push(Math.log(C[i] / C[i - 1]));
+    const mu = r.reduce((a, b) => a + b, 0) / r.length;
+    t.volatilityPct = R(Math.sqrt(r.reduce((a, b) => a + (b - mu) ** 2, 0) / (r.length - 1)) * Math.sqrt(252) * 100, 1);
+  }
+  const lv = {}; [20, 60].forEach((n) => { if (L.length >= n) { lv['low' + n] = R(Math.min(...L.slice(-n))); lv['high' + n] = R(Math.max(...H.slice(-n))); } });
+  if (lv.low20 != null) {
+    t.levels = lv;
+    t.levels.note = 'support is the recent lows, resistance the recent highs; ' + (price <= lv.low20 * 1.01 ? 'price is sitting on its 20-day support' : price >= lv.high20 * 0.99 ? 'price is pressing its 20-day resistance' : 'price is between them');
+  }
+  const vs = V.filter((v) => v > 0);
+  if (V.length >= 21 && V[V.length - 1] > 0 && vs.length > V.length * 0.8) {
+    const avg = V.slice(-21, -1).reduce((a, b) => a + b, 0) / 20;
+    if (avg > 0) t.volumeVsAvg20 = R(V[V.length - 1] / avg, 2);
+  }
+  // A cross of the 50- and 200-day averages in the last 30 sessions.
+  if (C.length >= 230) {
+    const sm = (i, n) => C.slice(i - n + 1, i + 1).reduce((a, b) => a + b, 0) / n;
+    let was = null;
+    for (let i = C.length - 31; i < C.length; i++) { const above = sm(i, 50) > sm(i, 200); if (was != null && above !== was) t.crossLast30 = above ? 'golden cross (50-day moved above the 200-day)' : 'death cross (50-day moved below the 200-day)'; was = above; }
+  }
+  // The checklist: one point each way, so the advisor sees how broad the lean is.
+  const checks = [];
+  const add = (label, ok) => { if (ok != null) checks.push({ label, up: !!ok }); };
+  if (sma50 != null) add('price vs 50-day average', price > sma50);
+  if (sma200 != null) add('price vs 200-day average', price > sma200);
+  if (sma50 != null && sma200 != null) add('50-day vs 200-day average', sma50 > sma200);
+  if (t.macd) { add('MACD vs signal line', t.macd.line > t.macd.signal); add('MACD histogram direction', t.macd.histogramRising); }
+  if (rsi != null) add('RSI vs 50', rsi > 50);
+  if (t.trendStrength) add('buyers vs sellers (+DI vs -DI)', t.trendStrength.plusDi > t.trendStrength.minusDi);
+  const ups = checks.filter((c) => c.up).length;
+  if (checks.length >= 4) {
+    const share = ups / checks.length;
+    t.checklist = { positive: ups, of: checks.length, bias: share >= 0.75 ? 'bullish' : share <= 0.25 ? 'bearish' : share >= 0.55 ? 'leaning bullish' : share <= 0.45 ? 'leaning bearish' : 'neutral',
+      againstTheLean: checks.filter((c) => c.up !== (share >= 0.5)).map((c) => c.label) };
+  }
+  if (rsi != null) t.rsiReading = rsi >= 70 ? 'overbought: stretched, prone to a pause' : rsi <= 30 ? 'oversold: stretched down, prone to a bounce' : rsi >= 55 ? 'firm' : rsi <= 45 ? 'weak' : 'neutral';
+  return t;
+}
 /* One listing's year of daily prices, read down to what an advisor uses. */
 async function marketQuote(symbol) {
   const json = await marketGet('/v8/finance/chart/' + encodeURIComponent(symbol) + '?range=1y&interval=1d', marketTtl(60 * 1000));
   const r = json && json.chart && json.chart.result && json.chart.result[0];
   if (!r || !r.meta) return null;
   const m = r.meta, q = ((r.indicators || {}).quote || [])[0] || {};
-  const bars = (r.timestamp || []).map((t, i) => ({ t: t * 1000, c: (q.close || [])[i], h: (q.high || [])[i], l: (q.low || [])[i] }))
+  const bars = (r.timestamp || []).map((t, i) => ({ t: t * 1000, c: (q.close || [])[i], h: (q.high || [])[i], l: (q.low || [])[i], v: (q.volume || [])[i] || 0 }))
     .filter((b) => b.c != null && isFinite(b.c));
   if (!bars.length && m.regularMarketPrice == null) return null;
   const price = m.regularMarketPrice != null ? m.regularMarketPrice : bars[bars.length - 1].c;
@@ -1772,6 +1874,10 @@ async function marketQuote(symbol) {
   const hi = m.fiftyTwoWeekHigh != null ? m.fiftyTwoWeekHigh : Math.max(...bars.map((b) => b.h || b.c));
   const lo = m.fiftyTwoWeekLow != null ? m.fiftyTwoWeekLow : Math.min(...bars.map((b) => b.l || b.c));
   const sma50 = marketSma(closes, 50), sma200 = marketSma(closes, 200);
+  // High, low and volume lined up with `closes` (a live price on a new day adds a bar of its own).
+  const H = bars.map((b) => (b.h != null && isFinite(b.h) ? b.h : b.c)), L = bars.map((b) => (b.l != null && isFinite(b.l) ? b.l : b.c)), V = bars.map((b) => b.v);
+  if (closes.length > H.length) { H.push(price); L.push(price); V.push(0); } else { H[H.length - 1] = Math.max(H[H.length - 1], price); L[L.length - 1] = Math.min(L[L.length - 1], price); }
+  const technical = marketTechnicals(closes, H, L, V, price, marketRsi(closes), sma50, sma200);
   return {
     symbol: m.symbol || symbol, name: m.longName || m.shortName || symbol, exchange: m.fullExchangeName || m.exchangeName || '',
     currency: m.currency || 'INR', price: marketRound(price), time: new Date(time).toISOString(),
@@ -1780,6 +1886,7 @@ async function marketQuote(symbol) {
     high52: marketRound(hi), low52: marketRound(lo), fromHigh52Pct: hi ? marketRound((price / hi - 1) * 100) : null,
     returnsPct: { week: marketRound(back(5)), month: marketRound(back(21)), quarter: marketRound(back(63)), halfYear: marketRound(back(126)),
       year: closes.length > 200 ? marketRound((price / closes[0] - 1) * 100) : null },
+    technical,
     rsi14: marketRound(marketRsi(closes), 1), sma20: marketRound(marketSma(closes, 20)), sma50: marketRound(sma50), sma200: marketRound(sma200),
     trend: sma50 && sma200 ? (price > sma50 && sma50 > sma200 ? 'uptrend: above the 50-day average, which is above the 200-day'
       : price < sma50 && sma50 < sma200 ? 'downtrend: below the 50-day average, which is below the 200-day'

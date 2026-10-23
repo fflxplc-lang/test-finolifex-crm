@@ -119,6 +119,21 @@ suite(async t => {
     return 'OHLCV per timeframe (' + Object.keys(asked).join(', ') + '); a bad symbol or range is an answer (ok:false), not an error; quote by symbol refreshes without a search';
   });
 
+  await t.step('every quote carries the chartist\'s checks: trend strength, MACD, Bollinger, ATR, levels, and a checklist with its lean', async () => {
+    const ask = async url => (await t.eval(async (u) => (await fetch(u, {headers: apiHeaders()})).json(), url));
+    const up = (await ask('/api/market/quote?symbol=HDFCBANK.NS')).quote.technical, dn = (await ask('/api/market/quote?symbol=ICICIBANK.NS')).quote.technical;
+    for(const [n, x] of [['rising', up], ['falling', dn]]){
+      for(const k of ['macd', 'bollinger', 'trendStrength', 'atr14', 'levels', 'checklist', 'volatilityPct', 'rsiReading', 'volumeVsAvg20'])
+        if(x[k] == null) throw new Error(n + ' series lacks ' + k + ': ' + JSON.stringify(x).slice(0, 300));
+      if(x.levels.low20 > x.levels.high20 || x.levels.low60 > x.levels.low20 || x.bollinger.lower >= x.bollinger.upper || !(x.atr14.value > 0)) throw new Error(n + ' figures are inconsistent ' + JSON.stringify(x));
+    }
+    if(!/bullish/.test(up.checklist.bias) || up.checklist.positive < 5) throw new Error('a rising series should lean up: ' + JSON.stringify(up.checklist));
+    if(!/bearish/.test(dn.checklist.bias) || dn.checklist.positive > 2) throw new Error('a falling series should lean down: ' + JSON.stringify(dn.checklist));
+    if(!(up.trendStrength.plusDi > up.trendStrength.minusDi) || !(dn.trendStrength.minusDi > dn.trendStrength.plusDi)) throw new Error('+DI / -DI point the wrong way');
+    if(dn.macd.line > 0) throw new Error('MACD of the falling series is above zero: ' + JSON.stringify(dn.macd));
+    return 'HDFC (rising): ' + up.checklist.bias + ' ' + up.checklist.positive + '/' + up.checklist.of + ', ADX ' + up.trendStrength.adx + '; ICICI (falling): ' + dn.checklist.bias + ' ' + dn.checklist.positive + '/' + dn.checklist.of + ', ADX ' + dn.trendStrength.adx;
+  });
+
   t.section('LEXI answers from live prices');
   await t.step('"konsa loon" between two companies hands LEXI both, with the market view, and draws a card each', async () => {
     const r = await t.eval(async (port) => {
@@ -136,6 +151,10 @@ suite(async t => {
     if(!u.includes('policy-valuation-matrix')) throw new Error('the valuation matrix was not sent');
     if(!/liveMarket/.test(lastSys()) || !/Decision now/.test(lastSys())) throw new Error('rule missing from the brief');
     if(r.cards.length !== 2 || !/₹707/.test(r.cards[0]) || !/▲ 7/.test(r.cards[0]) || !/▼ 10/.test(r.cards[1])) throw new Error('cards ' + JSON.stringify(r.cards));
+    if(!u.includes('"technical"') || !u.includes('"checklist"') || !u.includes('"trendStrength"')) throw new Error('the technical block was not sent');
+    const sys = lastSys();
+    for(const w of ['forty years', 'Read:', 'What would change this view', 'not price targets', 'againstTheLean', 'last close']) if(!sys.includes(w)) throw new Error('the brief lacks "' + w + '"');
+    if(r.cards.some(c => !/Technical: \w+.*checks up.*MACD.*ADX.*support.*resistance/i.test(c))) throw new Error('the cards carry no technical line ' + JSON.stringify(r.cards));
     if(!/MOCK MARKET ANSWER/.test(r.answer)) throw new Error('answer not shown');
     return 'both quotes and the Fair Value zone in the data; cards: ' + r.cards.map(c => c.split(' · ')[0]).join(' | ');
   });
@@ -163,7 +182,7 @@ suite(async t => {
     if(!/O [\d,.]+ H [\d,.]+ L [\d,.]+ C [\d,.]+/.test(r1.ohlc) || r1.cross == null) throw new Error('hover read-out ' + r1.ohlc);
     if(!(r1.zoomed < 250) || r1.reset !== 250) throw new Error('zoom ' + r1.zoomed + ' reset ' + r1.reset);
     if(r1.price0 !== '₹707') throw new Error('price ' + r1.price0);
-    for(const w of ['52-week range', 'RSI (14)', '50-day average', '200-day average', 'Financial Services', '52-week low']) if(!r1.text.includes(w)) throw new Error('missing ' + w);
+    for(const w of ['Trend strength (ADX)', 'Support / resistance', 'Technical lean', '52-week range', 'RSI (14)', '50-day average', '200-day average', 'Financial Services', '52-week low']) if(!r1.text.includes(w)) throw new Error('missing ' + w);
     if(r1.href !== 'https://www.tradingview.com/chart/?symbol=NSE%3AHDFCBANK') throw new Error('link ' + r1.href);
     // each timeframe asks the feed for its own bar size
     const tfHit = {};
