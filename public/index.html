@@ -266,6 +266,21 @@ html.dark .ah-reset{border-color:var(--info);color:var(--info)}
 .hr-fold-btn svg{transition:transform var(--nav-t,180ms) var(--ease)}
 .hr-fold-all{display:flex;justify-content:flex-end;margin-top:14px}
 .hr-fold-all .btn{display:inline-flex;align-items:center;gap:6px}
+/* Appraisal page */
+.appr-tiles{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;margin-bottom:14px}
+.appr-tile{--c:var(--muted);display:flex;flex-direction:column;align-items:flex-start;gap:2px;padding:12px 14px;
+  border-radius:var(--radius-sm);border:1px solid color-mix(in srgb,var(--c) 30%,var(--card));
+  background:color-mix(in srgb,var(--c) 8%,var(--card));cursor:pointer;font:inherit;color:var(--text);text-align:left}
+.appr-tile:disabled{cursor:default;opacity:1}
+.appr-tile.on{box-shadow:0 0 0 2px var(--c)}
+.appr-tile-num{font-size:22px;font-weight:800;color:var(--c);line-height:1.15}
+.appr-tile-lbl{font-size:12.5px;font-weight:600}
+.appr-blue{--c:#1D5FBF} .appr-amber{--c:var(--warn)} .appr-green{--c:var(--ok)} .appr-red{--c:var(--danger)} .appr-muted{--c:var(--navy)}
+html.dark .appr-blue{--c:#7FB0F5} html.dark .appr-muted{--c:var(--info)}
+.appr-head{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-top:14px}
+.appr-head-box{display:flex;flex-direction:column;gap:2px;padding:10px 12px;border:1px solid var(--line);border-radius:var(--radius-sm);background:var(--bg)}
+.appr-head-box b{font-size:18px}
+@media (max-width:900px){ .appr-tiles{grid-template-columns:repeat(2,minmax(0,1fr))} .appr-head{grid-template-columns:repeat(2,minmax(0,1fr))} }
 .notif-flash{animation:notifFlash 2.2s var(--ease)}
 @keyframes notifFlash{0%,60%{box-shadow:0 0 0 3px var(--gold)}100%{box-shadow:none}}
 .notif-row:last-child{border-bottom:0}
@@ -34096,7 +34111,7 @@ function render(){
     hrdashboard:['HR','Attendance, incentives and appraisals — HR’s own records, read from the accounts the firm already has'],
     hrattendance:['Attendance Management','Punch in and out, your own history, and — for HR — everybody’s'],
     hrincentive:['Incentive Management','The existing records a future incentive rule will be read from'],
-    hrappraisal:['Appraisal Management','The existing records a future appraisal will be read from']};
+    hrappraisal:['Appraisal Management','Ratings, company growth and the increment, year by year']};
   // Modules that draw their own header (and every profile) own the page title, so the
   // topbar one would just repeat it.
   const ownsHeader = (blueprintModuleFor(currentView) && window['_bpRec_'+blueprintModuleFor(currentView).type]
@@ -77314,8 +77329,8 @@ function viewHrDashboard(){
     <div class="card" style="margin-top:14px">
       <div class="section-title" style="margin-top:0">\u{1F4C8} Appraisal management</div>
       <div class="small-note" style="margin:0">${appOn
-        ? appOn + ' source(s) mapped. No rating, weightage or review cycle exists yet — the module shows the '
-          + 'records a future appraisal would be read from.'
+        ? 'Rate each person, set company growth, and the increment and new CTC are worked out. '
+          + appOn + ' source(s) mapped for the automatic KPIs.'
         : 'No source is mapped yet. An administrator chooses which existing records this module reads, in HR Setup.'}</div>
       ${staff? `<div class="row" style="gap:8px;margin-top:10px">
         <button class="btn sm" onclick="navigate('hrappraisal')">Open Appraisal</button></div>`
@@ -77666,7 +77681,10 @@ function hrFoldState(){
   }
   return window._hrFold;
 }
-function hrFolded(k){ return !!hrFoldState()[k]; }
+/* Cards that start folded until somebody opens them: reference detail
+   most people never need to read. */
+const HR_FOLD_DEFAULT = ['apprMap'];
+function hrFolded(k){ const s = hrFoldState(); return k in s ? !!s[k] : HR_FOLD_DEFAULT.indexOf(k) >= 0; }
 function hrFoldAttrs(k){ return `data-hrfold="${k}" class="card${hrFolded(k) ? ' hr-folded' : ''}"`; }
 function hrFoldBtn(k){
   return `<button class="ah-chev hr-fold-btn" onclick="event.stopPropagation();hrFoldToggle('${k}')"
@@ -77680,7 +77698,7 @@ function hrFoldPaint(){
   if(b) b.innerHTML = hrFoldAllLabel();
 }
 function hrFoldSave(){ try { localStorage.setItem('boss.hrFold', JSON.stringify(hrFoldState())); } catch(e){} }
-function hrFoldToggle(k){ const s = hrFoldState(); s[k] = !s[k]; hrFoldSave(); hrFoldPaint(); }
+function hrFoldToggle(k){ const s = hrFoldState(); s[k] = !hrFolded(k); hrFoldSave(); hrFoldPaint(); }
 function hrFoldShown(){
   return Array.from(document.querySelectorAll('[data-hrfold]')).map(el=>el.getAttribute('data-hrfold'));
 }
@@ -80628,8 +80646,10 @@ async function apprSetRoleMap(kind, name, value){
    and why — then the rating, then the engine's own arithmetic with
    every step of it shown. */
 function apprMappingCardHtml(map){
-  return `<div class="card" style="margin-top:14px">
-    <div class="section-title" style="margin-top:0">Where each figure comes from</div>
+  return `<div ${hrFoldAttrs('apprMap')} style="margin-top:14px">
+    <div class="between hr-fold-head"><div class="section-title" style="margin:0">Where each figure comes from
+      ${map.missing.length ? `<span class="badge warn">${map.missing.length} not in BOSS</span>` : ''}</div>
+      ${hrFoldBtn('apprMap')}</div>
     <div class="small-note" style="margin-top:0">Read live out of BOSS through the HR source registry, which is
       read-only. Nothing is filled in silently and nothing missing is hidden.</div>
     <div class="table-wrap" style="margin-top:10px"><table><thead><tr>
@@ -80653,13 +80673,14 @@ function apprGrowthCardHtml(year, may){
   const f = (k, label) => `<div class="field"><label>${esc(label)}</label>
     <input type="number" step="any" value="${esc(g[k])}" ${may ? '' : 'disabled'} placeholder="not entered"
       onchange="apprSetGrowth('${esc(year)}','${k}',this.value)"></div>`;
-  return `<div class="card" style="margin-top:14px">
-    <div class="between" style="align-items:flex-start">
+  return `<div ${hrFoldAttrs('apprGrowth')} style="margin-top:14px">
+    <div class="between hr-fold-head" style="align-items:flex-start">
       <div><div class="section-title" style="margin:0">Company growth, ${esc(year)}</div>
         <div class="small-note" style="margin:2px 0 0">One set of figures for the whole firm, for the year.
           BOSS works them out from the monthly AUM ledger and the Business tracker where it can, and says
           where each one came from. A figure typed here wins over the one BOSS offers.</div></div>
-      <div class="md-total">${Math.round(pool * 100) / 100}%</div>
+      <div class="row" style="gap:10px;align-items:center"><div class="md-total">${Math.round(pool * 100) / 100}%</div>
+        ${hrFoldBtn('apprGrowth')}</div>
     </div>
     <div class="field-grid" style="margin-top:10px">
       ${f('abs', 'Absolute growth %')}${f('sip', 'SIP growth %')}${f('lump', 'New lumpsum growth %')}
@@ -80700,8 +80721,9 @@ function apprRatingCardHtml(rec, map, may){
       style="margin:0">(weight ${incNum(w[k])})</span></label>
     <input type="number" min="0" max="100" value="${esc(r[k] === '' || r[k] === undefined ? '' : r[k])}"
       ${judge ? '' : 'disabled'} placeholder="0-100" onchange="apprSetRating('${rec.id}','${k}',this.value)"></div>`;
-  return `<div class="card" style="margin-top:14px">
-    <div class="section-title" style="margin-top:0">The four judged Cs</div>
+  return `<div ${hrFoldAttrs('apprRating')} style="margin-top:14px">
+    <div class="between hr-fold-head"><div class="section-title" style="margin:0">Ratings · the four Cs and the KPIs</div>
+      ${hrFoldBtn('apprRating')}</div>
     <div class="small-note" style="margin-top:0">A rating out of 100 on each. These are not records and BOSS
       does not hold them — it holds who the manager is. <b>Entered by an administrator</b>; a reporting
       manager works the KPIs below.${judge ? '' : ' They are read-only to you.'}</div>
@@ -80754,13 +80776,14 @@ function apprResultCardHtml(rec, out){
     ? `<div class="small-note" style="margin:0">${esc(note)}</div>` : ''}</td>
     <td class="se-r"><b>${esc(v)}</b></td></tr>`;
   const r2 = n => Math.round(incNum(n) * 100) / 100;
-  return `<div class="card" style="margin-top:14px">
-    <div class="between" style="align-items:flex-start;margin-bottom:8px">
-      <div><div class="section-title" style="margin:0">The appraisal</div>
+  return `<div ${hrFoldAttrs('apprResult')} style="margin-top:14px">
+    <div class="between hr-fold-head" style="align-items:flex-start;margin-bottom:8px">
+      <div><div class="section-title" style="margin:0">The appraisal, worked out</div>
         <div class="small-note" style="margin:2px 0 0">${rec.status === 'Finalised'
           ? 'The figures this appraisal was finalised on.'
           : 'Worked out now, by the engine, from everything above.'}</div></div>
-      <div class="md-total">${money(out.newSalary)}</div>
+      <div class="row" style="gap:10px;align-items:center"><div class="md-total">${money(out.newSalary)}</div>
+        ${hrFoldBtn('apprResult')}</div>
     </div>
     <div class="table-wrap"><table><tbody>
       ${line('Curiosity', r2(b.curiosity))}
@@ -80786,11 +80809,15 @@ function apprResultCardHtml(rec, out){
 }
 
 function apprPeopleTableHtml(year){
-  return `<div class="card" style="margin-top:14px">
-    <div class="section-title" style="margin-top:0">Everybody you may see, ${esc(year)}</div>
+  const f = window._apprFilter || '';
+  return `<div ${hrFoldAttrs('apprPeople')} style="margin-top:14px">
+    <div class="between hr-fold-head"><div class="section-title" style="margin:0">Everybody you may see, ${esc(year)}${f
+      ? ` <span class="badge info">${esc({none:'Not opened', draft:'Draft', final:'Finalised'}[f])} only</span>
+         <a href="javascript:void(0)" class="cell-link" style="font-size:12px" onclick="apprFilter('')">show all</a>` : ''}</div>
+      ${hrFoldBtn('apprPeople')}</div>
     <div class="table-wrap"><table><thead><tr><th>Person</th><th>Appraisal role</th><th>Mapped by</th>
       <th>Status</th><th class="se-r">New CTC</th><th></th></tr></thead><tbody>
-      ${apprPeople().map(p=>{
+      ${apprPeople().filter(p=>apprFilterMatch(apprRecordFor(p.id, year))).map(p=>{
         const rec = apprRecordFor(p.id, year);
         const out = rec ? apprCompute(rec) : null;
         const key = apprRoleKeyOf(p);
@@ -80812,6 +80839,50 @@ function apprPeopleTableHtml(year){
       line — all of their reporting managers, not only the first — and, for HR, everybody.</div>
   </div>`;
 }
+/* ---- the page's own summaries ------------------------------------
+   The year at a glance for everybody this person may see, which also
+   filters the table below; and the four numbers that matter for the
+   person open, up front, before the working. */
+function apprFilterMatch(rec){
+  const f = window._apprFilter || '';
+  if(!f) return true;
+  if(f === 'none') return !rec;
+  if(f === 'final') return !!rec && rec.status === 'Finalised';
+  return !!rec && rec.status !== 'Finalised';
+}
+function apprFilter(k){ window._apprFilter = window._apprFilter === k ? '' : k; render(); }
+function apprSummaryHtml(year){
+  const people = apprPeople();
+  if(people.length < 2) return '';
+  const recs = people.map(p=>apprRecordFor(p.id, year));
+  const none = recs.filter(r=>!r).length;
+  const final = recs.filter(r=>r && r.status === 'Finalised');
+  const draft = recs.filter(r=>r && r.status !== 'Finalised').length;
+  const total = final.reduce((n, r)=>{ const o = apprCompute(r); return n + (o ? incNum(o.amount) : 0); }, 0);
+  const f = window._apprFilter || '';
+  const tile = (k, label, value, tone) => `<button class="appr-tile appr-${tone} ${k && f === k ? 'on' : ''}"
+      ${k ? `onclick="apprFilter('${k}')"` : 'disabled'}><span class="appr-tile-num">${value}</span>
+      <span class="appr-tile-lbl">${esc(label)}</span></button>`;
+  return `<div class="appr-tiles">
+    ${tile('', 'People', people.length, 'muted')}
+    ${tile('none', 'Not opened', none, 'red')}
+    ${tile('draft', 'Draft', draft, 'amber')}
+    ${tile('final', 'Finalised', final.length, 'green')}
+    ${tile('', 'Increments finalised', money(total), 'blue')}
+  </div>`;
+}
+function apprHeadlineHtml(out){
+  const r2 = n => Math.round(incNum(n) * 100) / 100;
+  const box = (label, value, note) => `<div class="appr-head-box"><span class="small-note" style="margin:0">${esc(label)}</span>
+    <b>${esc(value)}</b>${note ? `<span class="small-note" style="margin:0">${esc(note)}</span>` : ''}</div>`;
+  return `<div class="appr-head">
+    ${box('5 Cs score', r2(out.score) + ' / 100', out.isOverridden ? 'overridden' : '')}
+    ${box('Increment', r2(out.incrementPct) + '%', 'pool ' + r2(out.pool) + '%')}
+    ${box('Appraisal amount', money(out.amount), 'a year')}
+    ${box('New annual CTC', money(out.newSalary), money(out.newMonthlyCTC) + ' a month')}
+  </div>`;
+}
+
 function viewHrAppraisal(){
   const E = apprEngine();
   if(!E) return `
@@ -80836,8 +80907,8 @@ function viewHrAppraisal(){
   return `
     <div class="between" style="margin-bottom:10px">
       <div><div class="section-title" style="margin:0">\u{1F4C8} Appraisal Management</div>
-        <div class="small-note" style="margin:2px 0 0">The Appraisal System’s own engine, served unmodified,
-          reading BOSS live and read-only.</div></div>
+        <div class="small-note" style="margin:2px 0 0">Rate the four Cs and the KPIs, set the company growth
+          for the year, and the increment and new CTC are worked out for you.</div></div>
       <div class="row" style="gap:8px">
         <select class="list-sort" onchange="apprSetYear(this.value)">
           ${years.map(y=>`<option value="${esc(y)}" ${String(y) === String(year) ? 'selected' : ''}>${
@@ -80847,6 +80918,7 @@ function viewHrAppraisal(){
         ${hrSetupLinkHtml()}
       </div>
     </div>
+    ${apprSummaryHtml(year)}
     <div class="card">
       <div class="between" style="align-items:flex-start">
         <div><div class="section-title" style="margin:0">${esc(teamName(who))}
@@ -80867,12 +80939,13 @@ function viewHrAppraisal(){
       ${!rec ? `<div class="empty" style="padding:18px">No appraisal for
         ${esc(E.appraisalYearLabel(year, cfg.cycle))}.${apprMayRate(who)
           ? '' : ' Their reporting manager or HR opens one.'}</div>` : ''}
+      ${rec && out ? apprHeadlineHtml(out) : ''}
     </div>
-    ${apprMappingCardHtml(map)}
-    ${apprGrowthCardHtml(year, hrIsAdmin() || isAdmin())}
     ${rec ? apprRatingCardHtml(rec, map, may) : ''}
     ${rec && out ? apprResultCardHtml(rec, out) : ''}
-    ${apprPeopleTableHtml(year)}`;
+    ${apprGrowthCardHtml(year, hrIsAdmin() || isAdmin())}
+    ${apprPeopleTableHtml(year)}
+    ${apprMappingCardHtml(map)}`;
 }
 
 /* ---- Setup: the mapping, and only the mapping ----------------------
