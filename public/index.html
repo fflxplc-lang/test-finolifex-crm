@@ -35699,11 +35699,29 @@ function renderCommandResults(query){
 }
 function cmdkKeydown(ev){
   const results = window._cmdResults||[];
-  if(ev.key==='Escape'){ closeModal(); return; }
+  if(ev.key==='Escape'){ closeCommandPalette(); return; }
   if(ev.key==='ArrowDown'){ ev.preventDefault(); window._cmdIndex = Math.min(window._cmdIndex+1, results.length-1); highlightCmdIndex(); return; }
   if(ev.key==='ArrowUp'){ ev.preventDefault(); window._cmdIndex = Math.max(window._cmdIndex-1, 0); highlightCmdIndex(); return; }
   if(ev.key==='Enter'){ ev.preventDefault(); runCommandResult(window._cmdIndex); return; }
 }
+/* The search closes the way a search is expected to: Esc, or a click
+   anywhere outside the box. What was typed goes with it, so the next
+   open starts empty. Only the search closes on an outside click; a form
+   in the same modal host keeps its half-typed fields. */
+function closeCommandPalette(){
+  const inp = document.getElementById('cmdkInput');
+  if(inp) inp.value = '';
+  const res = document.getElementById('cmdkResults');
+  if(res) res.innerHTML = '';
+  window._cmdResults = [];
+  closeModal();
+}
+document.addEventListener('mousedown', function(ev){
+  const ov = document.getElementById('overlay');
+  if(!ov || ev.target !== ov || !ov.classList.contains('show')) return;
+  const m = document.getElementById('modalBody');
+  if(m && m.classList.contains('cmdk-modal')) closeCommandPalette();
+});
 function highlightCmdIndex(){
   document.querySelectorAll('.cmdk-item').forEach((el,i)=> el.classList.toggle('active', i===window._cmdIndex));
   const active = document.querySelector('.cmdk-item.active');
