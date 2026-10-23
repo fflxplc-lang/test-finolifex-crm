@@ -56750,10 +56750,19 @@ function lexiMarketForAi(m, amount, shortlist){
   if(shortlist) out.note = 'No company was named, so these are the Nifty 50 and five large, widely held companies chosen by default, not a screen of the whole market.';
   return out;
 }
+const lexiQf = v => v == null ? '—' : Number(v).toLocaleString('en-IN', {maximumFractionDigits:2});
+const lexiQpc = v => v == null ? '—' : (v > 0 ? '+' : '') + Number(v).toFixed(2) + '%';
+function lexiQuotePrice(x){
+  const up = (x.change || 0) >= 0, col = up ? 'var(--ok)' : 'var(--danger)';
+  return `<b style="font-size:16px">${x.currency === 'INR' ? '₹' : ''}${lexiQf(x.price)}</b>${x.change == null ? '' : ` <span style="color:${col};font-weight:600">${up ? '▲' : '▼'} ${lexiQf(Math.abs(x.change))} (${lexiQpc(x.changePct)})</span>`}`;
+}
+function lexiQuoteWhen(x){
+  const when = x.time ? new Date(x.time).toLocaleString('en-IN', {day:'numeric', month:'short', hour:'numeric', minute:'2-digit'}) : '';
+  return `${x.time && Date.now() - new Date(x.time) < 20 * 60000 ? 'Live from' : 'Last price from'} ${esc(x.source || 'the price feed')}${when ? ', price at ' + esc(when) : ''}`;
+}
 function lexiQuoteCard(x, ti, qi){
   const up = (x.change || 0) >= 0, col = up ? 'var(--ok)' : 'var(--danger)';
-  const f = v => v == null ? '—' : Number(v).toLocaleString('en-IN', {maximumFractionDigits:2});
-  const pc = v => v == null ? '—' : (v > 0 ? '+' : '') + Number(v).toFixed(2) + '%';
+  const f = lexiQf, pc = lexiQpc;
   const cs = (x.closes || []).map(c => c[1]).filter(v => v != null);
   let spark = '';
   if(cs.length > 1){
@@ -56762,15 +56771,14 @@ function lexiQuoteCard(x, ti, qi){
     spark = `<svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" preserveAspectRatio="none" role="img" aria-label="${esc(x.name)}: last ${cs.length} sessions" style="display:block;margin:6px 0 4px"><polyline points="${pts}" fill="none" stroke="${col}" stroke-width="2" vector-effect="non-scaling-stroke" stroke-linejoin="round"/></svg>`;
   }
   const r = x.returnsPct || {};
-  const when = x.time ? new Date(x.time).toLocaleString('en-IN', {day:'numeric', month:'short', hour:'numeric', minute:'2-digit'}) : '';
   const open = ti >= 0 && qi >= 0 ? ` role="button" tabindex="0" title="Open the bigger chart" onclick="lexiChartOpen(${ti},${qi})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();lexiChartOpen(${ti},${qi})}"` : '';
-  return `<div class="lexi-quote"${open} style="margin:8px 0 4px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--card);${open ? 'cursor:pointer' : ''}">
+  return `<div class="lexi-quote" data-sym="${esc(x.symbol)}"${open} style="margin:8px 0 4px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--card);${open ? 'cursor:pointer' : ''}">
     <div style="display:flex;justify-content:space-between;gap:8px;align-items:baseline;flex-wrap:wrap">
       <div style="min-width:0"><b>${esc(x.name)}</b> <span class="small-note">${esc(x.symbol)}${x.exchange ? ' · ' + esc(x.exchange) : ''}</span></div>
-      <div style="white-space:nowrap"><b style="font-size:16px">${x.currency === 'INR' ? '₹' : ''}${f(x.price)}</b>${x.change == null ? '' : ` <span style="color:${col};font-weight:600">${up ? '▲' : '▼'} ${f(Math.abs(x.change))} (${pc(x.changePct)})</span>`}</div>
+      <div class="lq-price" style="white-space:nowrap">${lexiQuotePrice(x)}</div>
     </div>${spark}
     <div class="small-note">52-week ${f(x.low52)} – ${f(x.high52)} · 1 month ${pc(r.month)} · 1 year ${pc(r.year)} · RSI ${x.rsi14 == null ? '—' : x.rsi14}${x.trend ? ' · ' + esc(x.trend.split(':')[0]) : ''}</div>
-    <div class="small-note" style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap"><span>${x.time && Date.now() - new Date(x.time) < 20 * 60000 ? 'Live from' : 'Last price from'} ${esc(x.source || 'the price feed')}${when ? ', price at ' + esc(when) : ''}</span>${open ? '<span style="color:var(--navy-ink);font-weight:600">Bigger chart ›</span>' : ''}</div></div>`;
+    <div class="small-note" style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap"><span class="lq-when">${lexiQuoteWhen(x)}</span>${open ? '<span style="color:var(--navy-ink);font-weight:600">Bigger chart ›</span>' : ''}</div></div>`;
 }
 
 /* A click on a price card opens the same prices larger, as a trading chart:
@@ -56782,6 +56790,32 @@ function lexiQuoteCard(x, ti, qi){
    to a full charting page. */
 const LEXI_CHART_TFS = ['1D', '5D', '1M', '3M', '6M', 'YTD', '1Y', '5Y', 'All'];
 const LEXI_CHART_LIVE_MS = 30000;
+/* The price cards in the chat move with the market too: every half minute each
+   card on screen asks for its quote again and repaints the price, the day move
+   and the "price at" time. A failed ask leaves the card as it was. */
+let _lexiQuoteBusy = false;
+async function lexiQuoteTick(){
+  if(_lexiQuoteBusy || document.hidden) return;
+  const cards = [...document.querySelectorAll('.lexi-quote[data-sym]')];
+  const syms = [...new Set(cards.map(c => c.dataset.sym))].slice(0, 6);
+  if(!syms.length) return;
+  _lexiQuoteBusy = true;
+  try{
+    for(const sym of syms){
+      const q = await fetch('/api/market/quote?symbol=' + encodeURIComponent(sym), {headers: apiHeaders()}).then(r => r.json()).catch(() => null);
+      if(!q || !q.ok || !q.quote || q.quote.price == null) continue;
+      const x = Object.assign({}, q.quote, {source: q.source || q.quote.source});
+      document.querySelectorAll('.lexi-quote[data-sym]').forEach(c => {
+        if(c.dataset.sym !== sym) return;
+        const p = c.querySelector('.lq-price'), w = c.querySelector('.lq-when'), pl = c.querySelector('polyline');
+        if(p) p.innerHTML = lexiQuotePrice(x);
+        if(w) w.innerHTML = lexiQuoteWhen(x);
+        if(pl) pl.setAttribute('stroke', (x.change || 0) >= 0 ? 'var(--ok)' : 'var(--danger)');
+      });
+    }
+  } finally { _lexiQuoteBusy = false; }
+}
+setInterval(lexiQuoteTick, LEXI_CHART_LIVE_MS);
 function lexiTradingViewSymbol(x){
   const s = String(x.symbol || '');
   const idx = {'^NSEI':'NSE:NIFTY', '^BSESN':'BSE:SENSEX', '^NSEBANK':'NSE:BANKNIFTY', '^CNXIT':'NSE:CNXIT', 'NIFTY':'NSE:NIFTY', 'BSESENSEX':'BSE:SENSEX', 'BANKNIFTY':'NSE:BANKNIFTY'};

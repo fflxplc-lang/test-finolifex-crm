@@ -185,6 +185,19 @@ suite(async t => {
     if(lastUser().includes('"history"')) throw new Error('the year of prices was sent to the model');
     return 'candles + volume drawn, hover reads O/H/L/C, zoom and reset, ' + Object.keys(tfHit).join('/') + ' each read their own bars, refresh moved the price 707 → 712, Escape closes';
   });
+  await t.step('the price cards in the chat follow the feed on their own, not only the open chart', async () => {
+    const ch = CHARTS['HDFCBANK.NS'].chart.result[0], q = ch.indicators.quote[0].close;
+    ch.meta.regularMarketPrice = 715; q[q.length - 1] = 715;
+    const r = await t.eval(async () => {
+      const card = () => [...document.querySelectorAll('.lexi-quote')].find(e => e.dataset.sym === 'HDFCBANK.NS');
+      const before = card().querySelector('.lq-price').textContent.replace(/\s+/g, ' ');
+      await lexiQuoteTick();
+      return {before, after: card().querySelector('.lq-price').textContent.replace(/\s+/g, ' '), when: card().querySelector('.lq-when').textContent};
+    });
+    ch.meta.regularMarketPrice = 707; q[q.length - 1] = 707;
+    if(!/₹707/.test(r.before) || !/₹715/.test(r.after) || !/▲ 15/.test(r.after) || !/^Live from/.test(r.when)) throw new Error(JSON.stringify(r));
+    return 'a card read ' + r.before.split(' ')[0] + ' then ' + r.after.split(' ')[0] + ' after the feed moved, footer "' + r.when.split(',')[0] + '"';
+  });
   await t.step('a question about the CRM\'s records reads no prices', async () => {
     const before = hits.length;
     await t.eval(async () => { document.getElementById('aiInput').value = 'Aaj kitne tasks pending hain?'; await aiSend(); });
