@@ -56785,7 +56785,7 @@ function lexiQuotePrice(x){
   return `<b style="font-size:16px">${x.currency === 'INR' ? '₹' : ''}${lexiQf(x.price)}</b>${x.change == null ? '' : ` <span style="color:${col};font-weight:600">${up ? '▲' : '▼'} ${lexiQf(Math.abs(x.change))} (${lexiQpc(x.changePct)})</span>`}`;
 }
 function lexiQuoteWhen(x){
-  const when = x.time ? new Date(x.time).toLocaleString('en-IN', {day:'numeric', month:'short', hour:'numeric', minute:'2-digit'}) : '';
+  const when = x.time ? new Date(x.time).toLocaleString('en-IN', {day:'numeric', month:'short', hour:'numeric', minute:'2-digit', timeZone:'Asia/Kolkata'}) : '';
   return `${x.time && Date.now() - new Date(x.time) < 20 * 60000 ? 'Live from' : 'Last price from'} ${esc(x.source || 'the price feed')}${when ? ', price at ' + esc(when) : ''}`;
 }
 /* The chartist's checks, in one line for the card: the lean, the momentum, the trend strength, the nearest levels. */
@@ -57103,7 +57103,7 @@ function lexiChartStatsPaint(){
         if(t.bollinger) o.push(cell('Bollinger %B', `${t.bollinger.percentB == null ? '—' : t.bollinger.percentB + '%'} <span class="small-note">${lexiNum(t.bollinger.lower)} – ${lexiNum(t.bollinger.upper)}</span>`));
         if(t.atr14) o.push(cell('ATR (14)', `${lexiNum(t.atr14.value)} <span class="small-note">${t.atr14.pctOfPrice}% of price</span>`));
         if(t.volatilityPct != null) o.push(cell('Volatility (annual)', t.volatilityPct + '%'));
-        if(t.levels) o.push(cell('Support / resistance', `${lexiNum(t.levels.low20)} / ${lexiNum(t.levels.high20)} <span class="small-note">20-day</span>`), cell('60-day low / high', `${lexiNum(t.levels.low60)} / ${lexiNum(t.levels.high60)}`));
+        if(t.levels){ o.push(cell('Support / resistance', `${lexiNum(t.levels.low20)} / ${lexiNum(t.levels.high20)} <span class="small-note">20-day</span>`)); if(t.levels.low60 != null) o.push(cell('60-day low / high', `${lexiNum(t.levels.low60)} / ${lexiNum(t.levels.high60)}`)); }
         if(t.volumeVsAvg20 != null) o.push(cell('Volume vs 20-day', t.volumeVsAvg20 + '×'));
         if(t.crossLast30) o.push(cell('Recent cross', esc(t.crossLast30)));
         return o.join(''); })()}
