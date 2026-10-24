@@ -243,6 +243,7 @@ suite(async t => {
     const r = await t.eval(() => ({
       amt: ['5 lakh', '₹2.5 cr', '50k', 'Rs 75,000', '1,00,000 hain', 'Nifty 50', 'Adani Ports 1', 'TCS 3500 ka share'].map(x => lexiMoneyIn(x)),
       two: lexiMarketAsk('5 lakh ka balance hai HDFC Bank lun ya ICICI Bank?', []),
+      closing: ['nifty50 closing price', 'what was the last close of Nifty 50 yesterday', 'HDFC Bank previous close'].map(x => lexiMarketAsk(x, [])),
       lag: lexiMarketAsk('Mera balance 1,00,000 hai, HDFC Bank aur ICICI Bank mein kitna lagaun?', []),
       client: lexiMarketAsk('Ek client ke account mein 2 lakh balance hai, konsa share loon?', [{}]),
       byName: lexiMarketAsk('Priya Sharma ke account mein 2 lakh balance hai, HDFC Bank lun ya ICICI Bank?', [{cmsName:'Priya Sharma'}]),
@@ -250,6 +251,7 @@ suite(async t => {
       named: [lexiMarketAsk('Priya ka KYC share karo', [{}]), lexiMarketAsk('Priya ke liye kya buy karna hai', [{cmsName:'Priya Sharma'}])],
     }));
     if(JSON.stringify(r.amt) !== JSON.stringify([500000, 25000000, 50000, 75000, 100000, 0, 0, 0])) throw new Error('amounts ' + JSON.stringify(r.amt));
+    if(JSON.stringify(r.closing) !== '[["nifty50"],["Nifty"],["HDFC Bank"]]') throw new Error('words like closing or last close were read as part of the name: ' + JSON.stringify(r.closing));
     if(JSON.stringify(r.two) !== '["HDFC Bank","ICICI Bank"]' || JSON.stringify(r.lag) !== '["HDFC Bank","ICICI Bank"]') throw new Error('names ' + JSON.stringify([r.two, r.lag]));
     if(!r.client || r.client[0] !== 'NIFTY 50') throw new Error('a named client lost the market read: ' + JSON.stringify(r.client));
     if(JSON.stringify(r.byName) !== '["HDFC Bank","ICICI Bank"]') throw new Error('the client\'s own name was looked up as a company: ' + JSON.stringify(r.byName));

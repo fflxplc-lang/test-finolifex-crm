@@ -56681,13 +56681,14 @@ function analyticsSignalsSection(){
    came back, with a card per company under the answer. A question about
    the CRM's own records (clients, KYC, tasks, funds, the policy) never
    comes this way. */
-const LEXI_MKT_RE = /\b(52[- ]?(?:week|wk)s?|shares?|stocks?|price|prices|live|kharid\w*|khareed\w*|buy|sell|bech\w*|loon|lun|lena|lein|invest\w*|target|technicals?|rsi|trend|nifty|sensex|market|nse|bse|company|companies|kampani|valuation|bhav|compare|vs|versus)\b/i;
+const LEXI_MKT_RE = /\b(52[- ]?(?:week|wk)s?|shares?|stocks?|price|prices|live|kharid\w*|khareed\w*|buy|sell|bech\w*|loon|lun|lena|lein|invest\w*|target|technicals?|rsi|trend|nifty|sensex|market|nse|bse|company|companies|kampani|valuation|bhav|compare|vs|versus|ltp|closing\s+(?:price|level|value)|(?:last|previous|prev)\s+close)\b/i;
 const LEXI_MKT_CRM_RE = /\b(clients?|leads?|kyc|tasks?|meetings?|sips?|aum|mandates?|nominees?|goals?|funds?|schemes?|mutual|sops?|tickets?|reports?|portfolios?|policy|iseq|dst|nav|navs|insurance|folios?)\b/i;
 const LEXI_MKT_STOP = new Set(('ka ki ke ko kya kaisa kaisi kaise hai hain hoga hogi tha thi abhi aaj kal ab bhi live chart charts ' +
   'mujhe hume humein hamein hum main mein me mai par pe se sa si wala wali wale vale konsa kaunsa konsi kaunsi kon kaun ' +
   'which what whats is are was the a an of in on for to should shall can could would will i we our my now today current currently ' +
   'price prices rate bhav share shares stock stocks equity company companies kampani market data info information details detail ' +
   'analysis about tell me show give value valuation technical technicals trend news buy sell hold invest investment investing ' +
+  'closing close closed open opened opening ltp quote quotes last previous prev yesterday yesterdays tomorrow ' +
   'plz please pls sir ji acha accha theek thik good best better how much kitna kitne kitni worth right time sahi samay nahi nhi na haan han yes no ' +
   'lakh lakhs crore rs rupees inr nse bse level levels target targets analyse analyze status update latest view outlook compare comparison vs versus ' +
   'balance balances account accounts amount paas pas mere mera meri apne apna uske uska iske iska unke unka kisi kisika kisiki client clients customer ' +
