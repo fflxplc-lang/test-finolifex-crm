@@ -1148,13 +1148,87 @@ function attendanceGuard(before, after) {
   return null;
 }
 
+/* A CLIENT RECORD IS CHECKED HERE TOO, NOT ONLY IN THE FORM.
+
+   The Add New Client form checks every box as it is typed. This is the
+   half that cannot be bypassed: whatever arrives as the clients store is
+   read again, and a value that breaks one of the form's rules is refused
+   before it reaches data.json.
+
+   Only what CHANGED is judged — a field on a record that this write does
+   not touch is left alone, so a client saved years ago with an
+   eleven-digit mobile does not stop somebody else's edit of a different
+   client. And the full Aadhaar number never belongs in this store at all:
+   it lives in the vault below, and only its last four digits come here. */
+const CLIENT_RULES = {
+  cmsName:      { test: (v) => /[A-Za-z]/.test(v) && /^[A-Za-z][A-Za-z .'\-]*$/.test(v), message: 'Please enter a valid client name.' },
+  mobile:       { kind: 'mobile', message: 'Please enter a valid 10-digit mobile number.' },
+  secondMobile: { kind: 'mobile', message: 'Please enter a valid 10-digit mobile number.' },
+  email:        { kind: 'email', message: 'Please enter a valid email address.' },
+  pan:          { kind: 'pan', message: 'Please enter a valid PAN number.' },
+  aadhaar:      { test: (v) => /^[0-9]{4}$/.test(v), message: 'Only the last four digits of an Aadhaar number are kept on a client record.' },
+  mailingZip:   { test: (v) => /^[1-9][0-9]{5}$/.test(v), message: 'Please enter a valid 6-digit PIN code.' },
+  ifsc:         { test: (v) => /^[A-Z]{4}0[A-Z0-9]{6}$/i.test(v), message: 'Please enter a valid IFSC code.' },
+  accNo:        { test: (v) => /^[0-9]{9,18}$/.test(v), message: 'Please enter a valid bank account number.' },
+  uccNo:        { test: (v) => /^[A-Za-z0-9]{3,20}$/.test(v), message: 'Please enter a valid UCC number.' },
+};
+function clientsGuard(before, after, strict) {
+  let old;
+  try { old = JSON.parse(before || '[]'); } catch (e) { old = []; }
+  let next;
+  try { next = JSON.parse(after); } catch (e) { return null; }
+  if (!Array.isArray(next)) return null;
+  const byId = new Map((Array.isArray(old) ? old : []).filter((r) => r && r.id).map((r) => [r.id, r]));
+  const problems = [];
+  const uccSeen = new Map();
+  next.forEach((r) => {
+    if (r && !r.deletedAt && r.uccNo) {
+      const k = String(r.uccNo).trim().toUpperCase();
+      uccSeen.set(k, (uccSeen.get(k) || 0) + 1);
+    }
+  });
+  for (const row of next) {
+    if (!row || typeof row !== 'object' || row.deletedAt) continue;
+    const was = byId.get(row.id) || {};
+    /* Other screens (imports, quick edits, workflows) write clients too and
+       were never held to the form's rules; holding them now would refuse a
+       whole import over one odd name. Those writes get the one rule that
+       is about privacy, not tidiness: a full Aadhaar number is cut to its
+       last four digits instead of being stored. */
+    if (!strict) {
+      if (row.aadhaar != null && /^[0-9]{12}$/.test(String(row.aadhaar).replace(/\s/g, '')))
+        row.aadhaar = String(row.aadhaar).replace(/\s/g, '').slice(-4);
+      continue;
+    }
+    for (const [k, rule] of Object.entries(CLIENT_RULES)) {
+      const v = row[k];
+      if (v === undefined || v === null || String(v).trim() === '') continue;
+      if (String(v) === String(was[k] === undefined || was[k] === null ? '' : was[k])) continue;
+      const s = String(v).trim();
+      const ok = rule.kind ? checkValue(rule.kind, s).ok : rule.test(s);
+      if (!ok) problems.push((row.cmsName || row.id) + ' — ' + rule.message);
+      if (k === 'uccNo' && ok && uccSeen.get(s.toUpperCase()) > 1)
+        problems.push((row.cmsName || row.id) + ' — UCC ' + s + ' is already on another client.');
+    }
+  }
+  return problems.length ? { problems } : { value: strict ? after : JSON.stringify(next) };
+}
+
 // PUT /api/storage/:key  body: { value: "..." } -> { key, value }
 app.put('/api/storage/:key', checkApiKey, (req, res) => {
-  const { value } = req.body || {};
+  let { value } = req.body || {};
   if (typeof value !== 'string') return res.status(400).json({ error: 'body.value must be a string (the CRM already JSON.stringifies before sending)' });
   if (req.params.key === 'hrAttendance') {
     const wrong = attendanceGuard(store.hrAttendance, value);
     if (wrong) return res.status(409).json({ error: 'attendance is append-only: ' + wrong });
+  }
+  if (req.params.key === 'clients') {
+    const checked = clientsGuard(store.clients, value, req.get('X-CRM-Form') === 'client');
+    if (checked && checked.problems) {
+      const wrong = checked.problems;
+      return res.status(422).json({ error: 'Not saved: ' + wrong.slice(0, 5).join(' '), problems: wrong });
+    }
+    if (checked) value = checked.value;
   }
   store[req.params.key] = value;
   writeToDisk();
@@ -1597,6 +1671,141 @@ app.get('/api/lookup/ifsc/:code', checkApiKey, (req, res) => {
     return { ok: true, ifsc: code, bank: json.BANK, branch: json.BRANCH || '', city: json.CITY || '',
       state: json.STATE || '', address: json.ADDRESS || '' };
   }, res);
+});
+
+/* ---------------------------------------------------------------------
+   THE AADHAAR VAULT.
+
+   A client record keeps the last four digits of an Aadhaar number and
+   nothing more, because data.json is handed to every signed-in browser.
+   The full number, where the firm needs it, lives here instead: in its
+   own file beside data.json, encrypted, and served by this process only
+   to an account management has approved by name or by role.
+
+   Approval is decided here, against the sign-in account, not by hiding a
+   button in the page — the page only asks. An admin account is
+   management: it grants and withdraws access, and it is not exempt
+   itself; an admin who wants to see a number approves themselves, and
+   that approval is on the record like anybody else's. Every look, and
+   every refusal, is written to the vault's own log.
+   --------------------------------------------------------------------- */
+const AADHAAR_FILE = process.env.CRM_AADHAAR_FILE || path.join(path.dirname(DB_FILE), 'aadhaar-vault.json');
+const AADHAAR_KEY_FILE = AADHAAR_FILE.replace(/\.json$/, '') + '.key';
+function aadhaarKey() {
+  if (process.env.CRM_AADHAAR_KEY) return crypto.createHash('sha256').update(process.env.CRM_AADHAAR_KEY).digest();
+  if (process.env.CRM_SESSION_SECRET) {
+    return crypto.createHash('sha256').update(process.env.CRM_SESSION_SECRET + ':aadhaar-vault').digest();
+  }
+  // No secret configured (a laptop): a key of its own, kept beside the vault.
+  try { return Buffer.from(fs.readFileSync(AADHAAR_KEY_FILE, 'utf8').trim(), 'hex'); } catch (e) { /* first run */ }
+  const k = crypto.randomBytes(32);
+  fs.writeFileSync(AADHAAR_KEY_FILE, k.toString('hex'), { mode: 0o600 });
+  return k;
+}
+function vaultRead() {
+  try {
+    const v = JSON.parse(fs.readFileSync(AADHAAR_FILE, 'utf8'));
+    return { clients: v.clients || {}, approved: { emails: (v.approved || {}).emails || [], roles: (v.approved || {}).roles || [] },
+      log: Array.isArray(v.log) ? v.log : [] };
+  } catch (e) { return { clients: {}, approved: { emails: [], roles: [] }, log: [] }; }
+}
+function vaultWrite(v) {
+  v.log = v.log.slice(-5000);
+  const tmp = AADHAAR_FILE + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify(v), { mode: 0o600 });
+  fs.renameSync(tmp, AADHAAR_FILE);
+}
+function vaultSeal(number) {
+  const iv = crypto.randomBytes(12);
+  const c = crypto.createCipheriv('aes-256-gcm', aadhaarKey(), iv);
+  const enc = Buffer.concat([c.update(number, 'utf8'), c.final()]);
+  return { iv: iv.toString('hex'), tag: c.getAuthTag().toString('hex'), enc: enc.toString('hex') };
+}
+function vaultOpen(row) {
+  const d = crypto.createDecipheriv('aes-256-gcm', aadhaarKey(), Buffer.from(row.iv, 'hex'));
+  d.setAuthTag(Buffer.from(row.tag, 'hex'));
+  return Buffer.concat([d.update(Buffer.from(row.enc, 'hex')), d.final()]).toString('utf8');
+}
+// The same check the page makes: 12 digits, not starting 0 or 1, Verhoeff check digit.
+const VH_D = [[0,1,2,3,4,5,6,7,8,9],[1,2,3,4,0,6,7,8,9,5],[2,3,4,0,1,7,8,9,5,6],[3,4,0,1,2,8,9,5,6,7],
+  [4,0,1,2,3,9,5,6,7,8],[5,9,8,7,6,0,4,3,2,1],[6,5,9,8,7,1,0,4,3,2],[7,6,5,9,8,2,1,0,4,3],
+  [8,7,6,5,9,3,2,1,0,4],[9,8,7,6,5,4,3,2,1,0]];
+const VH_P = [[0,1,2,3,4,5,6,7,8,9],[1,5,7,6,2,8,3,0,9,4],[5,8,0,3,7,9,6,1,4,2],[8,9,1,6,0,4,3,5,2,7],
+  [9,4,5,3,1,2,6,8,7,0],[4,2,8,6,5,7,3,9,0,1],[2,7,9,3,8,0,6,4,1,5],[7,0,4,6,9,1,3,2,5,8]];
+function aadhaarValid(d) {
+  if (!/^[2-9][0-9]{11}$/.test(d)) return false;
+  let c = 0;
+  d.split('').reverse().forEach((ch, i) => { c = VH_D[c][VH_P[i % 8][Number(ch)]]; });
+  return c === 0;
+}
+function aadhaarApproved(user, v) {
+  if (!user) return false;
+  const email = String(user.email || '').toLowerCase();
+  if (v.approved.emails.some((e) => String(e).toLowerCase() === email)) return true;
+  return !!user.crm_role && v.approved.roles.indexOf(user.crm_role) >= 0;
+}
+function vaultLog(v, user, action, clientId, note) {
+  v.log.push({ at: new Date().toISOString(), by: (user && user.email) || '', action, clientId: clientId || '', note: note || '' });
+}
+// Who may see, and whether the person asking is one of them.
+app.get('/api/aadhaar/access', checkApiKey, (req, res) => {
+  const user = signedInUser(req);
+  const v = vaultRead();
+  const admin = !!(user && user.role === 'admin');
+  res.set('Cache-Control', 'no-store').json({ ok: true, me: { email: (user && user.email) || '', admin,
+    approved: aadhaarApproved(user, v) }, approved: admin ? v.approved : undefined,
+    log: admin ? v.log.slice(-200).reverse() : undefined });
+});
+app.put('/api/aadhaar/access', checkApiKey, requireApiAdmin, (req, res) => {
+  const user = signedInUser(req);
+  const b = req.body || {};
+  const v = vaultRead();
+  const list = (x) => Array.from(new Set((Array.isArray(x) ? x : []).map((s) => String(s).trim()).filter(Boolean)));
+  const before = JSON.stringify(v.approved);
+  v.approved = { emails: list(b.emails).map((e) => e.toLowerCase()), roles: list(b.roles) };
+  if (JSON.stringify(v.approved) !== before) {
+    vaultLog(v, user, 'access changed', '', 'accounts: ' + (v.approved.emails.join(', ') || 'none')
+      + '; roles: ' + (v.approved.roles.join(', ') || 'none'));
+  }
+  vaultWrite(v);
+  res.json({ ok: true, approved: v.approved });
+});
+// Store a full number. Anybody who may edit a client may put one in; seeing
+// it again is the approved question.
+app.put('/api/aadhaar/:clientId', checkApiKey, (req, res) => {
+  const user = signedInUser(req);
+  const id = String(req.params.clientId || '');
+  const number = String((req.body || {}).number || '').replace(/[\s-]/g, '');
+  if (!id) return res.status(400).json({ ok: false, message: 'Which client?' });
+  const v = vaultRead();
+  if (!number) {
+    if (v.clients[id]) { delete v.clients[id]; vaultLog(v, user, 'removed', id); vaultWrite(v); }
+    return res.json({ ok: true, removed: true });
+  }
+  if (!aadhaarValid(number)) return res.status(422).json({ ok: false, message: 'Please enter a valid Aadhaar number.' });
+  v.clients[id] = Object.assign(vaultSeal(number), { last4: number.slice(-4), at: new Date().toISOString(),
+    by: (user && user.email) || '' });
+  vaultLog(v, user, 'stored', id, 'ending ' + number.slice(-4));
+  vaultWrite(v);
+  res.json({ ok: true, last4: number.slice(-4) });
+});
+app.get('/api/aadhaar/:clientId', checkApiKey, (req, res) => {
+  const user = signedInUser(req);
+  const id = String(req.params.clientId || '');
+  const v = vaultRead();
+  res.set('Cache-Control', 'no-store');
+  if (!aadhaarApproved(user, v)) {
+    vaultLog(v, user, 'refused', id); vaultWrite(v);
+    return res.status(403).json({ ok: false, message: 'The full Aadhaar number is shown only to people management has approved.' });
+  }
+  const row = v.clients[id];
+  if (!row) return res.status(404).json({ ok: false, message: 'Only the last four digits of this Aadhaar number are on file.' });
+  let number;
+  try { number = vaultOpen(row); } catch (e) {
+    return res.status(500).json({ ok: false, message: 'The stored number could not be read.' });
+  }
+  vaultLog(v, user, 'viewed', id, 'ending ' + row.last4); vaultWrite(v);
+  res.json({ ok: true, number });
 });
 
 /* ---------------------------------------------------------------------

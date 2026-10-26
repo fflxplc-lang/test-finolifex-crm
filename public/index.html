@@ -2923,6 +2923,9 @@ function drawAfterWrite(){
     try { render(); } catch(e){ console.error('redraw after write failed', e); }
   }, 300);
 }
+/* Set by a form that wants the server to hold its write to that form's
+   rules (the client form). Everything else writes as it always has. */
+let ssetFormHeader = '';
 async function sset(key, value, shared){
   liveWriteUntil = Date.now() + 1200;   // see liveBusy(): a tab mid-write is not interrupted
   if(inPublicMode() && shared!==false) return publicSave(key, value);
@@ -2933,9 +2936,17 @@ async function sset(key, value, shared){
   drawAfterWrite();
   try{
     const res = await fetch('/api/storage/'+encodeURIComponent(key), {
-      method:'PUT', headers: Object.assign({'Content-Type':'application/json'}, apiHeaders()),
+      method:'PUT', headers: Object.assign({'Content-Type':'application/json'}, apiHeaders(), ssetFormHeader ? {'X-CRM-Form': ssetFormHeader} : {}),
       body: JSON.stringify({ value: JSON.stringify(value) }),
     });
+    /* A store the server checks (clients) may refuse a write that breaks
+       a rule. That is said out loud: a record that only looks saved is
+       worse than one that says it was not. */
+    if(res.status === 422){
+      const r = await res.json().catch(()=>({}));
+      alert(r.error || 'The server refused to save this.');
+      return false;
+    }
     if(!res.ok) throw new Error('storage set failed: '+res.status);
   }catch(e){ console.error('storage set failed', e); }
 }
@@ -3172,6 +3183,7 @@ function displayFieldValue(f, val){
   if(f.optLabels && f.optLabels[val] !== undefined) return f.optLabels[val];
   if(f.t==='date') return fmtDate(val);
   if(f.t==='num' || f.t==='currency' || f.t==='number') return groupNum(val);
+  if(f.vk==='aadhaar' && /^[0-9]{4}$/.test(String(val))) return aadhaarMasked(val);
   if(f.t==='team') return teamName(val);
   if(f.t==='clientselect') return clientName(val);
   if(f.t==='partnerselect') return partnerName(val);
@@ -3474,7 +3486,43 @@ const LOOKUP_SPECS = {
     found:r=>'Found: ' + [r.bank, r.branch].filter(Boolean).join(', '),
     offline:()=>null,
     missing:'IFSC not found. Please check it, or fill in the bank name and branch yourself.'},
+  /* The client form's own two. The PIN fills the mailing city and state;
+     the IFSC fills the bank and branch and then holds them, because they
+     are the bank's answer rather than somebody's typing — "Edit" under
+     either box lets them be corrected where the directory is wrong. */
+  cmspincode: {kind:'pin', len:6, url:v=>'/api/lookup/pincode/' + encodeURIComponent(v),
+    fill:r=>({mailingCity:r.city, mailingState:r.state}),
+    found:r=>'Found: ' + [r.city, r.state].filter(Boolean).join(', '),
+    offline:v=>{ const row = pinRow(v); return row ? {mailingCity:row.label, mailingState:row.state || ''} : null; },
+    missing:'PIN code not found. Please check it, or fill in the city and state yourself.'},
+  cmsifsc: {kind:'ifsc', len:11, url:v=>'/api/lookup/ifsc/' + encodeURIComponent(v),
+    fill:r=>({bankName:r.bank, branchName:r.branch}), lock:['bankName','branchName'],
+    found:r=>'Found: ' + [r.bank, r.branch].filter(Boolean).join(', '),
+    offline:()=>null,
+    missing:'Please enter a valid IFSC code.',
+    unavailable:'Unable to fetch bank details. Please verify the IFSC code.'},
 };
+/* "Jammu and Kashmir" from India Post is the "Jammu & Kashmir" on the list. */
+function lookupOptionNorm(v){ return String(v || '').toLowerCase().replace(/&/g, ' and ').replace(/[^a-z0-9]+/g, ' ').trim(); }
+/* A box the lookup filled is held until somebody asks to correct it. */
+function lookupLock(box, on){
+  if(!box) return;
+  box.readOnly = !!on;
+  const wrap = box.closest ? box.closest('.field') : null;
+  if(!wrap) return;
+  let link = wrap.querySelector('.lookup-unlock');
+  if(!on){ if(link) link.remove(); return; }
+  if(!link){
+    link = document.createElement('a');
+    link.href = 'javascript:void(0)';
+    link.className = 'cell-link small-note lookup-unlock';
+    link.style.display = 'inline-block';
+    link.style.marginTop = '4px';
+    link.textContent = 'Filled from the IFSC — Edit';
+    link.onclick = ()=>{ lookupLock(box, false); box.focus(); };
+    wrap.appendChild(link);
+  }
+}
 const lookupCache = {};
 function lookupNote(el, text, tone){
   const wrap = el.closest ? el.closest('.field') : null;
@@ -3505,17 +3553,28 @@ async function runFieldLookup(el){
   if(normaliseValue(spec.kind, el.value).replace(/\s/g, '') !== value) return;   // typed on since
   const put = vals=>Object.entries(vals).forEach(([k, v])=>{
     const box = document.getElementById('f_' + k);
-    if(box && v && !box.disabled){ box.value = v; showFieldError(box, ''); }
+    if(!box || !v || box.disabled) return;
+    /* A dropdown is answered with the option that names the same place,
+       never with words that are not on its list. */
+    if(document.getElementById('pickbox_f_' + k)){
+      const row = (window._pickRows['f_' + k] || []).find(o=>lookupOptionNorm(o.label) === lookupOptionNorm(v));
+      if(row) pickTake('f_' + k, row.value);
+      return;
+    }
+    box.value = v; showFieldError(box, '');
   });
   if(r && r.ok){
     put(spec.fill(r));
+    (spec.lock || []).forEach(k=>lookupLock(document.getElementById('f_' + k), true));
     showFieldError(el, '');
     lookupNote(el, spec.found(r), 'ok');
   } else if(r && r.notFound){
+    (spec.lock || []).forEach(k=>lookupLock(document.getElementById('f_' + k), false));
     lookupNote(el, spec.missing, 'bad');
   } else {
     const local = spec.offline(value);
     if(local){ put(local); lookupNote(el, 'Filled from BOSS’s own PIN list (the online lookup is unavailable). Please check it.', 'warn'); }
+    else if(spec.unavailable) lookupNote(el, spec.unavailable, 'warn');
     else lookupNote(el, 'Could not look this up right now' + (r && r.message ? ' (' + r.message + ')' : '')
       + '. Please fill in the details yourself.', 'warn');
   }
@@ -3557,7 +3616,13 @@ const VALIDATION_KINDS = {
   euin:    {re:/^E[0-9]{6,9}$/, len:7, upper:true, message:'Please enter the EUIN as E followed by its digits, e.g. E123456.'},
   ifsc:    {re:/^[A-Z]{4}0[A-Z0-9]{6}$/, len:11, upper:true, message:'Please enter a valid 11-character IFSC, e.g. SBIN0001234.'},
   account: {re:/^[0-9]{9,18}$/, len:9, message:'Please enter a valid account number: 9 to 18 digits, numbers only.'},
-  person:  {re:/^[A-Za-z][A-Za-z .']*$/, len:1, message:'Please use letters, spaces and initials only.'},
+  person:  {re:/^[A-Za-z][A-Za-z .'\-]*$/, len:1, message:'Please use letters, spaces and initials only.'},
+  /* The Add New Client form's own rules. A field names the wording it
+     wants (vm) where the brief gives one; these say what is allowed. */
+  place:   {re:/^[A-Za-z][A-Za-z .,'()&\-]*$/, len:2, message:'Please enter a valid place name.'},
+  street:  {re:/^(?=.*[A-Za-z0-9])[A-Za-z0-9 ,.'#&()\/\-]+$/, len:3, message:'Please enter valid street address details.'},
+  words:   {re:/^(?=.*[A-Za-z])[A-Za-z0-9 .,&'()\/\-]+$/, len:2, message:'Please use letters, numbers and ordinary punctuation.'},
+  ucc:     {re:/^[A-Z0-9]{3,20}$/, len:3, upper:true, message:'Please enter a valid UCC number.'},
 };
 /* AADHAAR, CHECKED AND THEN FORGOTTEN.
 
@@ -3734,7 +3799,7 @@ function bindValidation(){
     const settled = leaving || !el.value || got.ok
       || String(el.value).replace(/\s/g, '').length >= (kind === 'pan' ? 10 : kind === 'mobile' ? 10
         : ((VALIDATION_KINDS[kind] || {}).len || 1));
-    showFieldError(el, (!got.ok && settled) ? got.message : '');
+    showFieldError(el, (!got.ok && settled) ? (el.getAttribute('data-vm') || got.message) : '');
   };
   document.addEventListener('input', e=>handle(e, false), true);
   document.addEventListener('blur',  e=>handle(e, true),  true);
@@ -3754,8 +3819,9 @@ function validateContainer(root){
   const bad = [];
   scope.querySelectorAll('[data-vk]').forEach(el=>{
     const got = checkValue(el.getAttribute('data-vk'), el.value);
-    showFieldError(el, got.ok ? '' : got.message);
-    if(!got.ok) bad.push({el, message: got.message});
+    const msg = el.getAttribute('data-vm') || got.message;
+    showFieldError(el, got.ok ? '' : msg);
+    if(!got.ok) bad.push({el, message: msg});
   });
   const firstBad = bad.length ? pickFocusTarget(bad[0].el) : null;
   if(firstBad && firstBad.focus) try { firstBad.focus(); } catch(e){}
@@ -4995,31 +5061,82 @@ const LMS_QUICK_ADD_FIELDS = LMS_QUICK_ADD_KEYS
         : f.k==='source' ? Object.assign({}, f, {l:'Lead Referral Source'})
         : f);
 
+/* THE ADD NEW CLIENT FORM.
+
+   Most of what a field does is said on the field itself, so the form,
+   the client's profile, Setup › Fields and the importers all read one
+   definition. What the brief added is said the same way:
+
+     ph        the light example inside the box ("e.g., Anand Kumar")
+     vk / vm   the rule it is under, and the brief's own wording when the
+               answer breaks it
+     show      when it appears — on another answer (Family, Insurance,
+               "Yes"), on how many nominees there are, or on a nominee
+               being a minor. A field that is not showing is not asked
+               for, and once the question that hides it has an answer,
+               it is not saved either.
+     reqShown  required, but only while it is showing
+     num       a number with a floor and a ceiling (and whole, if int)
+     noFuture  a date that cannot be after today
+
+   A whole section can carry `show` too: the underwriting questions are
+   one section, and they belong to an Insurance client only. */
+const CMS_NOMINEE_ORDINALS = ['first','second','third','fourth','fifth','sixth','seventh','eighth','ninth','tenth'];
+const CMS_NOMINEE_RELATIONS = ['Spouse','Son','Daughter','Father','Mother','Brother','Sister','Grandson','Granddaughter','Other'];
+const INDIA_STATES_UTS = ['Andaman & Nicobar Islands','Andhra Pradesh','Arunachal Pradesh','Assam','Bihar','Chandigarh',
+  'Chhattisgarh','Dadra & Nagar Haveli and Daman & Diu','Delhi','Goa','Gujarat','Haryana','Himachal Pradesh',
+  'Jammu & Kashmir','Jharkhand','Karnataka','Kerala','Ladakh','Lakshadweep','Madhya Pradesh','Maharashtra','Manipur',
+  'Meghalaya','Mizoram','Nagaland','Odisha','Puducherry','Punjab','Rajasthan','Sikkim','Tamil Nadu','Telangana',
+  'Tripura','Uttar Pradesh','Uttarakhand','West Bengal'];
+const CMS_PROFESSIONS = ['Software Engineer','Doctor','Chartered Accountant','Lawyer','Teacher','Professor','Business Owner',
+  'Government Employee','Banker','Consultant','Engineer','Architect','Pharmacist','Nurse','Farmer','Homemaker','Student',
+  'Retired','Self-employed','Other'];
+const cmsCap = s => s.charAt(0).toUpperCase() + s.slice(1);
+function cmsNomineeFields(){
+  const out = [];
+  CMS_NOMINEE_ORDINALS.forEach((o, i)=>{
+    const show = {field:'numberOfNominee', min:i + 1};
+    out.push(
+      {k:o + 'NomineeName', l:cmsCap(o) + ' Nominee Name', t:'text', show, reqShown:1, vk:'person',
+       vm:'Please enter a valid nominee name.', ph:'e.g., Priya Kumar', nominee:i + 1},
+      {k:o + 'NomineeRelation', l:cmsCap(o) + ' Nominee Relation', t:'select', opts:CMS_NOMINEE_RELATIONS, show, reqShown:1,
+       vm:'Please select the nominee relation.', ph:'Select relation', nominee:i + 1},
+      {k:o + 'NomineeDob', l:cmsCap(o) + ' Nominee Date of Birth', t:'date', show, reqShown:1, noFuture:1,
+       vm:'Please enter a valid nominee date of birth.', nominee:i + 1});
+  });
+  return out;
+}
 const CMS_FIELDS = {
   Personal: [
-    {k:'cmsName',l:'CMS Name (Client Name)',t:'text',req:1},
+    {k:'cmsName',l:'CMS Name (Client Name)',t:'text',req:1,vk:'person',vm:'Please enter a valid client name.',ph:'e.g., Anand Kumar'},
     {k:'salutation',l:'Salutation',t:'select',opts:['Mr.','Mrs.','Ms.','Dr.']},
-    {k:'dob',l:'Date of Birth',t:'date'},
+    {k:'dob',l:'Date of Birth',t:'date',noFuture:1,vm:'Please enter a valid date of birth.'},
     {k:'gender',l:'Gender',t:'select',opts:['Male','Female','Other']},
-    {k:'mobile',l:'Mobile',t:'text',req:1},
-    {k:'secondMobile',l:'Second Mobile',t:'text'},
-    {k:'email',l:'Email',t:'text'},
-    {k:'pan',l:'PAN No.',t:'text'},
-    {k:'aadhaar',l:'Aadhaar Card',t:'text'},
-    {k:'mailingStreet',l:'Mailing Street',t:'text'},
-    {k:'mailingCity',l:'Mailing City',t:'text'},
-    {k:'mailingState',l:'Mailing State',t:'text'},
-    {k:'mailingZip',l:'Mailing Zip',t:'text'},
+    {k:'mobile',l:'Mobile',t:'text',req:1,vk:'mobile',vm:'Please enter a valid 10-digit mobile number.',ph:'e.g., 9876543210',maxLen:10,im:'numeric'},
+    {k:'secondMobile',l:'Second Mobile',t:'text',vk:'mobile',vm:'Please enter a valid 10-digit mobile number.',ph:'e.g., 9876543210',maxLen:10,im:'numeric'},
+    {k:'email',l:'Email',t:'text',vk:'email',vm:'Please enter a valid email address.',ph:'e.g., anand@gmail.com',im:'email'},
+    {k:'pan',l:'PAN No.',t:'text',vk:'pan',vm:'Please enter a valid PAN number.',ph:'e.g., ABCDE1234F',maxLen:10},
+    {k:'aadhaar',l:'Aadhaar Card',t:'text',vk:'aadhaar',vm:'Please enter a valid Aadhaar number.',ph:'12-digit Aadhaar number',vault:1},
+    {k:'mailingStreet',l:'Mailing Street',t:'text',vk:'street',vm:'Please enter valid street address details.',ph:'e.g., 12, MG Road'},
+    {k:'mailingZip',l:'Mailing Zip',t:'text',vk:'pin',vm:'Please enter a valid 6-digit PIN code.',ph:'e.g., 560079',maxLen:6,im:'numeric',lookup:'cmspincode',
+     h:'Fill this in and the city and state fill themselves.'},
+    {k:'mailingCity',l:'Mailing City',t:'text',vk:'place',vm:'Please enter a valid city name.',ph:'e.g., Bengaluru'},
+    {k:'mailingState',l:'Mailing State',t:'select',opts:INDIA_STATES_UTS,vm:'Please select a valid state.',ph:'e.g., Karnataka',strictOpts:1},
     {k:'maritalStatus',l:'Marital Status',t:'select',opts:['Single','Married','Other']},
-    {k:'profession',l:'Profession',t:'text'},
-    {k:'annualIncome',l:'Annual Income',t:'text',money:1},
-    {k:'educationalQualification',l:'Educational Qualification',t:'text'},
+    {k:'profession',l:'Profession',t:'text',vk:'words',vm:'Please enter a valid profession.',ph:'e.g., Software Engineer',suggest:CMS_PROFESSIONS},
+    {k:'annualIncome',l:'Annual Income (₹ INR)',t:'text',money:1,ph:'e.g., 600000',num:{min:0,max:10000000000},
+     vm:'Please enter a valid annual income.'},
+    {k:'educationalQualification',l:'Educational Qualification',t:'select',
+     opts:['Below 10th','10th Pass','12th Pass','Diploma','Graduate','Postgraduate','Doctorate','Other'],
+     ph:'Select qualification',vm:'Please select a valid educational qualification.',strictOpts:1},
+    {k:'educationalQualificationOther',l:'Qualification (if Other)',t:'text',show:{field:'educationalQualification',values:['Other']},
+     reqShown:1,vk:'words',vm:'Please enter the qualification.',ph:'e.g., Chartered Accountant'},
   ],
   'Onboarding & KYC': [
     {k:'kycStatus',l:'KYC Status',t:'select',optsKey:'cms.kycStatuses'},
     {k:'cifRequired',l:'CIF Required?',t:'select',opts:['Yes','No']},
     {k:'accountActivated',l:'Account Activated?',t:'select',opts:['Yes','No']},
-    {k:'uccNo',l:'UCC No',t:'text'},
+    {k:'uccNo',l:'UCC No.',t:'text',vk:'ucc',vm:'Please enter a valid UCC number.',ph:'e.g., UCC123456',maxLen:20,unique:1},
     {k:'clientCategory',l:'Client Category',t:'select',optsKey:'arc.categories'},
     {k:'segment',l:'Segment',t:'select',optsKey:'campaign.segments'},
     {k:'dateOfOnboarding',l:'Date of Onboarding',t:'date'},
@@ -5029,10 +5146,11 @@ const CMS_FIELDS = {
     {k:'freedomBlueprintStatus',l:'Freedom Blueprint Status',t:'select',opts:['Not Started','In Progress','Prepared','Sent','Agreed','Approved']},
   ],
   'Bank & Mandate': [
-    {k:'bankName',l:'Bank Name',t:'text'},
-    {k:'accNo',l:'A/c No.',t:'text'},
-    {k:'ifsc',l:'IFSC',t:'text'},
-    {k:'branchName',l:'Branch Name',t:'text'},
+    {k:'ifsc',l:'IFSC',t:'text',vk:'ifsc',vm:'Please enter a valid IFSC code.',ph:'e.g., HDFC0001234',maxLen:11,lookup:'cmsifsc',
+     h:'Enter the IFSC first: the bank and branch fill themselves.'},
+    {k:'bankName',l:'Bank Name',t:'text',vk:'words',vm:'Please enter a valid bank name.',ph:'e.g., HDFC Bank',autoFilled:1},
+    {k:'branchName',l:'Branch Name',t:'text',vk:'words',vm:'Please enter a valid branch name.',ph:'e.g., Basaveshwaranagar Branch',autoFilled:1},
+    {k:'accNo',l:'A/c No.',t:'text',vk:'account',vm:'Please enter a valid bank account number.',ph:'e.g., 123456789012',maxLen:18,im:'numeric'},
     {k:'mandateType',l:'Type of Mandate',t:'select',opts:['Physical','E-Mandate']},
     {k:'mandateStatus',l:'Mandate Status',t:'select',opts:['Not Initiated','Pending Approval','Approved','Rejected']},
     {k:'mandateAmount',l:'Mandate Amount',t:'text',money:1},
@@ -5044,31 +5162,40 @@ const CMS_FIELDS = {
     {k:'canIinNo',l:'CAN/IIN No',t:'text'},
   ],
   'Nominee & Family': [
-    {k:'firstNomineeName',l:'First Nominee Name',t:'text'},
-    {k:'firstNomineeRelation',l:'First Nominee Relation',t:'text'},
-    {k:'firstNomineeDob',l:'First Nominee Date of Birth',t:'date'},
-    {k:'numberOfNominee',l:'Number of Nominee',t:'select',opts:['1','2','3']},
-    {k:'secondNomineeName',l:'Second Nominee Name',t:'text'},
-    {k:'secondNomineeRelation',l:'Second Nominee Relation',t:'text'},
-    {k:'secondNomineeDob',l:'Second Nominee Date of Birth',t:'date'},
-    {k:'thirdNomineeName',l:'Third Nominee Name',t:'text'},
-    {k:'thirdNomineeRelation',l:'Third Nominee Relation',t:'text'},
-    {k:'thirdNomineeDob',l:'Third Nominee Date of Birth',t:'date'},
-    {k:'nomineeGuardianName',l:'Guardian Name (if Nominee is Minor)',t:'text'},
-    {k:'nomineeGuardianAddress',l:"Address of Nominee's Guardian",t:'textarea'},
-    {k:'familyHead',l:'Family Head',t:'text'},
-    {k:'relationshipWithFamilyHead',l:'Relationship with Family Head',t:'text'},
-    {k:'familyOrIndividual',l:'Family or Individual',t:'select',opts:['Family','Individual']},
-    {k:'numberOfChild',l:'Number of Child',t:'text'},
-  ],
-  'Family & Personal Details': [
-    {k:'placeOfBirth',l:'Place of Birth',t:'text'},
-    {k:'fatherName',l:'Father Name',t:'text'},
-    {k:'motherName',l:'Mother Name',t:'text'},
-    {k:'spouseName',l:'Spouse Name',t:'text'},
-    {k:'anniversaryDate',l:'Anniversary Date',t:'date'},
-    {k:'companyName',l:'Company Name (Employer)',t:'text'},
-    {k:'sourceOfIncome',l:'Source of Income',t:'text'},
+    {k:'numberOfNominee',l:'Number of Nominee',t:'select',opts:['1','2','3','4','5','6','7','8','9','10'],
+     ph:'Select number of nominees',h:'Pick how many nominees, and the details for each appear below.'},
+  ].concat(cmsNomineeFields(), [
+    {k:'nomineeGuardianName',l:'Guardian Name (if Nominee is Minor)',t:'text',show:{minor:true},reqShown:1,vk:'person',
+     vm:'Please enter the guardian name for the minor nominee.',ph:'e.g., Ramesh Kumar'},
+    {k:'nomineeGuardianAddress',l:"Address of Nominee's Guardian",t:'textarea',show:{minor:true}},
+  ]),
+  'Family or Individual': [
+    {k:'familyOrIndividual',l:'Family or Individual',t:'select',opts:['Family','Individual'],req:1,
+     vm:'Please select Family or Individual.',ph:'Select Family or Individual'},
+    {k:'familyHead',l:'Family Head',t:'text',show:{field:'familyOrIndividual',values:['Family']},reqShown:1,vk:'person',
+     vm:'Please enter a valid family head name.',ph:'e.g., Anand Kumar'},
+    {k:'relationshipWithFamilyHead',l:'Relationship with Family Head',t:'select',
+     opts:['Self','Spouse','Father','Mother','Son','Daughter','Other'],show:{field:'familyOrIndividual',values:['Family']},reqShown:1,
+     vm:'Please select a valid relationship with the family head.',ph:'Select relationship'},
+    {k:'numberOfChild',l:'Number of Child',t:'number',show:{field:'familyOrIndividual',values:['Family']},num:{int:1,min:0,max:20},
+     vm:'Please enter a valid number of children.',ph:'e.g., 2'},
+    {k:'placeOfBirth',l:'Place of Birth',t:'text',show:{field:'familyOrIndividual',values:['Individual']},vk:'place',
+     vm:'Please enter a valid place of birth.',ph:'e.g., Bengaluru'},
+    {k:'fatherName',l:'Father Name',t:'text',show:{field:'familyOrIndividual',values:['Individual']},vk:'person',
+     vm:'Please enter a valid father name.',ph:'e.g., Ramesh Kumar'},
+    {k:'motherName',l:'Mother Name',t:'text',show:{field:'familyOrIndividual',values:['Individual']},vk:'person',
+     vm:'Please enter a valid mother name.',ph:'e.g., Lakshmi Devi'},
+    {k:'spouseName',l:'Spouse Name',t:'text',show:{field:'familyOrIndividual',values:['Individual']},vk:'person',
+     vm:'Please enter a valid spouse name.',ph:'e.g., Priya Kumar'},
+    {k:'anniversaryDate',l:'Anniversary Date',t:'date',show:{field:'familyOrIndividual',values:['Individual']},noFuture:1,
+     vm:'Please enter a valid anniversary date.'},
+    {k:'companyName',l:'Company Name (Employer)',t:'text',show:{field:'familyOrIndividual',values:['Individual']},vk:'words',
+     vm:'Please enter a valid company name.',ph:'e.g., ABC Technologies Pvt. Ltd.'},
+    {k:'sourceOfIncome',l:'Source of Income',t:'select',show:{field:'familyOrIndividual',values:['Individual']},
+     opts:['Salary','Business','Professional Income','Investments','Pension','Agriculture','Rental Income','Other'],
+     vm:'Please select a valid source of income.',ph:'Select source of income'},
+    {k:'sourceOfIncomeOther',l:'Source of Income (if Other)',t:'text',show:{field:'sourceOfIncome',values:['Other']},reqShown:1,
+     vk:'words',vm:'Please specify the source of income.',ph:'e.g., Royalties'},
     {k:'referralClientLookup',l:'Referral Client (lookup)',t:'clientselect'},
   ],
   'Joint Holder Details': [
@@ -5081,20 +5208,6 @@ const CMS_FIELDS = {
     {k:'secondHolderResidentialAddress',l:'Second Holder Residential Address (if different)',t:'textarea'},
     {k:'secondHolderCorrespondenceAddress',l:'Second Holder Address for Correspondence',t:'textarea'},
   ],
-  'Insurance Underwriting Details': [
-    {k:'height',l:'Height',t:'text'},
-    {k:'weight',l:'Weight',t:'text'},
-    {k:'doYouSmoke',l:'Do You Smoke?',t:'select',opts:['Yes','No']},
-    {k:'smokingYears',l:'If Yes, Since How Many Years',t:'text'},
-    {k:'doYouConsumeAlcohol',l:'Do You Consume Alcohol?',t:'select',opts:['Yes','No']},
-    {k:'alcoholType',l:'If Yes, Type of Alcohol',t:'text'},
-    {k:'alcoholFrequency',l:'If Yes, Frequency of Alcohol',t:'text'},
-    {k:'narcoticsDetails',l:'If Consuming Any Narcotics, Give Details',t:'textarea'},
-    {k:'isPoliticallyExposed',l:'Are You a Politically Exposed Person?',t:'select',opts:['Yes','No']},
-    {k:'covidHistory',l:'Do You Have Any Covid History?',t:'textarea'},
-    {k:'medicalHistorySelf',l:'Your Medical History (if any)',t:'textarea'},
-    {k:'medicalHistoryParents',l:'Medical History of Your Father & Mother',t:'textarea'},
-  ],
   'Communication': [
     {k:'welcomeChannel',l:'Welcome Message Sent Via',t:'select',opts:['WhatsApp','Email','WhatsApp + Email']},
     {k:'familyMappingType',l:'Family Mapping Type',t:'select',opts:['Family Head','Family Member','Individual']},
@@ -5102,22 +5215,57 @@ const CMS_FIELDS = {
     {k:'loginCredsChannel',l:'Login Credentials Sent Via',t:'select',opts:['Mail','WhatsApp','Mail + WhatsApp']},
   ],
   'Product & Status': [
-    {k:'productCategory',l:'Product Category',t:'select',opts:['Investment','Insurance']},
-    {k:'investmentsStatus',l:'Investments Status',t:'select',opts:['Not Started','In Process','Active']},
-    {k:'insuranceStatus',l:'Insurance Status',t:'select',opts:['Not Started','In Process','Active']},
-    {k:'rmName',l:'RM Name',t:'team'},
+    {k:'productCategory',l:'Product Category',t:'select',opts:['Insurance','Investment'],req:1,
+     vm:'Please select a product category.',ph:'Select Insurance or Investment'},
+    {k:'insuranceStatus',l:'Insurance Status',t:'select',opts:['Active','Pending','Applied','Rejected','Expired'],
+     show:{field:'productCategory',values:['Insurance']},reqShown:1,vm:'Please select a valid insurance status.'},
+    {k:'investmentsStatus',l:'Investments Status',t:'select',opts:['Active','Pending','In Progress','Closed'],
+     show:{field:'productCategory',values:['Investment']},reqShown:1,vm:'Please select a valid investment status.'},
+    /* RM, Associate and Branch are asked of every client, Insurance as
+       well as Investment: the RM is who owns the record, and the
+       visibility scope and the branch tabs read it. Hiding them for an
+       Insurance client would leave that client belonging to nobody. */
+    {k:'rmName',l:'RM Name',t:'team',vm:'Please select a valid RM name.',
+     h:'Choosing the RM fills in their branch.'},
     /* The Finowise reports name an Associate beside the RM. Nothing in CMS
        held one, and it is not the RM, the BDM or the referrer — so it is a
        field of its own rather than a value crammed into one of those. */
-    {k:'associateName',l:'Associate Name',t:'text'},
-    {k:'branch',l:'Branch',t:'branch'},
+    {k:'associateName',l:'Associate Name',t:'text',vk:'person',vm:'Please select a valid associate name.',
+     ph:'Start typing a name',suggestFrom:'associates'},
+    {k:'branch',l:'Branch',t:'branch',vm:'Please select a valid branch.'},
     {k:'reviewType',l:'Review Type',t:'select',optsKey:'arc.reviewTypes'},
     {k:'lastMeetingDate',l:'Last Meeting Date',t:'date'},
     {k:'nextMeetingDate',l:'Next Meeting Date',t:'date'},
     {k:'modelPortfolio',l:'Model Portfolio',t:'text'},
     {k:'riskProfile',l:'Risk Profile',t:'select',opts:['Conservative','Moderate','Aggressive']},
   ],
+  'Insurance Underwriting Details': [
+    {k:'height',l:'Height (cm)',t:'number',num:{min:30,max:272},ph:'e.g., 170',vm:'Please enter a valid height.'},
+    {k:'weight',l:'Weight (kg)',t:'number',num:{min:2,max:400},ph:'e.g., 65',vm:'Please enter a valid weight.'},
+    {k:'doYouSmoke',l:'Do You Smoke?',t:'select',opts:['Yes','No']},
+    {k:'smokingYears',l:'If Yes, Since How Many Years',t:'number',show:{field:'doYouSmoke',values:['Yes']},reqShown:1,
+     num:{min:0,max:90},ph:'e.g., 5',vm:'Please enter a valid smoking duration.'},
+    {k:'doYouConsumeAlcohol',l:'Do You Consume Alcohol?',t:'select',opts:['Yes','No']},
+    {k:'alcoholType',l:'If Yes, Type of Alcohol',t:'text',show:{field:'doYouConsumeAlcohol',values:['Yes']},reqShown:1,
+     vk:'words',vm:'Please specify the type of alcohol.',ph:'e.g., Beer',suggest:['Beer','Wine','Whisky','Rum','Vodka','Gin','Other']},
+    {k:'alcoholFrequency',l:'If Yes, Frequency of Alcohol',t:'select',show:{field:'doYouConsumeAlcohol',values:['Yes']},reqShown:1,
+     opts:['Occasionally','Monthly','Weekly','Several times a week','Daily'],
+     vm:'Please select or enter a valid alcohol consumption frequency.',ph:'Select frequency'},
+    {k:'narcoticsDetails',l:'If Consuming Any Narcotics, Give Details',t:'textarea',ph:'Leave blank if not applicable'},
+    {k:'isPoliticallyExposed',l:'Are You a Politically Exposed Person?',t:'select',opts:['Yes','No']},
+    {k:'covidHistoryAnswer',l:'Do You Have Any COVID History?',t:'select',opts:['Yes','No']},
+    {k:'covidHistory',l:'COVID History Details',t:'textarea',show:{field:'covidHistoryAnswer',values:['Yes']},reqShown:1,
+     vm:'Please provide the required COVID history details.',ph:'When, how severe, and any lasting effects'},
+    {k:'medicalHistorySelf',l:'Your Medical History (if any)',t:'textarea',ph:'Enter relevant medical history, if any.'},
+    {k:'medicalHistoryFather',l:"Father's Medical History",t:'textarea',ph:'Enter relevant medical history, if any.'},
+    {k:'medicalHistoryMother',l:"Mother's Medical History",t:'textarea',ph:'Enter relevant medical history, if any.'},
+    /* What the single box held before it was split. Shown only on a
+       client who has something in it, so nothing written there is lost. */
+    {k:'medicalHistoryParents',l:'Medical History of Father & Mother (earlier entry)',t:'textarea',legacy:1},
+  ],
 };
+/* The underwriting questions are an Insurance client's. */
+const CMS_GROUP_SHOW = {'Insurance Underwriting Details': {field:'productCategory', values:['Insurance']}};
 const CMS_FIELDS_FLAT = Object.values(CMS_FIELDS).flat();
 
 /* The three kinds of review meeting the workflow sheet defines, and who can be
@@ -32880,7 +33028,8 @@ function complianceFooterHtml(){
 let systemResetting = false;   // set by a reset; nothing may write after it
 async function save(part){
   if(systemResetting) return;  // the wipe writes through sset directly
-  await sset(part, DB[part]);
+  const wrote = await sset(part, DB[part]);
+  if(wrote === false) return false;
   /* The one place in BOSS that can tell a record it has never seen from one
      it has — which is what "created" and "changed" mean. The Automation
      Builder's triggers come off this and nothing else, so a module added
@@ -37329,7 +37478,7 @@ function pickFieldHtml(id, rows, val, blank, noun, onPick, o){
   const shown = o.text !== undefined ? o.text : (chosen ? chosen.label : '');
   /* Search, every box, no exceptions — except an empty one, which has
      nothing to search and says what the caller called the emptiness. */
-  const prompt = rows.length ? 'Search' : (blank || 'Search');
+  const prompt = o.ph || (rows.length ? 'Search' : (blank || 'Search'));
   return `<div class="pick" id="pickwrap_${esc(id)}">
     <input type="hidden" id="${esc(id)}" value="${esc(val || '')}">
     <input type="text" class="pick-input" id="pickbox_${esc(id)}" autocomplete="off"
@@ -37380,11 +37529,23 @@ function pickType(id, q, onFocus){
   pickPlace(id);
   if(input) input.setAttribute('aria-expanded', 'true');
 }
+/* A picker may be asked before its answer changes. The client form
+   uses this to say what switching from Family to Individual, or down
+   from three nominees to one, would take away — and to keep the old
+   answer when the person says no. */
+window._pickGuard = window._pickGuard || {};
 function pickTake(id, value){
   const rows = window._pickRows[id] || [];
   const row = rows.find(r=>r.value === value);
   const hidden = document.getElementById(id);
   const input = document.getElementById('pickbox_' + id);
+  const guard = window._pickGuard[id];
+  if(guard && hidden && hidden.value !== value && guard(value, hidden.value) === false){
+    const kept = rows.find(r=>r.value === hidden.value);
+    if(input) input.value = kept ? kept.label : '';
+    pickClose(id);
+    return;
+  }
   if(hidden){ hidden.value = value; if(hidden.tagName === 'SELECT') hidden.dataset.pickWas = hidden.value; }
   if(input){ input.value = row ? row.label : ''; input.setAttribute('aria-expanded', 'false'); }
   pickClose(id);
@@ -37731,9 +37892,10 @@ function fieldInput(f, val){
        the record holds; "Only their own records" is what a person
        choosing it needs to see. The value saved is unchanged. */
     const lab = o => (f.optLabels && f.optLabels[o]) || o;
-    control = pickFieldHtml('f_'+f.k, opts.map(o=>({value:o, label:lab(o)})), val, 'Select\u2026', (f.l || '').toLowerCase());
+    control = pickFieldHtml('f_'+f.k, opts.map(o=>({value:o, label:lab(o)})), val, 'Select\u2026', (f.l || '').toLowerCase(),
+      null, f.ph ? {ph: f.ph} : undefined);
   } else if(f.t==='textarea'){
-    control = `<textarea id="f_${f.k}">${esc(val)}</textarea>`;
+    control = `<textarea id="f_${f.k}"${f.ph ? ` placeholder="${esc(f.ph)}"` : ''}>${esc(val)}</textarea>`;
   } else if(f.t==='date'){
     control = `<input type="date" id="f_${f.k}" value="${esc(val)}"${dateBoundsAttr()}>`;
   } else if(f.t==='team'){
@@ -37788,7 +37950,7 @@ function fieldInput(f, val){
     /* A field may ask to be echoed somewhere as it is typed: a monthly
        salary showing the year it comes to, without waiting for a save. */
     const liveAttr = f.live ? ` oninput="${esc(f.live)}"` : '';
-    control = `<input type="number" step="any" id="f_${f.k}" class="${fieldIsMoney(f)?'num-in':''}" value="${esc(val)}"${f.min!==undefined?` min="${f.min}"`:''}${f.max!==undefined?` max="${f.max}"`:''}${changeAttr}${liveAttr}>`;
+    control = `<input type="number" step="any" id="f_${f.k}" class="${fieldIsMoney(f)?'num-in':''}" value="${esc(val)}"${f.min!==undefined?` min="${f.min}"`:''}${f.max!==undefined?` max="${f.max}"`:''}${f.ph?` placeholder="${esc(f.ph)}"`:''}${changeAttr}${liveAttr}>`;
   } else {
     /* A field may say what a right answer looks like (ph), which rule it
        is under (vk, checked as it is typed and again on save), how long
@@ -37798,6 +37960,7 @@ function fieldInput(f, val){
        always was. */
     const extra = (f.ph ? ` placeholder="${esc(f.ph)}"` : '')
       + (f.vk ? ` data-vk="${esc(f.vk)}"` : '')
+      + (f.vm ? ` data-vm="${esc(f.vm)}"` : '')
       + (f.maxLen ? ` maxlength="${f.maxLen}"` : '')
       + (f.im ? ` inputmode="${esc(f.im)}"` : '')
       + (f.lookup ? ` data-lookup="${esc(f.lookup)}"` : '')
@@ -38046,8 +38209,9 @@ function validateRequired(fields, data){
     const got = checkValue(f.vk, data[f.k]);
     if(got.ok){ data[f.k] = got.value; continue; }
     const el = pickFocusTarget(document.getElementById('f_'+f.k));
-    if(el) showFieldError(el, got.message);
-    alert(f.l + ': ' + got.message);
+    const msg = f.vm || got.message;
+    if(el) showFieldError(el, msg);
+    alert(f.l + ': ' + msg);
     if(el && el.focus){ try{ el.focus(); }catch(e){} }
     return false;
   }
@@ -41778,23 +41942,417 @@ function viewSubmission(subId){
   `, `<button class="btn primary" onclick="closeModal()">Close</button>`);
 }
 
+/* =====================================================================
+   ADD / EDIT CLIENT
+
+   The form is drawn from CMS_FIELDS, and what the brief asked of it is
+   said on the fields (see the note above CMS_FIELDS). This is the part
+   that acts on it while the form is open:
+
+   • what shows — a field with `show`, or a section in CMS_GROUP_SHOW,
+     appears only when its answer is given, and only while the field that
+     decides it is showing itself;
+   • what is asked before it goes — taking Family away from a client,
+     switching Insurance to Investment, or going down from three nominees
+     to one would drop what was typed, so the person is asked first and
+     the old answer stays if they say no;
+   • what is checked — every box, on save, with its message under it, and
+     nothing written until all of them pass. The server checks the same
+     things again (clientsGuard in server.js).
+   ===================================================================== */
+function cmsFormSpec(){ return window._cmsForm || {fields:[], byKey:{}}; }
+function cmsFormVal(k){
+  const el = document.getElementById('f_' + k);
+  return el ? String(el.value || '') : '';
+}
+function cmsAgeOn(dob){
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(String(dob || ''))) return null;
+  const d = new Date(dob + 'T00:00:00'), now = new Date();
+  let age = now.getFullYear() - d.getFullYear();
+  const m = now.getMonth() - d.getMonth();
+  if(m < 0 || (m === 0 && now.getDate() < d.getDate())) age--;
+  return age;
+}
+function cmsNomineeCount(){ return Number(cmsFormVal('numberOfNominee')) || 0; }
+function cmsAnyMinorNominee(){
+  const n = cmsNomineeCount();
+  for(let i = 0; i < n; i++){
+    const age = cmsAgeOn(cmsFormVal(CMS_NOMINEE_ORDINALS[i] + 'NomineeDob'));
+    if(age !== null && age < 18) return true;
+  }
+  return false;
+}
+function cmsSpecHolds(spec){
+  if(!spec) return true;
+  if(spec.minor) return cmsAnyMinorNominee();
+  const v = cmsFormVal(spec.field);
+  if(spec.min) return (Number(v) || 0) >= spec.min;
+  return (spec.values || []).indexOf(v) >= 0;
+}
+/* Showing, all the way up: a field whose deciding field is itself hidden
+   is hidden too, so "Source of Income: Other" left behind on a Family
+   client does not keep its box on the screen. */
+function cmsFieldShown(k, depth){
+  const spec = cmsFormSpec();
+  const f = spec.byKey[k];
+  if(!f || (depth || 0) > 6) return true;
+  const g = CMS_GROUP_SHOW[f._group];
+  if(g && (!cmsSpecHolds(g) || !cmsFieldShown(g.field, (depth || 0) + 1))) return false;
+  if(!f.show) return true;
+  if(!cmsSpecHolds(f.show)) return false;
+  return f.show.field ? cmsFieldShown(f.show.field, (depth || 0) + 1) : true;
+}
+function cmsFormRefresh(){
+  const spec = cmsFormSpec();
+  spec.fields.forEach(f=>{
+    if(!f.show) return;
+    const wrap = document.getElementById('fieldwrap_f_' + f.k);
+    if(wrap) wrap.style.display = cmsFieldShown(f.k) ? '' : 'none';
+  });
+  Object.keys(CMS_GROUP_SHOW).forEach(g=>{
+    const box = document.querySelector('[data-cms-group="' + g.replace(/"/g, '') + '"]');
+    if(!box) return;
+    const rule = CMS_GROUP_SHOW[g];
+    box.style.display = (cmsSpecHolds(rule) && cmsFieldShown(rule.field)) ? '' : 'none';
+  });
+  /* Each nominee section says which nominee it is. */
+  const n = cmsNomineeCount();
+  document.querySelectorAll('[data-cms-nominee-head]').forEach(h=>{
+    h.style.display = Number(h.getAttribute('data-cms-nominee-head')) <= n ? '' : 'none';
+  });
+}
+function cmsClearField(k){
+  const el = document.getElementById('f_' + k);
+  if(!el) return;
+  el.value = '';
+  const box = document.getElementById('pickbox_f_' + k);
+  if(box) box.value = '';
+  showFieldError(el, '');
+}
+/* What would go if `keys` stopped showing: the labels of those that hold something. */
+function cmsFilledAmong(keys){
+  return keys.filter(k=>cmsFormVal(k).trim()).map(k=>(cmsFormSpec().byKey[k] || {}).l || k);
+}
+function cmsAskBeforeDropping(keys, what){
+  const filled = cmsFilledAmong(keys);
+  if(!filled.length) return true;
+  const ok = confirm(what + '\n\nThis clears what has been entered in: ' + filled.slice(0, 8).join(', ')
+    + (filled.length > 8 ? ' and ' + (filled.length - 8) + ' more' : '')
+    + '.\nThose details will not be saved. Continue?');
+  if(ok) keys.forEach(cmsClearField);
+  return ok;
+}
+function cmsKeysShownFor(field, value){
+  return cmsFormSpec().fields.filter(f=>{
+    const s = f.show || CMS_GROUP_SHOW[f._group];
+    return s && s.field === field && (s.values || []).indexOf(value) >= 0;
+  }).map(f=>f.k);
+}
+function cmsBindGuards(){
+  window._pickGuard['f_numberOfNominee'] = (next, was)=>{
+    const to = Number(next) || 0, from = Number(was) || 0;
+    if(to >= from) return true;
+    const keys = cmsFormSpec().fields.filter(f=>f.nominee > to).map(f=>f.k);
+    return cmsAskBeforeDropping(keys, 'Reduce the nominees from ' + from + ' to ' + (to || 'none') + '?');
+  };
+  ['familyOrIndividual','productCategory'].forEach(k=>{
+    window._pickGuard['f_' + k] = (next, was)=>{
+      if(!was) return true;
+      return cmsAskBeforeDropping(cmsKeysShownFor(k, was), 'Change ' + ((cmsFormSpec().byKey[k] || {}).l || k)
+        + ' from ' + was + ' to ' + (next || 'nothing') + '?');
+    };
+  });
+  cmsFormSpec().fields.filter(f=>f.t === 'select' || f.t === 'team').forEach(f=>{
+    const before = window._pickOn['f_' + f.k];
+    window._pickOn['f_' + f.k] = (v, label)=>{
+      if(before) before(v, label);
+      if(v) showFieldError(document.getElementById('f_' + f.k), '');
+      if(f.k === 'rmName') cmsBranchFromRm(v);
+      cmsFormRefresh();
+    };
+  });
+}
+/* Choosing the RM fills in the branch they sit in, which can still be changed. */
+function cmsBranchFromRm(memberId){
+  const t = (DB.team || []).find(x=>x.id === memberId);
+  if(!t || !t.branch || !document.getElementById('pickbox_f_branch')) return;
+  const row = (window._pickRows['f_branch'] || []).find(r=>r.value === t.branch);
+  if(row) pickTake('f_branch', row.value);
+}
+function cmsAssociateSuggestions(){
+  const names = (DB.team || []).filter(t=>isMemberActive(t)).map(t=>t.name)
+    .concat((DB.partners || []).filter(x=>!x.deletedAt).map(x=>partnerName(x.id)));
+  return Array.from(new Set(names.filter(Boolean))).sort();
+}
+/* What an older record holds is shown as it was entered. A client with
+   nominees typed in before the count existed gets the count worked out,
+   and one with COVID notes gets the Yes they imply, so neither has its
+   answers hidden away the first time it is opened. */
+function cmsFormStartValues(client){
+  const v = Object.assign({}, client);
+  if(!v.numberOfNominee){
+    let n = 0;
+    CMS_NOMINEE_ORDINALS.forEach((o, i)=>{
+      if(v[o + 'NomineeName'] || v[o + 'NomineeRelation'] || v[o + 'NomineeDob']) n = i + 1;
+    });
+    if(n) v.numberOfNominee = String(n);
+  }
+  if(!v.covidHistoryAnswer && String(v.covidHistory || '').trim()) v.covidHistoryAnswer = 'Yes';
+  if(v.aadhaar && /^[0-9]{4}$/.test(String(v.aadhaar))) v.aadhaar = aadhaarMasked(v.aadhaar);
+  return v;
+}
+function cmsHealthCertHtml(clientId){
+  const have = clientId ? DB.clientDocuments.filter(d=>d.clientId === clientId && !d.deletedAt && d.kind === 'Health Certificate') : [];
+  return `<div class="field field-wide" id="fieldwrap_f_healthCert">
+    <label>Upload Your Health Certificate (if Available)</label>
+    ${have.map(d=>`<div class="row" style="gap:8px;margin-bottom:6px" id="hc_have_${esc(d.id)}">
+        <span class="badge info">${esc(d.name)}</span>
+        <a href="javascript:void(0)" class="cell-link" onclick="cmsHealthCertDrop('${esc(d.id)}')">Remove</a></div>`).join('')}
+    <input type="file" id="f_healthCertFile" accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png"
+      onchange="cmsHealthCertPicked(this)">
+    <div class="row" style="gap:8px;margin-top:6px;display:none" id="hc_picked">
+      <span class="badge ok" id="hc_picked_name"></span>
+      <a href="javascript:void(0)" class="cell-link" onclick="cmsHealthCertClear()">Remove</a></div>
+    <div class="small-note" style="margin-top:4px">Optional. PDF, JPG or PNG, up to 2 MB.${have.length
+      ? ' Choosing a new file replaces the one above.' : ''} Kept with the client’s documents, and shown only to people
+      who may edit clients.</div>
+  </div>`;
+}
+const CMS_HC_TYPES = ['application/pdf','image/jpeg','image/png'];
+function cmsHealthCertPicked(input){
+  const f = input.files && input.files[0];
+  const name = document.getElementById('hc_picked_name');
+  const row = document.getElementById('hc_picked');
+  showFieldError(input, '');
+  if(!f){ if(row) row.style.display = 'none'; return; }
+  const okType = CMS_HC_TYPES.indexOf(f.type) >= 0 || /\.(pdf|jpe?g|png)$/i.test(f.name);
+  if(!okType){ input.value = ''; if(row) row.style.display = 'none';
+    showFieldError(input, 'That file type is not supported. Please upload a PDF, JPG or PNG.'); return; }
+  if(f.size > 2 * 1024 * 1024){ input.value = ''; if(row) row.style.display = 'none';
+    showFieldError(input, 'That file is over 2 MB. Please upload a smaller one.'); return; }
+  if(name) name.textContent = f.name;
+  if(row) row.style.display = '';
+}
+function cmsHealthCertClear(){
+  const input = document.getElementById('f_healthCertFile');
+  if(input){ input.value = ''; showFieldError(input, ''); }
+  const row = document.getElementById('hc_picked'); if(row) row.style.display = 'none';
+}
+function cmsHealthCertDrop(docId){
+  window._cmsForm.dropDocs = (window._cmsForm.dropDocs || []).concat([docId]);
+  const el = document.getElementById('hc_have_' + docId); if(el) el.remove();
+}
+async function cmsHealthCertSave(clientId){
+  const spec = cmsFormSpec();
+  const input = document.getElementById('f_healthCertFile');
+  const file = input && input.files && input.files[0];
+  const drop = (spec.dropDocs || []).slice();
+  if(file) DB.clientDocuments.filter(d=>d.clientId === clientId && !d.deletedAt && d.kind === 'Health Certificate')
+    .forEach(d=>{ if(drop.indexOf(d.id) < 0) drop.push(d.id); });
+  const now = new Date().toISOString();
+  drop.forEach(id=>{ const d = DB.clientDocuments.find(x=>x.id === id); if(d && !d.deletedAt) d.deletedAt = now; });
+  if(file){
+    try {
+      const dataUrl = await new Promise((res, rej)=>{ const r = new FileReader(); r.onload = ()=>res(r.result);
+        r.onerror = ()=>rej(r.error); r.readAsDataURL(file); });
+      DB.clientDocuments.push({id:uid('DOC'), clientId, kind:'Health Certificate', name:file.name, size:file.size,
+        dataUrl, restricted:true, at:now, by:currentUser});
+    } catch(e){ alert('The health certificate could not be read, so it was not uploaded. Please try again.'); }
+  }
+  if(file || drop.length){
+    await save('clientDocuments');
+    await logAudit('CMS', clientId, file ? 'Health Certificate Uploaded' : 'Health Certificate Removed',
+      [{field:'File', oldValue:'', newValue: file ? file.name : drop.length + ' removed'}]);
+  }
+}
+/* AADHAAR, SHOWN ONLY TO WHOEVER MANAGEMENT HAS APPROVED.
+
+   The box shows XXXX XXXX 1234. "Show" asks the server for the whole
+   number, and the server answers only an account that has been approved
+   in Setup › Aadhaar Access — so a hidden button is not the protection,
+   the server is. A number typed in full is checked, its last four digits
+   go on the record, and the whole of it goes to the server's vault. */
+function cmsAadhaarControls(clientId){
+  const el = document.getElementById('f_aadhaar');
+  if(!el || el.dataset.vaultBound) return;
+  el.dataset.vaultBound = '1';
+  const wrap = el.closest('.field');
+  const bar = document.createElement('div');
+  bar.className = 'row';
+  bar.style.cssText = 'gap:8px;margin-top:6px';
+  bar.innerHTML = clientId
+    ? `<button type="button" class="btn sm" id="aadhaarShowBtn" onclick="cmsAadhaarToggle('${esc(clientId)}')">Show</button>
+       <span class="small-note" style="margin:0">Masked. The full number is shown only to people management has approved.</span>`
+    : `<span class="small-note" style="margin:0">Masked once saved. The full number is shown only to people management has approved.</span>`;
+  wrap.appendChild(bar);
+}
+async function cmsAadhaarToggle(clientId){
+  const el = document.getElementById('f_aadhaar');
+  const btn = document.getElementById('aadhaarShowBtn');
+  if(!el || !btn) return;
+  if(el.dataset.revealed){
+    el.value = el.dataset.masked || '';
+    delete el.dataset.revealed;
+    btn.textContent = 'Show';
+    return;
+  }
+  btn.disabled = true;
+  try {
+    const res = await fetch('/api/aadhaar/' + encodeURIComponent(clientId), {headers: apiHeaders()});
+    const r = await res.json().catch(()=>({}));
+    if(res.ok && r.ok){
+      el.dataset.masked = el.value;
+      el.value = String(r.number).replace(/(\d{4})(?=\d)/g, '$1 ');
+      el.dataset.revealed = '1';
+      btn.textContent = 'Hide';
+      showFieldError(el, '');
+      await logAudit('CMS', clientId, 'Aadhaar Viewed', [{field:'Aadhaar', oldValue:'', newValue:'full number shown'}]);
+    } else {
+      lookupNote(el, r.message || 'The full number could not be shown.', res.status === 403 ? 'bad' : 'warn');
+    }
+  } catch(e){ lookupNote(el, 'The server could not be reached.', 'warn'); }
+  btn.disabled = false;
+}
+async function cmsAadhaarStore(clientId, raw, before){
+  const digits = String(raw || '').replace(/[\s-]/g, '');
+  let body = null;
+  if(/^[0-9]{12}$/.test(digits)) body = {number: digits};
+  else if(!digits && before) body = {number: ''};
+  if(!body) return true;
+  try {
+    const res = await fetch('/api/aadhaar/' + encodeURIComponent(clientId), {method:'PUT',
+      headers: Object.assign({'Content-Type':'application/json'}, apiHeaders()), body: JSON.stringify(body)});
+    if(res.ok) return true;
+  } catch(e){}
+  alert('The client was saved with the last four digits of the Aadhaar number, but the full number could not be '
+    + 'stored on the server. Open the client and enter it again.');
+  return false;
+}
 function openClientForm(id, tab){
   if(!mayEditRecord('CMS', id)) return;
   const client = id? DB.clients.find(c=>c.id===id) : {};
-  const groups = Object.entries(cmsFieldGroupsVisible()).map(([g,fields])=>`
-    <div class="section-title">${esc(g)}</div>
-    <div class="field-grid">${fields.map(f=>fieldInput(f, client[f.k])).join('')}</div>
-  `).join('');
+  const start = cmsFormStartValues(client || {});
+  const fields = [], byKey = {};
+  const groups = Object.entries(cmsFieldGroupsVisible()).map(([g, list])=>{
+    const shown = list.filter(f=>!f.legacy || String((client || {})[f.k] || '').trim())
+      .map(f=>Object.assign({}, f, {_group:g},
+        f.suggestFrom === 'associates' ? {suggest: cmsAssociateSuggestions()} : {}));
+    shown.forEach(f=>{ fields.push(f); byKey[f.k] = f; });
+    const cells = [];
+    shown.forEach(f=>{
+      /* Each nominee starts on its own line, under its own name. */
+      if(f.nominee && /NomineeName$/.test(f.k)){
+        cells.push(`<div class="field-wide small-note" data-cms-nominee-head="${f.nominee}"
+          style="margin:6px 0 0;font-weight:700;color:var(--ink)">${esc(cmsCap(CMS_NOMINEE_ORDINALS[f.nominee - 1]))} Nominee</div>`);
+      }
+      cells.push(fieldInput(f, start[f.k]));
+    });
+    if(g === 'Insurance Underwriting Details') cells.push(cmsHealthCertHtml(id));
+    return `<div data-cms-group="${esc(g)}">
+      <div class="section-title">${esc(g)}</div>
+      <div class="field-grid">${cells.join('')}</div></div>`;
+  }).join('');
+  window._cmsForm = {fields, byKey, clientId: id || '', dropDocs: []};
   openModal(id?'Edit Client — '+esc(client.cmsName):'Add New Client', groups,
     `<button class="btn" onclick="closeModal()">Cancel</button><button class="btn primary" onclick="saveClient('${id||''}')">Save Client</button>`
   );
+  cmsBindGuards();
+  cmsFormRefresh();
+  cmsAadhaarControls(id);
+  if(start.ifsc && (start.bankName || start.branchName)){
+    ['bankName','branchName'].forEach(k=>{ if(start[k]) lookupLock(document.getElementById('f_' + k), true); });
+  }
+  const body = document.querySelector('#modalBody .modal-body');
+  if(body && !body.dataset.cmsBound){
+    body.dataset.cmsBound = '1';
+    body.addEventListener('change', ()=>{ if(window._cmsForm) cmsFormRefresh(); });
+  }
+}
+/* Every box on the form, judged, with the reason under each one that
+   fails — not one alert at a time. Answers that are right are left
+   exactly as they were typed. */
+function cmsValidateForm(fields, data){
+  const bad = [];
+  const fail = (f, msg)=>{ bad.push({f, msg}); };
+  const today = new Date().toISOString().slice(0, 10);
+  fields.forEach(f=>{
+    const el = document.getElementById('f_' + f.k);
+    if(el) showFieldError(el, '');
+  });
+  fields.forEach(f=>{
+    const shown = cmsFieldShown(f.k);
+    if(!shown) return;
+    const v = String(data[f.k] === undefined || data[f.k] === null ? '' : data[f.k]).trim();
+    if(!v){
+      if(f.req || f.reqShown) fail(f, f.vm || ('Please fill: ' + f.l));
+      return;
+    }
+    if(f.vk === 'aadhaar' && /^X{4}\s?X{4}\s?[0-9]{4}$/i.test(v)) return;
+    if(f.vk){
+      const got = checkValue(f.vk, v);
+      if(!got.ok){ fail(f, f.vm || got.message); return; }
+    }
+    if(f.num){
+      const n = Number(v.replace(/[,\s₹]/g, ''));
+      if(!isFinite(n) || (f.num.int && !Number.isInteger(n))
+        || (f.num.min !== undefined && n < f.num.min) || (f.num.max !== undefined && n > f.num.max)){
+        fail(f, f.vm || ('Please enter a valid ' + f.l.toLowerCase() + '.')); return;
+      }
+    }
+    if(f.t === 'date'){
+      const problem = dateRangeProblem('', v);
+      if(problem || (f.noFuture && v > today)){ fail(f, f.vm || problem || 'The date cannot be in the future.'); return; }
+    }
+    if(f.strictOpts && (f.opts || []).indexOf(v) < 0 && v !== String(((DB.clients || []).find(c=>c.id === cmsFormSpec().clientId) || {})[f.k] || '')){
+      fail(f, f.vm || ('Please choose ' + f.l + ' from the list.')); return;
+    }
+    if(f.unique){
+      const clash = (DB.clients || []).find(c=>!c.deletedAt && c.id !== cmsFormSpec().clientId
+        && String(c[f.k] || '').trim().toUpperCase() === v.toUpperCase());
+      if(clash){ fail(f, 'This ' + f.l + ' is already on ' + (clash.cmsName || 'another client') + '.'); return; }
+    }
+  });
+  /* The same person named twice as a nominee is one nominee. */
+  const seen = {};
+  for(let i = 0; i < cmsNomineeCount(); i++){
+    const f = cmsFormSpec().byKey[CMS_NOMINEE_ORDINALS[i] + 'NomineeName'];
+    const name = String(data[f ? f.k : ''] || '').trim().toLowerCase().replace(/\s+/g, ' ');
+    if(!f || !name) continue;
+    if(seen[name] && !bad.some(b=>b.f === f)) fail(f, 'This nominee is already listed as the ' + seen[name] + ' nominee.');
+    else seen[name] = CMS_NOMINEE_ORDINALS[i];
+  }
+  bad.forEach(b=>{ const el = document.getElementById('f_' + b.f.k); if(el) showFieldError(el, b.msg); });
+  if(bad.length){
+    const first = pickFocusTarget(document.getElementById('f_' + bad[0].f.k));
+    if(first){ try{ first.scrollIntoView({block:'center'}); first.focus(); }catch(e){} }
+    alert(bad.length === 1 ? bad[0].f.l + ': ' + bad[0].msg
+      : 'Please correct the ' + bad.length + ' highlighted fields. The first is ' + bad[0].f.l + ': ' + bad[0].msg);
+  }
+  return !bad.length;
 }
 async function saveClient(id){
   if(!mayEditRecord('CMS', id)) return;
   const fields = cmsFieldsFlatVisible();
   const data = readFields(fields);
-  if(!validateRequired(fields, data)) return;
+  const formFields = window._cmsForm && window._cmsForm.fields && window._cmsForm.fields.length
+    ? window._cmsForm.fields : fields;
+  if(document.getElementById('f_cmsName') && !cmsValidateForm(formFields, data)) return;
+  const aadhaarTyped = data.aadhaar;
+  if(!validateRequired(fields.filter(f=>!f.reqShown && cmsFieldShown(f.k)), data)) return;
+  /* An answer whose question is no longer asked is not kept — once the
+     question that decides it has been answered. A client from before the
+     form asked Family or Individual keeps everything until somebody does. */
+  fields.forEach(f=>{
+    if(!document.getElementById('fieldwrap_f_' + f.k)) return;
+    const rule = f.show || CMS_GROUP_SHOW[(window._cmsForm && window._cmsForm.byKey[f.k] || {})._group];
+    if(!rule || cmsFieldShown(f.k)) return;
+    if(rule.field && !cmsFormVal(rule.field) && !rule.min) return;
+    data[f.k] = '';
+  });
   let categoryChange = null;
+  let savedId = id;
+  const beforeAadhaar = id ? (DB.clients.find(c=>c.id===id) || {}).aadhaar : '';
+  const snapshot = JSON.stringify(DB.clients);
   if(id){
     const idx = DB.clients.findIndex(c=>c.id===id);
     const before = Object.assign({}, DB.clients[idx]);
@@ -41808,12 +42366,19 @@ async function saveClient(id){
     }
   } else {
     data.id = uid('CMS'); data.createdAt = new Date().toISOString();
+    savedId = data.id;
     initState('CMS', data);
     DB.clients.push(data);
     await logAudit('CMS', data.id, 'Create', [{field:'client', oldValue:'', newValue:data.cmsName}]);
   }
-  await save('clients');
+  ssetFormHeader = 'client';
+  let ok;
+  try { ok = await save('clients'); } finally { ssetFormHeader = ''; }
+  if(ok === false){ DB.clients = JSON.parse(snapshot); return; }   // refused, and said why; the form stays open
+  if(aadhaarTyped !== undefined) await cmsAadhaarStore(savedId, aadhaarTyped, beforeAadhaar);
+  if(document.getElementById('f_healthCertFile')) await cmsHealthCertSave(savedId);
   closeModal();
+  window._cmsForm = null;
   if(categoryChange){
     const client = DB.clients.find(c=>c.id===id);
     await handleClientCategoryChange(client, categoryChange.old, categoryChange.next);
@@ -55790,7 +56355,8 @@ function bossScalars(o, skip){
    answers are not what a planning or service question turns on. */
 const BOSS_NEVER = ['aadhaar','accNo','cif_accountNumber','height','weight','doYouSmoke','smokingYears',
   'doYouConsumeAlcohol','alcoholType','alcoholFrequency','narcoticsDetails','covidHistory',
-  'medicalHistorySelf','medicalHistoryParents','password','token'];
+  'medicalHistorySelf','medicalHistoryParents','medicalHistoryFather','medicalHistoryMother','covidHistoryAnswer',
+  'password','token'];
 /* One client, as the assistant is allowed to know them: their own fields,
    holdings, SIPs, transactions, open work and the alerts above. */
 function bossClientDossier(c){
@@ -71340,6 +71906,78 @@ async function savePermissions(id, opts){
    reach them; those routes now redirect in (see SETTINGS_ROUTE_ALIAS), so
    there is exactly one home for each screen.
    ===================================================================== */
+/* AADHAAR ACCESS.
+
+   Management decides who may see a client's full Aadhaar number, by
+   account or by role, and the decision is kept by the server, which is
+   what refuses everybody else. Nobody is approved to begin with, admins
+   included: an admin who needs to see numbers adds themselves here, and
+   that shows on the log like any other change. Every look and every
+   refusal is listed underneath. */
+window._aadhaarAccess = window._aadhaarAccess || null;
+async function aadhaarAccessLoad(){
+  try {
+    const res = await fetch('/api/aadhaar/access', {headers: apiHeaders()});
+    window._aadhaarAccess = await res.json();
+  } catch(e){ window._aadhaarAccess = {ok:false, message:'The server could not be reached.'}; }
+  render();
+}
+function renderSettingsAadhaarAccess(){
+  const a = window._aadhaarAccess;
+  if(!a){ aadhaarAccessLoad(); return '<div class="small-note">Loading…</div>'; }
+  if(!a.ok) return `<div class="card"><div class="small-note">${esc(a.message || 'Could not load the Aadhaar access list.')}</div></div>`;
+  if(!a.me || !a.me.admin) return `<div class="card"><div class="small-note">Only an admin account can decide who sees full
+    Aadhaar numbers.${a.me && a.me.approved ? ' You are approved to see them.' : ' You are not approved to see them.'}</div></div>`;
+  const ap = a.approved || {emails:[], roles:[]};
+  const people = (DB.team || []).filter(t=>t.email && isMemberActive(t))
+    .sort((x, y)=>String(x.name).localeCompare(String(y.name)));
+  const on = e=>ap.emails.indexOf(String(e).toLowerCase()) >= 0;
+  return `
+    <div class="card">
+      <div class="section-title" style="margin-top:0">Who may see a full Aadhaar number</div>
+      <div class="small-note" style="margin-top:0">Everybody else sees XXXX XXXX and the last four digits, and the server refuses
+        them if they ask for more. Nobody is approved until they are ticked here — admins included.</div>
+      <div class="section-title" style="font-size:12px">By role</div>
+      <div class="row" style="gap:8px;flex-wrap:wrap">
+        ${roleList().map(r=>`<label class="mpick-chip${ap.roles.indexOf(r) >= 0 ? ' on' : ''}">
+          <input type="checkbox" ${ap.roles.indexOf(r) >= 0 ? 'checked' : ''}
+            onchange="aadhaarAccessSet('role', ${esc(JSON.stringify(r))}, this.checked)"> <span>${esc(r)}</span></label>`).join('')}
+      </div>
+      <div class="section-title" style="font-size:12px">By person</div>
+      <div class="table-wrap"><table><thead><tr><th>Person</th><th>Email</th><th>Role</th><th>May see full number</th></tr></thead><tbody>
+        ${people.map(t=>`<tr><td>${esc(t.name)}</td><td>${esc(t.email)}</td><td>${esc(roleOf(t) || '—')}</td>
+          <td><input type="checkbox" ${on(t.email) ? 'checked' : ''}
+            onchange="aadhaarAccessSet('email', ${esc(JSON.stringify(String(t.email).toLowerCase()))}, this.checked)"></td></tr>`).join('')
+          || '<tr><td colspan="4" class="empty">Nobody with a sign-in yet.</td></tr>'}
+      </tbody></table></div>
+      <div class="small-note">A role here is the role on the person’s sign-in account, as Team Members last set it.</div>
+    </div>
+    <div class="card" style="margin-top:14px">
+      <div class="section-title" style="margin-top:0">Access log</div>
+      <div class="table-wrap"><table><thead><tr><th>When</th><th>Who</th><th>What</th><th>Client</th><th>Note</th></tr></thead><tbody>
+        ${(a.log || []).map(l=>`<tr><td>${esc(fmtDateTime(l.at))}</td><td>${esc(l.by || '—')}</td>
+          <td>${l.action === 'refused' ? '<span class="badge warn">refused</span>' : esc(l.action)}</td>
+          <td>${l.clientId ? esc(clientName(l.clientId)) : '—'}</td><td>${esc(l.note || '')}</td></tr>`).join('')
+          || '<tr><td colspan="5" class="empty">Nothing yet.</td></tr>'}
+      </tbody></table></div>
+    </div>`;
+}
+async function aadhaarAccessSet(kind, value, on){
+  const a = window._aadhaarAccess || {};
+  const ap = Object.assign({emails:[], roles:[]}, a.approved || {});
+  const key = kind === 'role' ? 'roles' : 'emails';
+  const list = ap[key].filter(x=>x !== value);
+  if(on) list.push(value);
+  ap[key] = list;
+  try {
+    const res = await fetch('/api/aadhaar/access', {method:'PUT',
+      headers: Object.assign({'Content-Type':'application/json'}, apiHeaders()), body: JSON.stringify(ap)});
+    const r = await res.json().catch(()=>({}));
+    if(!res.ok || !r.ok){ alert(r.message || 'That could not be saved.'); }
+  } catch(e){ alert('The server could not be reached, so nothing changed.'); }
+  window._aadhaarAccess = null;
+  render();
+}
 /* =====================================================================
    SETUP — one hierarchy, with names that say what is inside
 
@@ -71365,6 +72003,7 @@ const SETTINGS_CATEGORIES = [
     ['roletemplates','Role Access Template','manageUsers','tab','What each role is allowed by default, so an account put on a role starts there instead of from two hundred checkboxes.'],
     ['accessrequests','Access Requests','manageUsers','tab','What people have run into and asked for — the permission each one needs, and granting it in one press.'],
     ['accessreview','Access Review','managePermissions','tab','Every account against the profile for the role it is on — what it holds, what the job needs, and the difference.'],
+    ['aadhaaraccess','Aadhaar Access','manageUsers','tab','Who may see a client’s full Aadhaar number, and every time somebody did.'],
     ['teammembers','Team Members',null,'route','The people themselves \u2014 their details, documents, notes, the work they own and the reporting chart.'],
     ['profile','Personal Settings',null,'route','Your own details \u2014 not the firm\u2019s.'],
   ]},
@@ -71529,6 +72168,7 @@ const SETTINGS_TAB_VIEWS = {
   automationcenter: ()=>viewAutomationCenter(), webhooks: ()=>viewWebhooks(),
   integrations: ()=>viewIntegrationsFramework(),
   usermanagement: ()=>renderSettingsUserManagement(),
+  aadhaaraccess: ()=>renderSettingsAadhaarAccess(),
   accessrequests: ()=>renderSettingsAccessRequests(),
   accessreview: ()=>renderSettingsAccessReview(),
   dashboardaccess: ()=>renderSettingsDashboardAccess(),

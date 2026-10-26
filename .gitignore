@@ -10,3 +10,6 @@ users.db-shm
 ._*
 *.log
 .env
+aadhaar-vault.json
+aadhaar-vault.json.tmp
+aadhaar-vault.key
