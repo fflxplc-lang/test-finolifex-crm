@@ -66,6 +66,7 @@ worker(){
       cd "$ROOT" && CRM_USERS_DB="$D/store/users.db" node scripts/user.js role test@finowise.test admin >/dev/null 2>&1 )
     ( cd "$ROOT" && PORT=$PORT \
         CRM_DB_FILE="$D/store/data.json" \
+        CRM_BUSINESS_TZ=UTC CRM_ATTENDANCE_ANY_DAY=1 CRM_REMINDERS=manual \
         CRM_CONNECTIONS_FILE="$D/store/connections.json" \
         CRM_USERS_DB="$D/store/users.db" \
         CRM_PIN_LOOKUP_URL="http://127.0.0.1:$(($PORT + 252))/pincode/" \

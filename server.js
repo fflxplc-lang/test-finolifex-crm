@@ -1042,6 +1042,9 @@ function isClientLinkRequest(req) {
 }
 app.use((req, res, next) => {
   if (isSignedIn(req) || req.path === '/api/health') return next();
+  // The service worker script carries no data; a browser fetches it without
+  // being asked to sign in again, and it is what shows a push.
+  if (req.path === '/sw.js') return next();
   if (isClientLinkRequest(req)) return next();
   if (req.path.startsWith('/api/')) return res.status(401).json({ error: 'not signed in' });
   res.redirect('/login?next=' + encodeURIComponent(req.originalUrl));
@@ -1214,6 +1217,49 @@ function clientsGuard(before, after, strict) {
   return problems.length ? { problems } : { value: strict ? after : JSON.stringify(next) };
 }
 
+/* WHEN A PUNCH IS ALLOWED, decided here and not only by a greyed-out button.
+   A new punch in has to land inside the punch clock's hours on the firm's
+   clock, on a day there is attendance, by somebody not on an approved
+   full-day leave, and be stamped with the time it actually happened. A punch
+   out has to land before the clock closes. Rows for other days (a restore,
+   an import) are not judged: only a punch made today is a punch made now. */
+function attendanceRulesGuard(before, after) {
+  let old, next;
+  try { old = JSON.parse(before || '[]'); next = JSON.parse(after); } catch (e) { return null; }
+  if (!Array.isArray(old) || !Array.isArray(next)) return null;
+  const now = bizNow();
+  const cfg = hrConfigNow();
+  const from = minsOf(cfg.day.from), until = minsOf(cfg.day.until);
+  const byId = new Map(old.filter((r) => r && r.id).map((r) => [r.id, r]));
+  for (const row of next) {
+    if (!row || !row.id || row.date !== now.date) continue;
+    const was = byId.get(row.id) || {};
+    const oldS = Array.isArray(was.sessions) ? was.sessions : [];
+    const newS = Array.isArray(row.sessions) ? row.sessions : [];
+    if (newS.length > oldS.length) {
+      const closed = hrClosedWhy(row.date, cfg);
+      if (closed) return 'You cannot punch in today. ' + closed;
+      const leave = hrApprovedLeave(row.userId, row.date);
+      if (leave && !hrLeaveIsHalf(leave, cfg))
+        return 'You cannot punch in today: you are on approved leave' + (leave.type ? ' (' + leave.type + ')' : '') + '.';
+      if (now.mins < from) return 'Punch In opens at ' + cfg.day.from + '.';
+      if (now.mins >= until) return 'The punch clock closed at ' + cfg.day.until + ' today.';
+      const at = new Date((newS[newS.length - 1] || {}).in).getTime();
+      // (The test suites lay down days punched in hours ago to drive; they run with CRM_ATTENDANCE_ANY_DAY=1.)
+      if (process.env.CRM_ATTENDANCE_ANY_DAY !== '1' && (!isFinite(at) || Math.abs(Date.now() - at) > 10 * 60000))
+        return 'A punch in has to carry the time it was made.';
+    }
+    for (let i = 0; i < Math.min(oldS.length, newS.length); i++) {
+      const a = oldS[i] || {}, b = newS[i] || {};
+      if (b.out && b.out !== a.out) {
+        if (hrClosedWhy(row.date, cfg)) return 'You cannot punch out today. ' + hrClosedWhy(row.date, cfg);
+        if (now.mins >= until) return 'Punch Out closed at ' + cfg.day.until + '. Ask for a regularization if your last punch out is wrong.';
+      }
+    }
+  }
+  return null;
+}
+
 // PUT /api/storage/:key  body: { value: "..." } -> { key, value }
 app.put('/api/storage/:key', checkApiKey, (req, res) => {
   let { value } = req.body || {};
@@ -1221,6 +1267,8 @@ app.put('/api/storage/:key', checkApiKey, (req, res) => {
   if (req.params.key === 'hrAttendance') {
     const wrong = attendanceGuard(store.hrAttendance, value);
     if (wrong) return res.status(409).json({ error: 'attendance is append-only: ' + wrong });
+    const refused = attendanceRulesGuard(store.hrAttendance, value);
+    if (refused) return res.status(409).json({ error: refused });
   }
   if (req.params.key === 'clients') {
     const checked = clientsGuard(store.clients, value, req.get('X-CRM-Form') === 'client');
@@ -3658,6 +3706,429 @@ app.get('/config.js', (req, res) => {
          // whichever team member happens to be first in the list.
          + 'window.CRM_USER_EMAIL = ' + JSON.stringify((user && user.email) || '') + ';'
          + 'window.CRM_MEMBER_ID = ' + JSON.stringify((user && user.member_id) || '') + ';');
+});
+
+/* ---------------------------------------------------------------------
+   REMINDERS THE SERVER SENDS BY ITSELF
+
+   A reminder that only exists while somebody happens to have a tab open
+   is not a reminder. These run here, on a timer, against the records as
+   they stand at that minute, and each one is written down when it goes
+   out so a restart, a second timer tick or a deploy never sends it twice.
+
+   Two kinds:
+     - attendance: 09:15 "you have not punched in" (email + browser push),
+       18:00 "you are still punched in" (BOSS notification + push),
+       19:00 the same by email, if they still have not punched out.
+     - the Daily Working Tracker: a meeting, call or planned activity
+       reaches its start time (and, if the person asked for one, a few
+       minutes before it) — a BOSS notification, a push, and email if
+       they chose it.
+
+   Times are the firm's, not the server's: BUSINESS_TZ (Asia/Kolkata unless
+   CRM_BUSINESS_TZ says otherwise). Browser push needs the person to have
+   allowed it on that device; when they have not, the BOSS notification is
+   still there for them.
+   --------------------------------------------------------------------- */
+const webpush = require('web-push');
+const BUSINESS_TZ = process.env.CRM_BUSINESS_TZ || 'Asia/Kolkata';
+const REMINDER_FILE = process.env.CRM_REMINDER_FILE || path.join(path.dirname(DB_FILE), 'reminders.json');
+const VAPID_FILE = process.env.CRM_VAPID_FILE || path.join(path.dirname(DB_FILE), 'push-vapid.json');
+
+/* The firm's date, clock and weekday right now. */
+function bizNow(at) {
+  const d = at ? new Date(at) : new Date();
+  const parts = {};
+  new Intl.DateTimeFormat('en-GB', { timeZone: BUSINESS_TZ, year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', hourCycle: 'h23', weekday: 'short' })
+    .formatToParts(d).forEach((p) => { parts[p.type] = p.value; });
+  return { date: parts.year + '-' + parts.month + '-' + parts.day, hhmm: parts.hour + ':' + parts.minute,
+    mins: Number(parts.hour) * 60 + Number(parts.minute), dow: ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].indexOf(parts.weekday) };
+}
+function storeList(key) {
+  try { const v = JSON.parse(store[key] || '[]'); return Array.isArray(v) ? v : []; } catch (e) { return []; }
+}
+function storeObj(key) {
+  try { const v = JSON.parse(store[key] || '{}'); return v && typeof v === 'object' && !Array.isArray(v) ? v : {}; } catch (e) { return {}; }
+}
+function hhmmOk(v) { return /^\d{1,2}:\d{2}$/.test(String(v || '')); }
+function minsOf(hhmm) { const b = String(hhmm).split(':'); return Number(b[0]) * 60 + Number(b[1]); }
+/* "11:00", "11:00 AM", "4:30pm" -> minutes after midnight, or null. */
+function clockMins(v) {
+  const m = /^\s*(\d{1,2})[:.](\d{2})\s*([ap]\.?m\.?)?\s*$/i.exec(String(v || ''));
+  if (!m) return null;
+  let h = Number(m[1]); const min = Number(m[2]);
+  if (m[3]) { const pm = /p/i.test(m[3]); if (h === 12) h = pm ? 12 : 0; else if (pm) h += 12; }
+  if (h > 23 || min > 59) return null;
+  return h * 60 + min;
+}
+function clockText(mins) { return String(Math.floor(mins / 60)).padStart(2, '0') + ':' + String(mins % 60).padStart(2, '0'); }
+
+/* ---- the attendance calendar, read the way the page reads it ---- */
+function hrConfigNow() {
+  const c = storeObj('hrConfig');
+  const day = Object.assign({ punchInFrom: '08:45', punchOutUntil: '20:45' }, c.day || {});
+  const r = Object.assign({ enabled: true, inEmailAt: '09:15', outNotifyAt: '18:00', outEmailAt: '19:00' }, c.reminders || {});
+  return {
+    day: { from: hhmmOk(day.punchInFrom) ? day.punchInFrom : '08:45', until: hhmmOk(day.punchOutUntil) ? day.punchOutUntil : '20:45' },
+    weeklyOff: Array.isArray(c.weeklyOff) ? c.weeklyOff : [],
+    holidays: Array.isArray(c.holidays) ? c.holidays : [],
+    leaveTypes: Array.isArray(c.leaveTypes) ? c.leaveTypes : [],
+    reminders: {
+      enabled: r.enabled !== false,
+      inAt: hhmmOk(r.inEmailAt) ? r.inEmailAt : '09:15',
+      outNotifyAt: hhmmOk(r.outNotifyAt) ? r.outNotifyAt : '18:00',
+      outEmailAt: hhmmOk(r.outEmailAt) ? r.outEmailAt : '19:00',
+    },
+  };
+}
+function dowOf(date) { const d = new Date(date + 'T12:00:00Z'); return isNaN(d) ? -1 : d.getUTCDay(); }
+/* Why there is no attendance on this date, or ''. */
+function hrClosedWhy(date, cfg) {
+  cfg = cfg || hrConfigNow();
+  if (process.env.CRM_ATTENDANCE_ANY_DAY === '1') return '';
+  if (dowOf(date) === 0) return 'There is no attendance on Sundays.';
+  const h = cfg.holidays.find((x) => x && x.date === date);
+  if (h) return 'It is a holiday' + (h.name ? ' — ' + h.name : '') + '.';
+  const names = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  if (cfg.weeklyOff.indexOf(names[dowOf(date)]) >= 0) return 'It is a weekly off.';
+  return '';
+}
+function hrApprovedLeave(userId, date) {
+  return storeList('hrLeave').find((l) => l && l.userId === userId && l.status === 'Approved'
+    && String(l.from || '') <= date && date <= String(l.to || l.from || '')) || null;
+}
+function hrLeaveIsHalf(leave, cfg) {
+  if (!leave) return false;
+  if (leave.unit) return leave.unit === 'half';
+  const t = (cfg || hrConfigNow()).leaveTypes.find((x) => (typeof x === 'string' ? x : (x && x.name)) === leave.type);
+  return !!(t && typeof t === 'object' && t.unit === 'half');
+}
+function hrDayRecord(userId, date) {
+  return storeList('hrAttendance').find((r) => r && r.userId === userId && r.date === date) || null;
+}
+function hrOpen(rec) { return rec && Array.isArray(rec.sessions) ? rec.sessions.find((s) => s && s.in && !s.out) || null : null; }
+function hrEverIn(rec) { return !!(rec && Array.isArray(rec.sessions) && rec.sessions.some((s) => s && s.in)); }
+
+/* Everybody who keeps attendance: the active team. */
+function activeMembers() {
+  return storeList('team').filter((t) => t && t.id && !t.deletedAt
+    && !/inactive|left|disabled|deactivated/i.test(String(t.status || 'Active')));
+}
+function memberEmail(m) {
+  if (m.email && ADDRESS_RE.test(String(m.email))) return String(m.email).trim();
+  try { const u = findUserByMember.get(m.id); if (u && ADDRESS_RE.test(u.email)) return u.email; } catch (e) { /* no account */ }
+  return '';
+}
+/* The member a signed-in account is, by the link the account was made with
+   or, for older accounts, by its address. */
+function memberOfUser(user) {
+  if (!user) return null;
+  const team = storeList('team');
+  return team.find((t) => t && t.id === user.member_id)
+    || team.find((t) => t && t.email && String(t.email).toLowerCase() === String(user.email || '').toLowerCase()) || null;
+}
+
+/* ---- the ledger: what went out, so nothing goes twice ---- */
+function remindersRead() {
+  try {
+    const v = JSON.parse(fs.readFileSync(REMINDER_FILE, 'utf8'));
+    return { sent: v.sent && typeof v.sent === 'object' ? v.sent : {}, log: Array.isArray(v.log) ? v.log : [],
+      subs: v.subs && typeof v.subs === 'object' ? v.subs : {} };
+  } catch (e) { return { sent: {}, log: [], subs: {} }; }
+}
+let reminders = remindersRead();
+function remindersWrite() {
+  // Ten days of "already sent" is all that can ever matter again.
+  const cutoff = bizNow(Date.now() - 10 * 86400000).date;
+  Object.keys(reminders.sent).forEach((k) => { if (String(reminders.sent[k].date || '') < cutoff) delete reminders.sent[k]; });
+  reminders.log = reminders.log.slice(-3000);
+  const tmp = REMINDER_FILE + '.tmp';
+  try { fs.writeFileSync(tmp, JSON.stringify(reminders)); fs.renameSync(tmp, REMINDER_FILE); }
+  catch (e) { console.error('reminders: could not write the ledger —', e.message); }
+}
+function reminderLog(entry) { reminders.log.push(Object.assign({ at: new Date().toISOString() }, entry)); }
+
+/* ---- browser push ---- */
+function vapidKeys() {
+  if (process.env.CRM_VAPID_PUBLIC && process.env.CRM_VAPID_PRIVATE)
+    return { publicKey: process.env.CRM_VAPID_PUBLIC, privateKey: process.env.CRM_VAPID_PRIVATE };
+  try { const v = JSON.parse(fs.readFileSync(VAPID_FILE, 'utf8')); if (v.publicKey && v.privateKey) return v; } catch (e) { /* first run */ }
+  const k = webpush.generateVAPIDKeys();
+  try { fs.writeFileSync(VAPID_FILE, JSON.stringify(k), { mode: 0o600 }); } catch (e) { console.error('push: could not keep the VAPID keys —', e.message); }
+  return k;
+}
+const VAPID = vapidKeys();
+webpush.setVapidDetails(process.env.CRM_VAPID_SUBJECT || 'mailto:admin@localhost', VAPID.publicKey, VAPID.privateKey);
+
+/* Push to every device a person has allowed it on. A subscription the push
+   service says is gone (404/410) is forgotten. */
+async function pushTo(memberId, payload) {
+  const subs = (reminders.subs[memberId] || []).slice();
+  if (!subs.length) return { sent: 0, why: 'no device has allowed browser notifications' };
+  let sent = 0;
+  for (const s of subs) {
+    try { await webpush.sendNotification(s, JSON.stringify(payload), { TTL: 3600 }); sent++; }
+    catch (e) {
+      if (e && (e.statusCode === 404 || e.statusCode === 410))
+        reminders.subs[memberId] = (reminders.subs[memberId] || []).filter((x) => x.endpoint !== s.endpoint);
+    }
+  }
+  return { sent, why: sent ? '' : 'the push service refused it' };
+}
+/* A BOSS notification: the bell, the toast, and a desktop notification in
+   any tab the person has open. */
+function notifyInApp(memberId, n) {
+  const list = storeList('notifications');
+  const row = Object.assign({ id: 'NTF-' + crypto.randomBytes(6).toString('hex'), at: new Date().toISOString(),
+    userId: memberId, view: '', arg: '', by: 'server' }, n);
+  list.push(row);
+  store.notifications = JSON.stringify(list);
+  writeToDisk();
+  publishChange(['notifications'], 'server');
+  return row;
+}
+function mailTo(address, subject, body) {
+  return new Promise((resolve) => {
+    if (!address) return resolve({ ok: false, message: 'no email address on the account' });
+    sendMail({ to: address, subject, body }, null, (status, json) => resolve({ ok: !!(json && json.ok), message: (json && json.message) || '' }));
+  });
+}
+/* Once per key, ever. The key is written before anything is sent, so two
+   ticks racing each other cannot both send. */
+function claim(key, date) {
+  if (reminders.sent[key]) return false;
+  reminders.sent[key] = { date, at: new Date().toISOString() };
+  return true;
+}
+
+/* ---- attendance ---- */
+async function attendanceReminders(now) {
+  const cfg = hrConfigNow();
+  if (!cfg.reminders.enabled) return;
+  if (hrClosedWhy(now.date, cfg)) return;
+  const until = minsOf(cfg.day.until);
+  const site = process.env.CRM_PUBLIC_URL || '';
+  for (const m of activeMembers()) {
+    if (m.attendanceExempt) continue;
+    const leave = hrApprovedLeave(m.id, now.date);
+    const rec = hrDayRecord(m.id, now.date);
+    // 09:15 — nobody has punched in. Checked again right before each send.
+    if (now.mins >= minsOf(cfg.reminders.inAt) && now.mins < until && !leave && !hrEverIn(rec)) {
+      if (claim('in-mail:' + m.id + ':' + now.date, now.date)) {
+        const r = await mailTo(memberEmail(m), 'Reminder: you have not punched in today',
+          'Hello ' + (m.name || '') + ',\n\nIt is past ' + cfg.reminders.inAt + ' and BOSS has no punch in for you today ('
+          + now.date + ').\n\nPlease punch in from the Dashboard' + (site ? ': ' + site : '') + '.\n\nIf you are on leave or working '
+          + 'elsewhere, speak to your reporting manager.\n\n— BOSS');
+        reminderLog({ kind: 'punch-in', channel: 'email', userId: m.id, date: now.date, ok: r.ok, message: r.message });
+      }
+      if (claim('in-push:' + m.id + ':' + now.date, now.date)) {
+        const r = await pushTo(m.id, { title: 'You have not punched in', body: 'It is past ' + cfg.reminders.inAt
+          + ' and there is no punch in on your record for today.', url: '/?view=dashboard', tag: 'punch-in-' + now.date });
+        reminderLog({ kind: 'punch-in', channel: 'push', userId: m.id, date: now.date, ok: r.sent > 0, message: r.why });
+      }
+    }
+    // 18:00 — punched in, not out: in BOSS and as a push.
+    const open = hrOpen(rec);
+    if (open && now.mins >= minsOf(cfg.reminders.outNotifyAt) && now.mins < until) {
+      if (claim('out-app:' + m.id + ':' + now.date, now.date)) {
+        notifyInApp(m.id, { title: 'You are still punched in', kind: 'hr-reminder', view: 'dashboard', tag: 'punch-out-' + now.date,
+          body: 'It is past ' + cfg.reminders.outNotifyAt + ' and you have not punched out today. Punch out before '
+            + cfg.day.until + '.' });
+        reminderLog({ kind: 'punch-out', channel: 'in-app', userId: m.id, date: now.date, ok: true, message: '' });
+      }
+      if (claim('out-push:' + m.id + ':' + now.date, now.date)) {
+        const r = await pushTo(m.id, { title: 'You are still punched in', body: 'It is past ' + cfg.reminders.outNotifyAt
+          + ' and you have not punched out today.', url: '/?view=dashboard', tag: 'punch-out-' + now.date });
+        reminderLog({ kind: 'punch-out', channel: 'push', userId: m.id, date: now.date, ok: r.sent > 0, message: r.why });
+      }
+    }
+    // 19:00 — the same, by email, only if the record still says so now.
+    if (now.mins >= minsOf(cfg.reminders.outEmailAt) && now.mins < until && hrOpen(hrDayRecord(m.id, now.date))) {
+      if (claim('out-mail:' + m.id + ':' + now.date, now.date)) {
+        const r = await mailTo(memberEmail(m), 'Reminder: you have not punched out today',
+          'Hello ' + (m.name || '') + ',\n\nYou punched in today (' + now.date + ') and have not punched out yet. Punch out in BOSS before '
+          + cfg.day.until + (site ? ': ' + site : '') + '.\n\nIf you forgot and have already left, raise an attendance regularization.\n\n— BOSS');
+        reminderLog({ kind: 'punch-out', channel: 'email', userId: m.id, date: now.date, ok: r.ok, message: r.message });
+      }
+    }
+  }
+}
+
+/* ---- the Daily Working Tracker ---- */
+/* The page's own rule for whether a planned activity lands on a date. */
+function weekStartOfDate(date, startsMonday) {
+  const d = new Date(date + 'T12:00:00Z');
+  const dow = d.getUTCDay();
+  d.setUTCDate(d.getUTCDate() - (startsMonday ? (dow + 6) % 7 : dow));
+  return d.toISOString().slice(0, 10);
+}
+function activityOccursOn(a, day, startsMonday) {
+  if ((a.skipDates || []).includes(day)) return false;
+  if (day < a.date && !(a.days && a.days.length)) return false;
+  if (a.days && a.days.length) {
+    if (!a.days.includes(dowOf(day))) return false;
+    if (a.repeatWeekly) return weekStartOfDate(day, startsMonday) >= weekStartOfDate(a.date, startsMonday);
+    return weekStartOfDate(day, startsMonday) === weekStartOfDate(a.date, startsMonday);
+  }
+  const rec = a.recurrence && a.recurrence !== 'none' ? a.recurrence : null;
+  if (!rec) return day === a.date;
+  if (a.recurrenceUntil && day > a.recurrenceUntil) return false;
+  const diff = Math.round((new Date(day + 'T12:00:00Z') - new Date(a.date + 'T12:00:00Z')) / 86400000);
+  if (rec === 'daily') return diff >= 0;
+  if (rec === 'weekdays') return diff >= 0 && dowOf(day) >= 1 && dowOf(day) <= 5;
+  if (rec === 'weekly') return diff >= 0 && diff % 7 === 0;
+  if (rec === 'monthly') return new Date(day + 'T12:00:00Z').getUTCDate() === new Date(a.date + 'T12:00:00Z').getUTCDate();
+  return day === a.date;
+}
+function nameOfClient(id) { const c = storeList('clients').find((x) => x && x.id === id); return c ? (c.cmsName || '') : ''; }
+function nameOfLead(id) { const l = storeList('leads').find((x) => x && x.id === id); return l ? ((l.firstName || '') + ' ' + (l.lastName || '')).trim() : ''; }
+/* Everything on somebody's day that has a start time, as the planner shows it. */
+function scheduledToday(memberId, date, startsMonday) {
+  const out = [];
+  storeList('meetings').forEach((m) => {
+    if (!m || m.deletedAt || (m.assignTo || m.createdBy) !== memberId || m.scheduledDate !== date) return;
+    if (/completed|cancelled|not required/i.test(m.status || '')) return;
+    const start = clockMins(m.scheduledTime);
+    if (start === null) return;
+    out.push({ kind: 'meeting', id: m.id, title: m.subject || m.meetingType || 'Meeting', start,
+      who: m.clientId ? nameOfClient(m.clientId) : (m.withName || ''), link: m.meetingLink || '', where: m.location || '' });
+  });
+  storeList('callEntries').forEach((c) => {
+    if (!c || c.deletedAt || (c.loggedBy || c.createdBy) !== memberId || c.callDate !== date) return;
+    if (/completed|cancelled/i.test(c.status || '')) return;
+    const start = clockMins(c.startTime);
+    if (start === null) return;
+    out.push({ kind: 'call', id: c.id, title: c.subject || ((c.callCategory || 'Call') + (c.callType ? ' (' + c.callType + ')' : '')), start,
+      who: c.clientId ? nameOfClient(c.clientId) : (c.leadId ? nameOfLead(c.leadId) : ''), link: '', where: '' });
+  });
+  storeList('workActivities').forEach((a) => {
+    if (!a || a.deletedAt || a.userId !== memberId || !activityOccursOn(a, date, startsMonday)) return;
+    if (a.status === 'Cancelled') return;
+    if (a.status === 'Completed' && (a.completedOn === date || !(a.days && a.days.length > 1) && !a.repeatWeekly)) return;
+    if ((a.startedOn || {})[date]) return;
+    const start = clockMins(a.plannedStart);
+    if (start === null) return;
+    const isMeeting = /meeting/i.test(a.activityType || '');
+    out.push({ kind: isMeeting ? 'meeting' : 'activity', source: 'manual', id: a.id, title: a.title || a.activityType || 'Activity', start,
+      who: a.clientId ? nameOfClient(a.clientId) : (a.leadId ? nameOfLead(a.leadId) : ''), link: '', where: '' });
+  });
+  return out;
+}
+function dwtPrefs(m) {
+  const p = Object.assign({ activities: true, meetings: true, inApp: true, desktop: true, email: false, advanceMinutes: 0 }, m.reminderPrefs || {});
+  p.advanceMinutes = Math.max(0, Math.min(120, Number(p.advanceMinutes) || 0));
+  return p;
+}
+async function dwtReminders(now) {
+  const startsMonday = (((storeObj('config').general) || {}).weekStartsOn) !== 'Sunday';
+  for (const m of activeMembers()) {
+    const p = dwtPrefs(m);
+    for (const it of scheduledToday(m.id, now.date, startsMonday)) {
+      if (it.kind === 'meeting' ? !p.meetings : !p.activities) continue;
+      /* Which reminder is due: the one at the start, or the one ahead of it.
+         A reminder more than 15 minutes late is not sent by push or email —
+         the BOSS notification is still written, so it is waiting for them. */
+      const marks = [{ at: it.start, which: 'start' }];
+      if (p.advanceMinutes) marks.push({ at: it.start - p.advanceMinutes, which: 'pre' });
+      for (const mk of marks) {
+        if (now.mins < mk.at) continue;
+        if (mk.which === 'pre' && now.mins >= it.start) continue;
+        const late = now.mins - mk.at > 15;
+        if (late && mk.which === 'pre') continue;
+        // The time is in the key: a rescheduled item is a new reminder, and the old time never fires.
+        const key = 'dwt:' + mk.which + ':' + m.id + ':' + it.kind + ':' + it.id + ':' + now.date + ':' + clockText(it.start);
+        if (!claim(key, now.date)) continue;
+        const when = clockText(it.start);
+        const title = it.kind === 'meeting' ? 'Meeting: ' + it.title : 'Scheduled: ' + it.title;
+        const body = mk.which === 'pre'
+          ? (it.kind === 'meeting' ? 'Your meeting “' + it.title + '” starts at ' + when + ', in ' + (it.start - now.mins) + ' minutes.'
+            : 'Your scheduled activity “' + it.title + '” starts at ' + when + ', in ' + (it.start - now.mins) + ' minutes.')
+          : (it.kind === 'meeting' ? 'Your meeting “' + it.title + '” is scheduled to start now (' + when + '). Please join or begin the meeting.'
+            : 'Your scheduled activity “' + it.title + '” is due to start now (' + when + ').');
+        const extra = [it.who ? 'With: ' + it.who : '', it.where ? 'Where: ' + it.where : '', it.link ? 'Link: ' + it.link : ''].filter(Boolean).join(' · ');
+        const meta = { kind: it.kind, source: it.source || it.kind, id: it.id, date: now.date, time: when, who: it.who, link: it.link, where: it.where, which: mk.which };
+        if (p.inApp) {
+          notifyInApp(m.id, { title, body: body + (extra ? '\n' + extra : ''), kind: 'dwt-reminder', view: 'dwt', arg: now.date, meta, tag: key });
+          reminderLog({ kind: 'dwt-' + mk.which, channel: 'in-app', userId: m.id, date: now.date, ok: true, message: it.title + ' ' + when });
+        }
+        if (p.desktop && !late) {
+          const r = await pushTo(m.id, { title, body: body + (extra ? ' ' + extra : ''), url: '/?view=dwt', tag: key });
+          reminderLog({ kind: 'dwt-' + mk.which, channel: 'push', userId: m.id, date: now.date, ok: r.sent > 0, message: r.why });
+        }
+        if (p.email && !late) {
+          const r = await mailTo(memberEmail(m), title + ' at ' + when, body + (extra ? '\n\n' + extra.split(' · ').join('\n') : '') + '\n\n— BOSS');
+          reminderLog({ kind: 'dwt-' + mk.which, channel: 'email', userId: m.id, date: now.date, ok: r.ok, message: r.message });
+        }
+      }
+    }
+  }
+}
+let reminderRunning = false;
+async function reminderTick(at) {
+  if (reminderRunning) return;           // one tick at a time: a slow mail server must not overlap the next
+  reminderRunning = true;
+  try {
+    const now = bizNow(at);
+    await attendanceReminders(now);
+    await dwtReminders(now);
+  } catch (e) { console.error('reminders:', e && e.message || e); }
+  finally { remindersWrite(); reminderRunning = false; }
+}
+if (process.env.CRM_REMINDERS !== 'off' && process.env.CRM_REMINDERS !== 'manual') {
+  setTimeout(() => reminderTick(), 5000);
+  setInterval(() => reminderTick(), 30000).unref();
+}
+/* The test suites run with CRM_REMINDERS=manual: no timer, and a tick is
+   run on request at a time of their choosing. Never available otherwise. */
+if (process.env.CRM_REMINDERS === 'manual') {
+  app.post('/api/reminders/run', checkApiKey, async (req, res) => {
+    await reminderTick(req.body && req.body.at);
+    res.json({ ok: true, log: reminders.log.slice(-50) });
+  });
+}
+
+/* The page's side of push: the public key, and this device's subscription. */
+app.get('/api/push/key', (req, res) => res.json({ publicKey: VAPID.publicKey }));
+app.post('/api/push/subscribe', checkApiKey, (req, res) => {
+  const member = memberOfUser(signedInUser(req));
+  if (!member) return res.status(403).json({ error: 'this account is not linked to a team member' });
+  const s = req.body && req.body.subscription;
+  if (!s || typeof s.endpoint !== 'string' || !/^https:\/\//.test(s.endpoint) || !s.keys || !s.keys.p256dh || !s.keys.auth)
+    return res.status(400).json({ error: 'that is not a push subscription' });
+  const list = (reminders.subs[member.id] || []).filter((x) => x.endpoint !== s.endpoint);
+  list.push({ endpoint: s.endpoint, keys: { p256dh: String(s.keys.p256dh), auth: String(s.keys.auth) }, at: new Date().toISOString() });
+  reminders.subs[member.id] = list.slice(-10);
+  remindersWrite();
+  res.json({ ok: true, devices: reminders.subs[member.id].length });
+});
+app.post('/api/push/unsubscribe', checkApiKey, (req, res) => {
+  const member = memberOfUser(signedInUser(req));
+  if (!member) return res.status(403).json({ error: 'this account is not linked to a team member' });
+  const endpoint = req.body && req.body.endpoint;
+  reminders.subs[member.id] = (reminders.subs[member.id] || []).filter((x) => endpoint && x.endpoint !== endpoint);
+  remindersWrite();
+  res.json({ ok: true, devices: reminders.subs[member.id].length });
+});
+/* What went out: your own, or everybody's for an administrator. */
+app.get('/api/reminders/log', checkApiKey, (req, res) => {
+  const user = signedInUser(req);
+  const member = memberOfUser(user);
+  const all = user && user.role === 'admin';
+  const rows = reminders.log.filter((r) => all || (member && r.userId === member.id)).slice(-300).reverse();
+  res.json({ rows, devices: member ? (reminders.subs[member.id] || []).length : 0, timezone: BUSINESS_TZ, now: bizNow() });
+});
+/* Attendance as the server sees it today, for the page to check itself against. */
+app.get('/api/attendance/today', checkApiKey, (req, res) => {
+  const member = memberOfUser(signedInUser(req));
+  // An account with no team member behind it has no attendance to answer for.
+  if (!member) return res.json({ member: false });
+  const now = bizNow();
+  const cfg = hrConfigNow();
+  const rec = hrDayRecord(member.id, now.date);
+  const leave = hrApprovedLeave(member.id, now.date);
+  res.json({ userId: member.id, date: now.date, time: now.hhmm, punchedIn: hrEverIn(rec), open: !!hrOpen(rec),
+    leave: leave ? { type: leave.type || '', half: hrLeaveIsHalf(leave, cfg) } : null, closed: hrClosedWhy(now.date, cfg) });
 });
 
 // Serve the CRM itself — one process, one command, no separate static host needed.

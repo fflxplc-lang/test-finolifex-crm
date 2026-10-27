@@ -1458,6 +1458,22 @@ html.dark .cw-match{background:rgba(30,107,133,.15);border-color:rgba(30,107,133
 .hr-nudge-x{background:none;border:0;font-size:19px;line-height:1;color:var(--muted);cursor:pointer;padding:0 2px}
 .hr-nudge-x:hover{color:var(--text)}
 @media (max-width:600px){ .hr-nudge{left:12px;right:12px;max-width:none} }
+.hr-rules-sec{margin-top:14px}
+.hr-rules-h{font-weight:700;font-size:14px;display:flex;gap:8px;align-items:center}
+.hr-rules-list{margin:6px 0 0;padding-left:22px;font-size:13px;line-height:1.55}
+.hr-rules-list li{margin:3px 0}
+/* Reminders that arrived while somebody was working: a stack at the bottom
+   left, so it never sits on top of the punch reminder at the bottom right. */
+.rem-stack{position:fixed;left:18px;bottom:18px;z-index:901;display:flex;flex-direction:column;gap:8px;max-width:360px}
+.rem-card{background:var(--card);border:1px solid var(--line);border-left:3px solid var(--info);
+  border-radius:var(--radius-sm);box-shadow:var(--shadow-lift);padding:12px 14px;font-size:13px}
+.rem-card.missed{border-left-color:var(--warn)}
+.rem-card .rem-meta{color:var(--muted);font-size:12px;margin-top:3px;white-space:pre-line}
+.rem-card .rem-acts{display:flex;gap:6px;flex-wrap:wrap;margin-top:9px}
+@media (max-width:600px){ .rem-stack{left:12px;right:12px;max-width:none;bottom:12px} }
+.kpi-click{cursor:pointer;transition:transform .12s, box-shadow .12s}
+.kpi-click:hover{transform:translateY(-2px);box-shadow:var(--shadow-lift)}
+.kpi-click:focus-visible{outline:2px solid var(--info);outline-offset:2px}
 .hr-times{display:flex;flex-wrap:wrap;gap:10px;margin-top:12px}
 .hr-time{flex:1 1 150px;border:1px solid var(--line);border-radius:var(--radius-sm);padding:9px 12px;
   background:var(--bg)}
@@ -2942,7 +2958,7 @@ async function sset(key, value, shared){
     /* A store the server checks (clients) may refuse a write that breaks
        a rule. That is said out loud: a record that only looks saved is
        worse than one that says it was not. */
-    if(res.status === 422){
+    if(res.status === 422 || (res.status === 409 && key === 'hrAttendance')){
       const r = await res.json().catch(()=>({}));
       alert(r.error || 'The server refused to save this.');
       return false;
@@ -33123,12 +33139,12 @@ async function seedIfEmpty(){
   await healMailSignOffs();
   await healDepartments();
   await healSignatures();
-  /* The counter and the two reminders start with the page, not with a
-     visit to the HR screen: a session left open yesterday has to be
-     reconciled, and somebody who has not punched in has to be asked
-     wherever they happen to be working. */
-  hrActWire();
-  hrNudgeTick();
+  /* The counter and the two reminders start once the page knows who
+     signed in — see the boot sequence, right after bindSignedInMember().
+     Starting them here, as they used to, ran them as whoever was first in
+     the team list (the firm's own Admin account), and that account's empty
+     attendance is what told everybody on every reload that they had not
+     punched in. */
 
   // A system that was reset is meant to be empty: nobody wants Karan Vora back
   // the morning they cleared the decks to go live.
@@ -33766,6 +33782,13 @@ async function boot(){
   await migrateQueryPermissions();
   bindSignedInMember();
   desktopNotifySweep();
+  /* Now that the page is the person who signed in: a session left open
+     yesterday is reconciled, and the punch reminder is worked out from
+     their attendance as the server holds it — not from whatever this tab
+     happened to load first. */
+  hrActWire();
+  hrNudgeVerify().then(()=>hrNudgeTick());
+  pushEnsure().catch(()=>{});
   await loadAccounts();
   await migrateAllocPlans();
   await loadMailChannel();
@@ -40163,6 +40186,7 @@ function viewProfile(){
       <div class="section-title" style="margin-top:0">🔐 Security</div>
       ${twoFactorRowHtml()}
       ${desktopNotifRowHtml(u)}
+      ${u.id === currentUser ? reminderPrefsHtml(u) : ''}
     </div>
     ${signatureEditorHtml(u.id)}
     <div class="card" style="margin-top:14px">
@@ -40371,6 +40395,7 @@ async function toggleDesktopNotifications(){
   const was = !!u.desktopNotifEnabled;
   u.desktopNotifEnabled = turningOn;
   await save('team');
+  try { if(turningOn) await pushSubscribe(); else await pushUnsubscribe(); } catch(e){ console.error('push', e); }
   await logAudit('Team', u.id, 'Security Setting Changed', [{field:'Desktop Notifications',
     oldValue: was ? 'Enabled' : 'Disabled', newValue: turningOn ? 'Enabled' : 'Disabled'}]);
   if(turningOn) desktopNotify('Desktop notifications are on', 'You will be told here about sign-ins and new notifications.', {tag:'boss-notif-on'});
@@ -40392,12 +40417,197 @@ const desktopSeen = {primed:false, ids:new Set()};
 function desktopNotifySweep(){
   if(!currentUser || !Array.isArray(DB.notifications)) return;
   const mine = DB.notifications.filter(n=>n && n.userId === currentUser && !n.readAt && !n.deletedAt);
-  if(!desktopSeen.primed){ mine.forEach(n=>desktopSeen.ids.add(n.id)); desktopSeen.primed = true; return; }
+  if(!desktopSeen.primed){ mine.forEach(n=>desktopSeen.ids.add(n.id)); desktopSeen.primed = true; reminderToastSweep(); return; }
   mine.forEach(n=>{
     if(desktopSeen.ids.has(n.id)) return;
     desktopSeen.ids.add(n.id);
-    desktopNotify(n.title || 'BOSS', n.body || '', {tag: n.id, onclick: ()=>openNotification(n.id)});
+    // The server pushes the same reminder to this device under the same tag,
+    // so the two land as one notification rather than two.
+    desktopNotify(n.title || 'BOSS', n.body || '', {tag: n.tag || n.id, onclick: ()=>openNotification(n.id)});
   });
+  reminderToastSweep();
+}
+
+/* ---------------------------------------------------------------------
+   BROWSER PUSH — reminders that reach a closed tab
+
+   The server sends the 09:15 / 18:00 attendance reminders and the DWT
+   start-time reminders as Web Push messages, which the browser shows even
+   when BOSS is not open (and the browser itself is running). It needs a
+   service worker (/sw.js) and the person's permission on that device; the
+   Desktop Notifications switch on the profile is that permission, and
+   turning it off removes this device's subscription. Without it, the BOSS
+   notification in the bell is still there.
+   --------------------------------------------------------------------- */
+function pushSupported(){
+  return typeof navigator !== 'undefined' && 'serviceWorker' in navigator && typeof window !== 'undefined'
+    && 'PushManager' in window && desktopNotifSupport() !== 'unsupported';
+}
+function pushKeyBytes(b64){
+  const pad = '='.repeat((4 - b64.length % 4) % 4);
+  const raw = atob((b64 + pad).replace(/-/g, '+').replace(/_/g, '/'));
+  return Uint8Array.from(raw, c=>c.charCodeAt(0));
+}
+async function pushRegistration(){
+  if(!pushSupported()) return null;
+  const reg = await navigator.serviceWorker.register('/sw.js');
+  await navigator.serviceWorker.ready;
+  return reg;
+}
+async function pushSubscribe(){
+  const reg = await pushRegistration();
+  if(!reg || desktopNotifSupport() !== 'granted') return {ok:false, why:'not allowed in this browser'};
+  const keyRes = await fetch('/api/push/key', {headers: apiHeaders()});
+  if(!keyRes.ok) return {ok:false, why:'the server has no push key'};
+  const {publicKey} = await keyRes.json();
+  let sub = await reg.pushManager.getSubscription();
+  if(!sub) sub = await reg.pushManager.subscribe({userVisibleOnly: true, applicationServerKey: pushKeyBytes(publicKey)});
+  const res = await fetch('/api/push/subscribe', {method:'POST',
+    headers: Object.assign({'Content-Type':'application/json'}, apiHeaders()), body: JSON.stringify({subscription: sub.toJSON()})});
+  return res.ok ? {ok:true} : {ok:false, why:'the server refused the subscription'};
+}
+async function pushUnsubscribe(){
+  if(!pushSupported()) return;
+  const reg = await navigator.serviceWorker.getRegistration('/sw.js');
+  const sub = reg && await reg.pushManager.getSubscription();
+  if(!sub) return;
+  await fetch('/api/push/unsubscribe', {method:'POST',
+    headers: Object.assign({'Content-Type':'application/json'}, apiHeaders()), body: JSON.stringify({endpoint: sub.endpoint})}).catch(()=>{});
+  await sub.unsubscribe().catch(()=>{});
+}
+/* At every start: a person who has notifications on keeps a live
+   subscription on this device (a browser can drop one at any time). */
+async function pushEnsure(){
+  const u = me();
+  if(!u || !u.desktopNotifEnabled || desktopNotifSupport() !== 'granted') return;
+  await pushSubscribe();
+}
+if(typeof navigator !== 'undefined' && navigator.serviceWorker){
+  // A click on a pushed reminder, in a tab that is already open.
+  navigator.serviceWorker.addEventListener('message', ev=>{
+    const d = ev.data || {};
+    if(d.type !== 'boss-open') return;
+    try { const v = new URL(d.url, location.origin).searchParams.get('view'); if(v) navigate(v); } catch(e){}
+  });
+}
+
+/* ---------------------------------------------------------------------
+   REMINDER CARDS
+
+   A DWT reminder (and the evening punch-out one) arrives as a BOSS
+   notification. While it is unread it sits as a card at the bottom left
+   of whatever screen is open: View Activity opens it, Mark as Started
+   records that it began, Dismiss closes the card and leaves the schedule
+   exactly as it was. One that came while BOSS was closed shows as missed
+   when the person comes back — today's only, and once: dismissing it, or
+   opening it, marks it read.
+   --------------------------------------------------------------------- */
+const REMINDER_KINDS = ['dwt-reminder', 'hr-reminder'];
+function reminderToastSweep(){
+  if(typeof document === 'undefined' || !document.body || !currentUser) return;
+  let el = document.getElementById('remStack');
+  if(!el){ el = document.createElement('div'); el.id = 'remStack'; el.className = 'rem-stack'; document.body.appendChild(el); }
+  const today = hrToday();
+  const mine = (DB.notifications || []).filter(n=>n && n.userId === currentUser && !n.readAt && !n.deletedAt
+    && REMINDER_KINDS.indexOf(n.kind) >= 0 && hrDateKey(n.at) === today)
+    .sort((a, b)=>String(b.at).localeCompare(String(a.at))).slice(0, 4);
+  el.innerHTML = mine.map(n=>{
+    const m = n.meta || {};
+    const missed = Date.now() - new Date(n.at).getTime() > 15 * 60000;
+    const lines = String(n.body || '').split('\n');
+    return `<div class="rem-card${missed ? ' missed' : ''}" data-remid="${esc(n.id)}">
+      <div class="between" style="gap:8px;align-items:flex-start"><b>${esc(n.title || 'Reminder')}</b>
+        ${missed ? '<span class="badge warn">Missed</span>' : ''}</div>
+      <div style="margin-top:3px">${esc(lines[0])}</div>
+      ${lines.length > 1 ? `<div class="rem-meta">${esc(lines.slice(1).join('\n'))}</div>` : ''}
+      <div class="rem-acts">
+        <button class="btn sm primary" onclick="reminderView('${esc(n.id)}')">${n.kind === 'dwt-reminder' ? 'View Activity' : 'Open'}</button>
+        ${n.kind === 'dwt-reminder' && m.id ? `<button class="btn sm" onclick="reminderStarted('${esc(n.id)}')">Mark as Started</button>` : ''}
+        ${m.link ? `<a class="btn sm" href="${esc(/^https?:\/\//i.test(m.link) ? m.link : 'https://' + m.link)}" target="_blank" rel="noopener">Join</a>` : ''}
+        <button class="btn sm ghost" onclick="reminderDismiss('${esc(n.id)}')">Dismiss</button>
+      </div></div>`;
+  }).join('');
+}
+async function reminderMarkRead(n){
+  n.readAt = n.readAt || new Date().toISOString();
+  try { await save('notifications'); } catch(e){}
+  reminderToastSweep();
+}
+async function reminderDismiss(id){
+  const n = (DB.notifications || []).find(x=>x.id === id); if(!n) return;
+  await reminderMarkRead(n);
+}
+/* Opens the activity itself: the week it is in, and the block. */
+async function reminderView(id){
+  const n = (DB.notifications || []).find(x=>x.id === id); if(!n) return;
+  const m = n.meta || {};
+  await reminderMarkRead(n);
+  if(n.kind !== 'dwt-reminder' || !m.id){ if(n.view) navigate(n.view); return; }
+  window._dwt = Object.assign(window._dwt || {}, {weekStart: weekStartOf(m.date || hrToday()), mode: 'planned'});
+  navigate('dwt');
+  const blockId = m.source === 'meeting' ? 'src-mtg-' + m.id : m.source === 'call' ? 'src-call-' + m.id : m.id;
+  setTimeout(()=>{ try { dwtOpenBlock(blockId, m.date || hrToday()); } catch(e){ console.error(e); } }, 60);
+}
+/* "I have started it": recorded on the record the reminder was about, by
+   its owner, without completing it. */
+async function reminderStarted(id){
+  const n = (DB.notifications || []).find(x=>x.id === id); if(!n) return;
+  const m = n.meta || {};
+  const at = new Date().toISOString();
+  if(m.source === 'manual'){
+    const a = (DB.workActivities || []).find(x=>x.id === m.id);
+    if(!a){ alert('That activity no longer exists.'); return reminderMarkRead(n); }
+    if(a.userId !== currentUser && !can('DST', 'edit')){ alert('Only the person it belongs to can start it.'); return; }
+    a.startedOn = Object.assign({}, a.startedOn, {[m.date]: at});
+    if(a.status !== 'Completed'){ a.status = 'In Progress'; a.actualStart = a.actualStart || hrClock(at); }
+    await save('workActivities');
+    await logAudit('DST', a.id, 'DWT: Marked as Started', [{field:'Started', oldValue:'', newValue: fmtDate(m.date) + ' ' + hrClock(at)}]);
+  } else if(m.source === 'meeting' || m.source === 'call'){
+    const list = m.source === 'meeting' ? DB.meetings : DB.callEntries;
+    const rec = (list || []).find(x=>x.id === m.id);
+    if(!rec){ alert('That ' + m.source + ' no longer exists.'); return reminderMarkRead(n); }
+    const owner = m.source === 'meeting' ? (rec.assignTo || rec.createdBy) : (rec.loggedBy || rec.createdBy);
+    if(owner !== currentUser && !can(m.source === 'meeting' ? 'Meetings' : 'Calls', 'edit')){ alert('Only the person it belongs to can start it.'); return; }
+    rec.startedAt = at;
+    await save(m.source === 'meeting' ? 'meetings' : 'callEntries');
+    await logAudit(m.source === 'meeting' ? 'Meetings' : 'Calls', rec.id, 'Marked as Started', [{field:'Started', oldValue:'', newValue: hrClock(at)}]);
+  }
+  await reminderMarkRead(n);
+  render();
+}
+
+/* What a person wants to be reminded about, kept on their team record so it
+   follows them from device to device. The server reads the same record. */
+function reminderPrefsOf(u){
+  const p = Object.assign({activities:true, meetings:true, inApp:true, desktop:true, email:false, advanceMinutes:0}, (u && u.reminderPrefs) || {});
+  p.advanceMinutes = Math.max(0, Math.min(120, Number(p.advanceMinutes) || 0));
+  return p;
+}
+function reminderPrefsHtml(u){
+  const p = reminderPrefsOf(u);
+  const box = (k, label, note) => `<label style="display:flex;gap:8px;align-items:flex-start;font-size:13px;margin:6px 0">
+    <input type="checkbox" class="check" ${p[k] ? 'checked' : ''} onchange="reminderPrefSet('${k}', this.checked)">
+    <span><b>${esc(label)}</b>${note ? `<span class="small-note" style="display:block;margin:1px 0 0">${note}</span>` : ''}</span></label>`;
+  return `<div style="padding:10px 0;border-top:1px solid var(--line)" id="reminderPrefs">
+    <b style="font-size:13px">Schedule reminders (DWT)</b>
+    <div class="small-note" style="margin-top:2px">When something on your Daily Working Tracker reaches its start time, BOSS reminds you.</div>
+    ${box('activities', 'Scheduled activity reminders', 'Planned activities and calls with a start time.')}
+    ${box('meetings', 'Meeting reminders', 'Meetings with a time, with the client, place or link when there is one.')}
+    ${box('inApp', 'In BOSS', 'A card on screen and an entry in the bell.')}
+    ${box('desktop', 'Desktop / browser notification', 'Needs Desktop Notifications enabled above on this device.')}
+    ${box('email', 'Email', 'Needs the firm’s email connector to be set up.')}
+    <div class="field" style="max-width:260px;margin-top:6px"><label>Also remind me before a meeting or activity</label>
+      <select onchange="reminderPrefSet('advanceMinutes', Number(this.value))">
+        ${[0, 5, 10, 15, 30].map(v=>`<option value="${v}" ${p.advanceMinutes === v ? 'selected' : ''}>${v ? v + ' minutes before' : 'No, only at the start time'}</option>`).join('')}
+      </select></div>
+  </div>`;
+}
+async function reminderPrefSet(k, v){
+  const u = me(); if(!u || u.id !== currentUser) return;
+  const before = reminderPrefsOf(u)[k];
+  u.reminderPrefs = Object.assign(reminderPrefsOf(u), {[k]: v});
+  await save('team');
+  await logAudit('Team', u.id, 'Reminder Settings Changed', [{field: k, oldValue: String(before), newValue: String(v)}]);
 }
 function openRaiseQuery(){
   openModal('Raise a Query', `<div class="field"><label>Describe the issue or suggestion</label><textarea id="queryText" placeholder="Found a bug or have a suggestion?"></textarea></div>`,
@@ -47337,6 +47547,7 @@ function viewDWT(){
       <div class="sub" style="color:var(--muted)">${esc(person.name)} — design your week, track actual</div>
       <div class="row">
         <button class="btn sm" onclick="dwtHelp()">? Help</button>
+        <button class="btn sm" onclick="dwtReminderSettings()" title="When and how BOSS reminds you of what is scheduled">🔔 Reminders</button>
         <button class="btn sm ${st.userId===currentUser?'primary':''}" onclick="window._dwt.userId=currentUser; render()">My week</button>
         <button class="btn sm" onclick="window._dwt.panel='availability'; render()">Team availability</button>
         <div class="dwt-pager">
@@ -47422,6 +47633,18 @@ function dwtShade(hex){
   return '#' + [f(n>>16 & 255), f(n>>8 & 255), f(n & 255)].map(c=>c.toString(16).padStart(2,'0')).join('');
 }
 function dwtShiftWeek(n){ window._dwt.weekStart = addInterval(window._dwt.weekStart, n*7, 'Days'); render(); }
+/* The same reminder settings as the profile, one click from the planner. */
+function dwtReminderSettings(){
+  const u = me(); if(!u) return;
+  openModal('Schedule reminders', `
+    <div class="small-note" style="margin-top:0">When a meeting, call or planned activity with a start time reaches it,
+      BOSS reminds you — on screen, in the bell, as a browser notification and by email, as you choose below. The server
+      sends them, so they arrive even when this page is closed (browser notifications need the browser running and
+      Desktop Notifications enabled on this device). Moving or cancelling the activity moves or cancels its reminder.</div>
+    ${desktopNotifRowHtml(u)}
+    ${reminderPrefsHtml(u)}
+  `, `<button class="btn primary" onclick="closeModal()">Done</button>`);
+}
 function dwtHelp(){
   const g = dwtGridConfig();
   openModal('About DWT', `
@@ -78120,6 +78343,15 @@ function hrPunchRules(rec, now){
   const date = hrDateKey(now), at = hrHHMM(now), w = hrPunchWindow();
   const closed = hrClosedDayWhy(date);
   if(closed) return {inOk:false, outOk:false, inWhy:closed, outWhy:closed};
+  /* An approved full-day leave shuts the punch clock for that date. A
+     session already open when the leave was approved can still be closed,
+     so nobody is left punched in all night by a decision made after they
+     arrived. A half-day leave leaves the clock open for the other half. */
+  const leave = hrLeaveOn((rec && rec.userId) || currentUser, date);
+  if(leave && (leave.unit || hrLeaveTypeUnit(leave.type)) !== 'half'){
+    const why = 'You are on approved leave today' + (leave.type ? ' (' + leave.type + ')' : '') + '.';
+    return {inOk:false, outOk: !!hrOpenSession(rec), inWhy: why, outWhy: hrOpenSession(rec) ? '' : why};
+  }
   const first = hrFirstIn(rec);
   const r = {inOk:true, outOk:true, inWhy:'', outWhy:''};
   if(first){ r.inOk = false; r.inWhy = 'You punched in at ' + hrClock(first) + ' today. Punch In works once a day.'; }
@@ -78236,7 +78468,14 @@ function hrLocationBlocks(fix){
    punch reads itself back off the server, and says so if it is not
    there. It costs one GET, twice a day.  */
 async function hrSaveAttendance(recId, sessions, outAt){
-  await save('hrAttendance');
+  const wrote = await save('hrAttendance');
+  if(wrote === false){
+    /* Refused, and the reason has been said. Put back what the server holds,
+       so the screen does not show a punch that did not happen. */
+    DB.hrAttendance = (await sget('hrAttendance', [])) || [];
+    render();
+    return false;
+  }
   const back = (await sget('hrAttendance', [])) || [];
   const row = back.find(r=>r && r.id === recId);
   const landed = row && (row.sessions || []).length >= sessions
@@ -78564,7 +78803,50 @@ function hrLiveTick(){
    weekly off and a holiday all silence both reminders, read from the
    same configuration the rest of attendance reads.
    ===================================================================== */
-let hrNudgeState = {shownAt: {}, snoozedTo: {}, node: null};
+let hrNudgeState = {shownAt: {}, snoozedTo: {}, node: null, verified: '', error: '', checking: false};
+
+/* THE PUNCH-IN REMINDER ASKS THE SERVER FIRST.
+
+   The record this tab holds can be stale (opened yesterday, a punch made
+   on the phone a minute ago, a read that failed on the way in). So before
+   the first reminder of the day, and on Retry, the page asks the server
+   what it holds for the signed-in person today and re-reads attendance
+   if the two disagree. Until that answer is in, no reminder is shown;
+   if the server cannot be reached, the card says so and offers Retry
+   rather than claiming there is no punch in. */
+async function hrNudgeVerify(){
+  if(hrNudgeState.checking) return;
+  hrNudgeState.checking = true;
+  try {
+    const res = await fetch('/api/attendance/today', {headers: apiHeaders()});
+    /* An account not linked to a team member works as the firm's first
+       account (see me()); the server has no member to answer for, so the
+       page's own freshly loaded record is what there is. */
+    if(!res.ok) throw new Error('attendance check failed: ' + res.status);
+    const t = await res.json();
+    if(t.member === false){ hrNudgeState.verified = hrToday(); hrNudgeState.error = ''; return; }
+    const mine = hrAttendanceOf(currentUser, t.date);
+    if(t.userId === currentUser && (!!hrFirstIn(mine) !== !!t.punchedIn || !!hrOpenSession(mine) !== !!t.open)){
+      const fresh = await fetch('/api/storage/hrAttendance', {headers: apiHeaders()});
+      if(!fresh.ok) throw new Error('attendance read failed: ' + fresh.status);
+      const r = await fresh.json();
+      DB.hrAttendance = JSON.parse(r.value);
+      const leave = await fetch('/api/storage/hrLeave', {headers: apiHeaders()});
+      if(leave.ok){ const l = await leave.json(); DB.hrLeave = JSON.parse(l.value); }
+    }
+    hrNudgeState.verified = t.userId === currentUser ? t.date : '';
+    hrNudgeState.error = '';
+  } catch(e){
+    console.error('attendance check', e);
+    hrNudgeState.error = 'BOSS could not check your attendance with the server just now.';
+  } finally { hrNudgeState.checking = false; }
+}
+async function hrNudgeRetry(){
+  const el = hrNudgeNode(); el.innerHTML = ''; el.classList.remove('on');
+  hrNudgeState.shownAt = {};
+  await hrNudgeVerify();
+  hrNudgeTick();
+}
 
 function hrNudgeCfg(){
   const r = hrCfg().reminders || {};
@@ -78586,7 +78868,15 @@ function hrNudgeDue(){
   if(!cfg.enabled) return null;
   const u = me();
   if(!u || !hrModuleOpen('hrattendance')) return null;
+  if(u.id !== currentUser) return null;
   const today = hrToday();
+  if(hrNudgeState.error) return {key:'err', title:'Attendance could not be checked',
+    body: hrNudgeState.error + ' Your punch is not affected.', action:'hrNudgeRetry()', label:'↻ Retry'};
+  /* Not until the server has answered for today. */
+  if(hrNudgeState.verified !== today){
+    if(!hrNudgeState.checking) hrNudgeVerify().then(()=>hrNudgeTick());
+    return null;
+  }
   /* A day somebody is not working is not a day to nag them. */
   if(hrLeaveOn(u.id, today)) return null;
   if(hrIsWeeklyOff(today) || hrHolidayOn(today) || hrIsSunday(today)) return null;
@@ -78643,9 +78933,9 @@ function hrNudgeTick(){
         <button class="hr-nudge-x" title="Remind me again later"
           onclick="hrNudgeSnooze('${esc(due.key)}')">&times;</button>
       </div>
-      <div class="small-note" style="margin:4px 0 10px">${esc(due.body)}
+      <div class="small-note" style="margin:4px 0 10px">${esc(due.body)}${due.key === 'err' ? '' : `
         BOSS will ask again in ${Math.round(cfg.repeatMs / 60000)} minutes until it is done, and will never
-        do it for you.</div>
+        do it for you.`}</div>
       <div class="row" style="gap:8px">
         <button class="btn sm primary" onclick="${due.action}">${due.label}</button>
         <button class="btn sm ghost" onclick="hrNudgeSnooze('${esc(due.key)}')">Not now</button>
@@ -78942,7 +79232,10 @@ function viewHrAttendance(){
   return `
     <div class="between" style="margin-bottom:10px">
       <div><div class="section-title" style="margin:0">⏱ Attendance Management</div></div>
-      ${hrSetupLinkHtml()}
+      <div class="row" style="gap:8px">
+        <button class="btn" onclick="hrRulesPanel()">📋 Daily Attendance Rules &amp; Regulations</button>
+        ${hrSetupLinkHtml()}
+      </div>
     </div>
     <div class="card">
       <div class="between" style="align-items:center">
@@ -78980,6 +79273,73 @@ function viewHrAttendance(){
     ${hrLeaveCardHtml(u.id)}
     ${hrLeaveInboxHtml()}
     ${hrIsStaff()? hrTeamAttendanceHtml() : ''}`;
+}
+
+/* DAILY ATTENDANCE RULES & REGULATIONS.
+
+   The rules as the punch clock actually applies them, read from the same
+   configuration it runs on, so this page cannot say 08:45 while the clock
+   opens at 09:00. */
+function hrRulesPanel(){
+  const w = hrPunchWindow();
+  const cfg = hrCfg();
+  const hours = hrFullDayMinutes() / 60;
+  const rem = hrNudgeCfg();
+  const off = cfg.weeklyOff.length ? cfg.weeklyOff.join(', ') : '';
+  const holidays = cfg.holidays.filter(h=>h && h.date >= hrToday()).slice(0, 6);
+  const sec = (icon, title, items) => `<div class="hr-rules-sec">
+    <div class="hr-rules-h"><span aria-hidden="true">${icon}</span> ${esc(title)}</div>
+    <ol class="hr-rules-list">${items.map(i=>`<li>${i}</li>`).join('')}</ol></div>`;
+  openModal('Daily Attendance Rules &amp; Regulations', `
+    <div class="small-note" style="margin-top:0">These are the rules the punch clock in BOSS enforces today. The
+      server checks them too, so a punch outside them is refused wherever it comes from.</div>
+    ${sec('⏰', 'Punch-in', [
+      `Punch-in opens at <b>${esc(w.from)}</b>. You cannot punch in before ${esc(w.from)}.`,
+      `Punch in once a day, from ${esc(w.from)} onward, under the firm’s attendance policy.`,
+      `If you arrive late or cannot punch in, tell your reporting manager and raise an attendance regularization.`,
+      `If you have not punched in by <b>${esc(rem.inAfter)}</b>, BOSS reminds you on screen; at <b>${esc(hrServerReminderAt('inEmailAt', '09:15'))}</b> it also sends an email and a browser notification.`])}
+    ${sec('🚪', 'Punch-out', [
+      `Punch out before <b>${esc(w.until)}</b>. After ${esc(w.until)} the punch clock is closed for the day.`,
+      `You can punch out more than once; the latest punch out is the one that counts.`,
+      `At <b>${esc(hrServerReminderAt('outNotifyAt', '18:00'))}</b> BOSS reminds you in BOSS and by browser notification if you are still punched in, and at <b>${esc(hrServerReminderAt('outEmailAt', '19:00'))}</b> by email.`,
+      `If you missed your punch out or BOSS had a problem, tell your reporting manager and raise a regularization for that date.`])}
+    ${sec('🕘', 'Daily working hours', [
+      `A full attendance day is <b>${esc(String(hours))} hours</b> of eligible working time.`,
+      `Working time is counted from your actual punch in to your latest punch out, inside the punch clock’s hours (${esc(w.from)}–${esc(w.until)}), plus any time HR approves through a regularization.`,
+      `Less than ${esc(String(hours))} hours counts in proportion — for example 4½ hours is 50% of a day — not as a full day.`,
+      `A day with a punch in and no punch out shows <b>In Progress</b> today and <b>Punch-Out Missing</b> afterwards, and is not counted as a completed day until it is regularized.`,
+      `Your working hours for each date are in <b>My Attendance History</b>.`])}
+    ${sec('📝', 'Late attendance and regularization', [
+      `Contact your reporting manager.`,
+      `Open Attendance Management and click the date in My Attendance History.`,
+      `Choose <b>Regularize Attendance</b>, enter the correct times and a clear reason.`,
+      `Track the request under your regularization requests until it is approved or declined.`,
+      `Once approved, the time is added to that day’s record; your original punches are kept beside it.`])}
+    ${sec('🌴', 'Leave, Sundays and holidays', [
+      `On a date with <b>approved full-day leave</b> (including Comp Off) Punch In and Punch Out are closed. A half-day leave leaves the punch clock open for the half you work.`,
+      `Approved leave counts towards your days: a full-day type as one day, a half-day type as half a day.`,
+      `There is no punch clock on <b>Sundays</b>${off ? ', on the weekly off (' + esc(off) + ')' : ''} or on the firm’s holidays, and no reminders are sent on those days.`,
+      holidays.length ? `Coming holidays: ${holidays.map(h=>esc(fmtDate(h.date)) + (h.name ? ' — ' + esc(h.name) : '')).join('; ')}.` : `No holidays are listed yet. HR adds them in HR Setup.`])}
+  `, `<button class="btn primary" onclick="closeModal()">Close</button>`);
+}
+async function hrReminderLogLoad(){
+  const box = document.getElementById('hrReminderLog'); if(!box) return;
+  box.innerHTML = '<div class="small-note">Loading…</div>';
+  try {
+    const res = await fetch('/api/reminders/log', {headers: apiHeaders()});
+    if(!res.ok) throw new Error(res.status);
+    const r = await res.json();
+    box.innerHTML = r.rows.length ? `<div class="small-note" style="margin:0 0 6px">The last ${r.rows.length} sent, on the firm’s clock (${esc(r.timezone)}).</div>
+      <div class="table-wrap"><table><thead><tr><th>When</th><th>Who</th><th>Reminder</th><th>By</th><th>Result</th></tr></thead><tbody>
+      ${r.rows.slice(0, 100).map(x=>`<tr><td>${esc(fmtDate(x.at))} ${hrClock(x.at)}</td><td>${esc(teamName(x.userId))}</td>
+        <td>${esc(x.kind)}</td><td>${esc(x.channel)}</td>
+        <td>${x.ok ? '<span class="badge ok">sent</span>' : `<span class="badge warn" title="${esc(x.message || '')}">not sent</span> <span class="small-note" style="margin:0">${esc(x.message || '')}</span>`}</td></tr>`).join('')}
+      </tbody></table></div>` : '<div class="small-note">Nothing has been sent yet.</div>';
+  } catch(e){ box.innerHTML = '<div class="small-note">The list could not be read just now.</div>'; }
+}
+function hrServerReminderAt(k, d){
+  const v = (hrCfg().reminders || {})[k];
+  return /^\d{1,2}:\d{2}$/.test(String(v || '')) ? String(v) : d;
 }
 
 /* MY ATTENDANCE HISTORY — filters, totals and the detail behind them.
@@ -79202,7 +79562,9 @@ function hrAttHistoryHtml(){
           <td><span class="badge ${d.tone}">${esc(d.chip)}</span></td>
           <td>${hrAhTimeCell(hrFirstIn(d.rec), first.inLoc, s.user)}</td>
           <td>${hrAhTimeCell(hrLastOut(d.rec), last.outLoc, s.user)}</td>
-          <td>${hrDuration(hrEligibleMinutes(s.user, d.date, d.rec))}</td>
+          <td>${hrOpenSession(d.rec)
+            ? (d.date === hrToday() ? '<span class="badge info">In Progress</span>' : '<span class="badge warn">Punch-Out Missing</span>')
+            : hrDuration(hrEligibleMinutes(s.user, d.date, d.rec))}</td>
           <td>${hrClosedDayWhy(d.date) ? '—' : hrDayPct(s.user, d.date, d.rec) + '%'}</td>
           <td>${esc(d.remarks || '—')}</td>
           ${mine ? '<td class="ah-go">›</td>' : ''}
@@ -80203,6 +80565,23 @@ function renderSettingsHr(){
       <div class="small-note">The reminder keeps coming back at that interval until the punch is made, and stops
         the moment it is. It shows wherever somebody is working, not only on the HR screen. Nobody is asked on an
         approved leave, a weekly off or a holiday, and BOSS never punches on anybody’s behalf.</div>
+      <div class="section-title" style="margin-top:14px">Sent by the server</div>
+      <div class="field-grid">
+        <div class="field"><label>Not punched in: email + browser notification at</label>
+          <input type="time" value="${esc(hrServerReminderAt('inEmailAt', '09:15'))}"
+            onchange="hrSetReminder('inEmailAt', this.value)"></div>
+        <div class="field"><label>Still punched in: BOSS + browser notification at</label>
+          <input type="time" value="${esc(hrServerReminderAt('outNotifyAt', '18:00'))}"
+            onchange="hrSetReminder('outNotifyAt', this.value)"></div>
+        <div class="field"><label>Still punched in: email at</label>
+          <input type="time" value="${esc(hrServerReminderAt('outEmailAt', '19:00'))}"
+            onchange="hrSetReminder('outEmailAt', this.value)"></div>
+      </div>
+      <div class="small-note">These go out from the server whether or not anybody has BOSS open, once a day each,
+        on the firm’s clock. Each one checks the attendance record again just before it is sent, so somebody who
+        punched in or out in the meantime is not reminded. Email needs the email connector; a browser notification
+        needs the person to have enabled Desktop Notifications on that device.</div>
+      <div id="hrReminderLog" style="margin-top:10px"><button class="btn sm" onclick="hrReminderLogLoad()">Show what was sent</button></div>
     </div>
 
     <div class="card" style="margin-top:14px">
@@ -80833,7 +81212,8 @@ function incTaskPoints(userId, month){
   const seen = new Set();
   const rows = (cfg.tasks || []).filter(tk=>incTaskApplies(tk, user)).map(tk=>{
     const all = incSourceRecords(tk.source, userId, month)
-      .filter(r=>!tk.matchField || incKey(r[tk.matchField]) === incKey(tk.matchValue));
+      .filter(r=>!tk.matchField || String(tk.matchValue == null ? '' : tk.matchValue).trim() === ''
+        || incKey(r[tk.matchField]) === incKey(tk.matchValue));
     const fresh = all.filter(r=>!seen.has(r.id));
     const already = all.length - fresh.length;
     fresh.forEach(r=>seen.add(r.id));
@@ -80905,6 +81285,17 @@ function incPrefillCounts(sheet){
 /* What a sheet is worth right now, or what it was worth when it was
    signed off. One function, so nothing on any screen can read the
    other one by accident. */
+/* Which method a sheet is worked out by. A finalised month keeps the
+   method it was signed off on; a draft follows the person as they are
+   now. A draft opened while somebody was non-sales and then moved onto
+   the grid used to keep its old method, and the screen — which drew the
+   person's new method — fell over trying to read grid figures off a
+   task-bank result, leaving the page blank. */
+function incSheetKind(sheet){
+  if(!sheet) return 'nonSales';
+  if(sheet.status === 'Finalised') return sheet.kind === 'sales' ? 'sales' : 'nonSales';
+  return incCategoryOf(sheet.userId);
+}
 function incResultOf(sheet){
   if(!sheet) return null;
   if(sheet.status === 'Finalised' && sheet.snapshot) return sheet.snapshot;
@@ -80912,7 +81303,7 @@ function incResultOf(sheet){
      two are not interchangeable: running the sales grid over a
      non-sales sheet gives a confident zero, which is the worst answer
      of the three. */
-  if(sheet.kind !== 'sales'){
+  if(incSheetKind(sheet) !== 'sales'){
     const pts = incTaskPoints(sheet.userId, sheet.month);
     return {taskPoints: pts, total: pts.payable === null ? 0 : pts.payable,
             payable: pts.payable, streams: [], problems: []};
@@ -81011,6 +81402,7 @@ async function incFinalise(sheetId){
   if(!sheet) return;
   if(!incMayAdminister()){ alert('Only HR may finalise an incentive.'); return; }
   if(sheet.status === 'Finalised'){ alert('It is already finalised.'); return; }
+  sheet.kind = incSheetKind(sheet);   // signed off on the method the person is on now
   const result = sheet.kind === 'sales' ? incCalculate(sheet) : null;
   const pts = sheet.kind === 'sales' ? null : incTaskPoints(sheet.userId, sheet.month);
   if(sheet.kind !== 'sales' && (!pts || pts.rate === null)){
@@ -81249,7 +81641,7 @@ function incTaskHtml(sheet, userId, month){
       ${pts.rows.map(r=>`<tr>
         <td><b>${esc(r.task.name || '(unnamed)')}</b>${r.task.description
           ? `<div class="small-note" style="margin:0">${esc(r.task.description)}</div>` : ''}</td>
-        <td>${esc(incTaskSourceLabel(r.task.source))}${r.task.matchField
+        <td>${esc(incTaskSourceLabel(r.task.source))}${r.task.matchField && String(r.task.matchValue || '').trim()
           ? `<div class="small-note" style="margin:0">where ${esc(r.task.matchField)} is
              “${esc(r.task.matchValue)}”</div>` : ''}</td>
         <td class="se-r">${r.found}${r.already
@@ -81309,8 +81701,8 @@ function viewHrIncentive(){
   const month = incMonth();
   const who = incWho();
   const u = (DB.team || []).find(t=>t.id === who) || {};
-  const cat = incCategoryOf(u);
   const sheet = incSheetFor(who, month);
+  const cat = sheet ? incSheetKind(sheet) : incCategoryOf(u);
   const result = sheet && cat === 'sales' ? incResultOf(sheet) : null;
   const may = sheet ? !incGuardEdit(sheet) : false;
   const months = [];

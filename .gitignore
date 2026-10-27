@@ -13,3 +13,6 @@ users.db-shm
 aadhaar-vault.json
 aadhaar-vault.json.tmp
 aadhaar-vault.key
+reminders.json
+reminders.json.tmp
+push-vapid.json
