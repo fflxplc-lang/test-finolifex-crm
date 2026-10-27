@@ -1471,6 +1471,15 @@ html.dark .cw-match{background:rgba(30,107,133,.15);border-color:rgba(30,107,133
 .rem-card .rem-meta{color:var(--muted);font-size:12px;margin-top:3px;white-space:pre-line}
 .rem-card .rem-acts{display:flex;gap:6px;flex-wrap:wrap;margin-top:9px}
 @media (max-width:600px){ .rem-stack{left:12px;right:12px;max-width:none;bottom:12px} }
+.bp-how-sec{margin:0 0 14px}
+.bp-how-sec h4{margin:0 0 6px;font-size:14px}
+.bp-how-sec p{margin:0;line-height:1.5}
+.bp-how-ol{margin:0;padding-left:20px;line-height:1.5}
+.bp-how-ol li{margin:2px 0}
+.bp-how-tbl{width:100%;border-collapse:collapse}
+.bp-how-tbl td{padding:5px 6px;vertical-align:top;border-bottom:1px solid var(--line,#e5e7eb)}
+.bp-how-tbl td:first-child{white-space:nowrap;width:1%}
+@media (max-width:600px){.bp-how-tbl td:first-child{white-space:normal}}
 .kpi-click{cursor:pointer;transition:transform .12s, box-shadow .12s}
 .kpi-click:hover{transform:translateY(-2px);box-shadow:var(--shadow-lift)}
 .kpi-click:focus-visible{outline:2px solid var(--info);outline-offset:2px}
@@ -30200,7 +30209,7 @@ function viewBlueprintList(m){
       title: m.label,
       subtitle: `${all.length} ${all.length===1?'record':'records'} on this blueprint · ${n(r=>r.p.prepared)} with a plan prepared`,
       actions: [
-        {label:'How this blueprint is worked', icon:'ℹ', onclick:`alert(${JSON.stringify(blueprintHowText(m))})`},
+        {label:'How this blueprint is worked', icon:'ℹ', onclick:`openBlueprintHow('${esc(m.type)}')`},
       ]})}
     <div class="small-note" style="margin:0 0 10px">${esc(m.def.blurb||'')}
       ${m.adapter? 'Its form, its calculations and its pages are its own — nothing here is shared with another blueprint.'
@@ -30240,14 +30249,87 @@ function viewBlueprintList(m){
       </table>
     </div>`;
 }
-function blueprintHowText(m){
+/* "HOW THIS BLUEPRINT IS WORKED" — one explanation per blueprint.
+   The shared journey (form, plan, senior, client, conversion) is the same
+   LMS spine for all four; what differs is the input form, the working and
+   the pages the plan is presented on, so those parts come from each
+   blueprint's own definition: its steps from its adapter, the 7 Events
+   names from SE_EVENT_BOXES. Nothing here is typed twice. */
+const BLUEPRINT_HOW = {
+  MULTIGOAL: {
+    purpose: 'Plans several goals at once (a house, a child’s education, a car, retirement) plus financial freedom. Each goal is costed at what it will cost in its own year and worked back to the lumpsum or monthly SIP that pays for it.',
+    form: ['Section A — personal details, filled by the firm.',
+           'Goals, needs and dreams — up to 8 goals, each with the number of years and today’s value. Inflation % and expected return % per goal are RM-only; left blank, the firm’s assumptions are used.',
+           'Section A2 — cashflow, captured for the record (not used in the arithmetic).'],
+    processing: ['Every goal is inflated to its future cost in its own year.',
+                 'Existing provision is set against it, and the gap is turned into a required SIP and a one-time investment.',
+                 'The RM prepares the plan from the record’s "Prepare Plan" stage — this blueprint has no separate workbook.'],
+    output: 'A goal-by-goal plan: future cost, gap, and the monthly and one-time investment each goal needs, with an allocation of what the client can invest.',
+  },
+  FSL: {
+    purpose: 'The Financial Success Ladder places the family on one of six levels of wealth and shows what reaching the level they choose would take.',
+    form: ['The client answers the client sections of the FSL input form on their link (or the RM fills it in with them).',
+           'Questions and rates come from Setup → FSL.'],
+    processing: ['RM Working — the RM checks the answers and completes the firm-only figures.',
+                 'The ladder is worked out from the family’s own figures: where they stand today and the gap to the chosen level.'],
+    output: 'The Success Ladder page and the Required Execution Plan that gets the family to the chosen level.',
+  },
+  SEVENEVENTS: {
+    purpose: 'The Comprehensive Freedom Blueprint works through the firm’s seven life events from the family’s own figures, so every risk and every goal has a number against it.',
+    form: ['The client fills the 7 Events input form on their link (or the RM fills it in with them).',
+           'Questions, rates and health benchmarks come from Setup → 7 Events.'],
+    processing: ['Asset Mapping — the RM maps each existing asset and cover to the event it stands behind, and confirms the mapping. The plan is prepared only after the mapping is confirmed.',
+                 'Each event is worked out: what is required, what is already provided, the gap, and the monthly or one-time investment (or cover) that closes it.'],
+    output: 'The Goal Blueprint and Freedom Blueprint pages, then the Required Execution Plan and, once agreed, the Final Execution Plan.',
+    events: true,
+  },
+  GAB: {
+    purpose: 'The Golden Age Blueprint plans retirement income, bucketed by when each part of it will be needed.',
+    form: ['The client fills the Golden Age input form on their link (or the RM fills it in with them).'],
+    processing: ['RM Working — the RM checks the answers and completes the firm-only figures.',
+                 'Retirement expenses are projected and split into buckets by when they fall due; each bucket gets the corpus and investment it needs.'],
+    output: 'The Golden Age Blueprint page, the Required Execution Plan and the Final Execution Plan. The Formula Audit page shows every figure’s working.',
+  },
+};
+function openBlueprintHow(type){
+  const m = blueprintModuleFor(blueprintModuleView(type));
+  const H = BLUEPRINT_HOW[type];
+  if(!m || !H) return;
   const steps = m.adapter && m.adapter.steps ? m.adapter.steps() : null;
-  return m.label + '\n\n' + (m.def.blurb||'') + '\n\n'
-    + (steps ? 'Worked through in order:\n\n' + steps.map((s,i)=>(i+1)+'. '+s[1]).join('\n')
-             : 'Worked through its own input form, then the plan its engine produces.')
-    + '\n\nIts methodology, its formulas and its pages are its own. Nothing is shared with the other blueprints, '
-    + 'and nothing on this screen is a second copy of a record — it is the lead or client that already holds the plan, '
-    + 'seen from the blueprint’s side.';
+  const ol = items => `<ol class="bp-how-ol">${items.map(x=>`<li>${x}</li>`).join('')}</ol>`;
+  const ul = items => `<ul class="bp-how-ol">${items.map(x=>`<li>${x}</li>`).join('')}</ul>`;
+  const sec = (title, inner) => `<section class="bp-how-sec"><h4>${title}</h4>${inner}</section>`;
+  const events = H.events && typeof SE_EVENT_BOXES !== 'undefined'
+    ? `<div class="small-note" style="margin:8px 0 4px">The seven events:</div>${ol(SE_EVENT_BOXES.map(b=>esc(String(b.title||'').replace(/^Event\s*\d+\s*·\s*/,''))))}` : '';
+  const statuses = [
+    ['Form outstanding', 'The input form has been sent but the client has not submitted it yet.'],
+    ['Form in, plan to prepare', 'The form is back; the RM now prepares the plan.'],
+    ['Plan prepared', 'A plan version exists but has not been sent to the senior.'],
+    ['With the senior', 'Sent for approval to the RM’s reporting manager (or an admin).'],
+    ['Approved by the senior', 'The senior approved it; it can be presented to the client.'],
+    ['Client asked for changes', 'The client chose Modify on their link; the RM reworks the plan as a new version.'],
+    ['Client approved', 'The client approved the plan; execution and onboarding follow.'],
+  ];
+  const body = `<div class="bp-how">
+    ${sec('1. Purpose', `<p>${esc(H.purpose)}</p>`)}
+    ${sec('2. Entry point', `<p>A lead joins this blueprint when its <b>Investment Approach</b> stage picks <b>${esc(m.label)}</b>. Converted clients keep their plan and stay listed here.</p>`)}
+    ${sec('3. Input form', ul(H.form.map(esc).concat(['The RM sends the form from the "Data Gathering Form &amp; ISEQ Sent" stage. When the client submits it, the lead moves on by itself. A Data Gathering Meeting can be held, or marked Not Required.'])) + events)}
+    ${sec('4. Processing', ol(H.processing.map(esc)) + (steps ? `<div class="small-note" style="margin:8px 0 4px">Its pages, worked in this order:</div>${ol(steps.map(s=>esc(s[1])))}` : ''))}
+    ${sec('5. Plan / output', `<p>${esc(H.output)}</p>`)}
+    ${sec('6. Review and approval', ol(['The RM sends the prepared plan for senior approval (stage "Plan — Pending Senior Approval").',
+        'The RM’s reporting manager, or an admin, approves it ("Plan Approved by Senior") or declines it ("Approval Declined — Rework Plan"), which sends it back to the RM.',
+        'Every change after approval is a new plan version, so the approved version is never overwritten.']))}
+    ${sec('7. Client communication', ol(['The Blueprint Presentation Meeting is scheduled and held with the client.',
+        'Minutes of Meeting are sent, and the updated blueprint goes to the client’s link ("Updated Blueprint Sent — Awaiting the Client").',
+        'The client chooses Approve or Modify on that link.']))}
+    ${sec('8. RM responsibilities', ul(['Send the input form and follow up until it is back.',
+        'Complete the RM-only figures' + (type==='SEVENEVENTS' ? ', confirm the asset mapping' : '') + ' and prepare the plan.',
+        'Send it to the senior and rework it if declined or if the client asks for changes.',
+        'Hold the meetings, send the minutes and the updated blueprint, and move the lead on to onboarding.']))}
+    ${sec('9. Statuses', `<table class="bp-how-tbl"><tbody>${statuses.map(([k,v])=>`<tr><td>${blueprintWhereBadge(k)}</td><td>${esc(v)}</td></tr>`).join('')}</tbody></table>`)}
+    ${sec('10. Completion', `<p>After the client approves, the DBT is updated from the approved plan, onboarding is explained and the CIF sent, the client category is added, and the lead is <b>Converted to Client</b>. The plan travels with the client and stays on this list.</p>`)}
+  </div>`;
+  openModal(`How ${esc(m.label)} is worked`, body, `<button class="btn" onclick="closeModal()">Close</button>`, {wide:true});
 }
 
 /* ---- one record's whole journey on its blueprint ----
@@ -42935,6 +43017,39 @@ function daysToCompleteDisplay(t){
   const days = Math.max(0, Math.round((new Date(t.completedAt) - new Date(t.createdAt)) / 86400000));
   return days + (days===1?' day':' days');
 }
+/* A DUE DATE BEFORE THE DAY THE WORK WAS GIVEN IS NOT A DUE DATE.
+
+   Checked as soon as either date is picked, again when the task is saved,
+   and once more by the server (see tasksGuard in server.js). The calendar
+   itself greys out the days before the Assigned Date. The same day is
+   allowed: a lot of service work is given and done on the same day. */
+const DST_DUE_MSG = 'Due Date cannot be earlier than Assigned Date. Please select a valid Due Date.';
+function dstDueProblem(assigned, due){
+  return assigned && due && String(due) < String(assigned) ? DST_DUE_MSG : '';
+}
+function dstDateCheck(){
+  const a = document.getElementById('f_assignedDate'), d = document.getElementById('f_dueDate');
+  if(!a || !d) return '';
+  d.min = a.value || DATE_BOUND_MIN;
+  const msg = dstDueProblem(a.value, d.value);
+  showFieldError(d, msg);
+  return msg;
+}
+if(typeof document !== 'undefined'){
+  /* After the general date-box check, which clears a field's note once
+     its year is in range and would otherwise wipe this one out. */
+  ['change', 'input', 'blur'].forEach(ev=>document.addEventListener(ev, e=>{
+    const id = e.target && e.target.id;
+    if(id === 'f_assignedDate' || id === 'f_dueDate') setTimeout(dstDateCheck, 0);
+  }, true));
+  // The calendar opens on focus: grey out the days before the Assigned Date by then.
+  document.addEventListener('focusin', e=>{
+    if(e.target && e.target.id === 'f_dueDate'){
+      const a = document.getElementById('f_assignedDate');
+      if(a) e.target.min = a.value || DATE_BOUND_MIN;
+    }
+  }, true);
+}
 function syncPendingSubTasksFromDOM(){
   window._pendingSubTasks.forEach((row,i)=>{
     const d=document.getElementById('pend_date_'+i), de=document.getElementById('pend_desc_'+i), st=document.getElementById('pend_status_'+i);
@@ -42981,6 +43096,7 @@ async function saveTaskForm(arg, andNew){
   const fields = DST_FIELDS.filter(f=>['assignTo','assignedDate','dueDate','leadId','clientId','taskType','description','taskFrequency','urgencyLevel','overallStatus'].includes(f.k));
   const data = readFields(fields);
   if(!validateRequired(fields, data)) return;
+  if(dstDateCheck() || dstDueProblem(data.assignedDate, data.dueDate)){ alert(DST_DUE_MSG); return; }
   if(isEdit){
     const idx = DB.tasks.findIndex(t=>t.id===id);
     const before = Object.assign({}, DB.tasks[idx]);
@@ -43026,6 +43142,88 @@ async function saveTaskForm(arg, andNew){
 function subTasksOf(parentId){
   if(!parentId) return [];
   return DB.tasks.filter(s=>s && s.parentTaskId===parentId && !s.deletedAt);
+}
+/* LIVE TASK DEPENDENCY.
+
+   A workflow's steps are its sub-tasks, in the order they were laid down
+   (the Task Bank lays them down in the order its workbook gives). The Task
+   Bank says what each step needs before it ("Client Request / Previous Step
+   Done") and what it produces ("Purchase - Check the Details Done"). From
+   those and the records as they stand right now, each step reads as:
+
+     Completed    — its own status is Completed
+     Blocked      — the step it depends on is not finished yet
+     In Progress  — its own status says so
+     Pending      — ready to be worked, not started
+
+   Nothing here is stored: it is worked out from the task records every time
+   the page draws, so completing a step updates the next one at once, on
+   every screen that has the task open. */
+function dstBankEntryFor(task){
+  const name = String((task && (task.description || task.taskType)) || '').trim();
+  const bank = DB.config.taskBank || [];
+  return bank.find(b=>b && b.bankType === 'T' && b.taskType === name)
+    || bank.find(b=>b && b.taskType === name) || null;
+}
+function dstStepsOf(parentId){
+  return subTasksOf(parentId).map((s, i)=>({s, i}))
+    .sort((a, b)=>String(a.s.createdAt || '').localeCompare(String(b.s.createdAt || '')) || a.i - b.i)
+    .map(x=>x.s);
+}
+function dstDone(t){ return t && (t.overallStatus === 'Completed' || t.overallStatus === 'Cancelled'); }
+function dstDependency(parentId){
+  const steps = dstStepsOf(parentId);
+  return steps.map((s, i)=>{
+    const bank = dstBankEntryFor(s);
+    const needs = bank && bank.neededBefore ? String(bank.neededBefore) : '';
+    /* A step waits for the one before it unless the Task Bank says it
+       needs something else entirely (a client request, a problem found):
+       a checklist is worked top to bottom. */
+    const sequential = !needs || /previous/i.test(needs);
+    let prereq = null;
+    if(sequential) for(let j = i - 1; j >= 0; j--){ if(steps[j].overallStatus !== 'Cancelled'){ prereq = steps[j]; break; } }
+    const status = s.overallStatus === 'Completed' ? 'Completed'
+      : s.overallStatus === 'Cancelled' ? 'Cancelled'
+      : prereq && !dstDone(prereq) ? 'Blocked'
+      : s.overallStatus === 'In Progress' ? 'In Progress' : 'Pending';
+    return {task: s, step: i + 1, prereq, needs, status,
+      output: (bank && bank.whatYouGet) || ((s.description || s.taskType || 'Step') + ' — done'),
+      firstOpen: null};
+  });
+}
+function dstDepBadge(st){
+  const tone = st === 'Completed' ? 'ok' : st === 'Blocked' ? 'danger' : st === 'In Progress' ? 'info' : st === 'Cancelled' ? 'muted' : 'warn';
+  return `<span class="badge ${tone}">${esc(st)}</span>`;
+}
+function dstDependencyHtml(parent){
+  const rows = dstDependency(parent.id);
+  if(!rows.length) return '';
+  const done = rows.filter(r=>r.status === 'Completed').length;
+  const next = rows.find(r=>r.status === 'Pending' || r.status === 'In Progress');
+  const blocked = rows.filter(r=>r.status === 'Blocked').length;
+  const parentNeeds = (dstBankEntryFor(parent) || {}).neededBefore;
+  return `<div class="section-title">Live Task Dependency</div>
+    <div class="card" style="padding:12px 14px">
+      <div class="row" style="gap:10px;flex-wrap:wrap;align-items:center">
+        <b>${done} of ${rows.length} steps completed</b>
+        ${dstDepBadge(done === rows.length ? 'Completed' : next ? (next.status === 'In Progress' ? 'In Progress' : 'Pending') : 'Blocked')}
+        ${next ? `<span class="small-note" style="margin:0">Next to do: <b>${esc(next.task.description || next.task.taskType)}</b></span>` : ''}
+        ${blocked ? `<span class="small-note" style="margin:0">${blocked} step${blocked === 1 ? '' : 's'} waiting on an earlier one</span>` : ''}
+      </div>
+      ${parentNeeds ? `<div class="small-note" style="margin:6px 0 0">This task needs before it starts: ${esc(parentNeeds)}.</div>` : ''}
+      <div class="table-wrap" style="margin-top:10px"><table><thead><tr>
+        <th>#</th><th>Step</th><th>Depends on</th><th>Status</th><th>Expected output</th></tr></thead><tbody>
+        ${rows.map(r=>`<tr data-dep="${esc(r.task.id)}">
+          <td>${r.step}</td>
+          <td>${esc(r.task.description || r.task.taskType)}<div class="small-note" style="margin:0">${esc(teamName(r.task.assignTo) || '')}${r.task.dueDate ? ' · due ' + esc(fmtDate(r.task.dueDate)) : ''}</div></td>
+          <td>${r.prereq ? `${esc(r.prereq.description || r.prereq.taskType)} ${dstDepBadge(r.prereq.overallStatus === 'Completed' ? 'Completed' : r.prereq.overallStatus === 'In Progress' ? 'In Progress' : 'Pending')}`
+            : `<span class="small-note" style="margin:0">${esc(r.needs || 'Nothing — it can start now')}</span>`}
+            ${r.status === 'Blocked' ? `<div class="small-note" style="margin:2px 0 0;color:var(--danger)">Complete “${esc(r.prereq.description || r.prereq.taskType)}” first.</div>` : ''}</td>
+          <td>${dstDepBadge(r.status)}</td>
+          <td>${esc(r.output)}</td>
+        </tr>`).join('')}
+      </tbody></table></div>
+    </div>`;
 }
 function viewTaskDetail(taskId){
   const t = DB.tasks.find(x=>x.id===taskId);
@@ -43079,6 +43277,7 @@ function viewTaskDetail(taskId){
       </tbody></table>
     </div>
     ${can('DST','create') ? `<button class="btn" style="color:var(--danger);border-color:var(--danger);margin-top:10px" onclick="openAddSubTaskModal('${t.id}')">Add row</button>` : ''}
+    ${dstDependencyHtml(t)}
     ${renderDSTTimeline(t.id)}
   `;
 }
@@ -43282,12 +43481,19 @@ function openTaskForm(id, clientId){
       </tr>`).join('')}</tbody></table>
     </div>` : '';
   const parentNote = task.parentTaskId ? `<div class="small-note" style="margin-top:0">Part of a checklist under <a href="javascript:void(0)" onclick="closeModal();openTaskForm('${task.parentTaskId}')" style="color:var(--info)">${esc((DB.tasks.find(t=>t.id===task.parentTaskId)||{}).taskType||'the parent task')}</a>.</div>` : '';
-  openModal(id?'Edit Task':'Add Service Task', parentNote + moduleFieldsVisible('DST').map(f=>fieldInput(f, task[f.k])).join('') + subsHtml,
+  const dep = task.parentTaskId ? dstDependency(task.parentTaskId).find(r=>r.task.id === task.id) : null;
+  const depNote = dep ? `<div class="small-note" style="margin-top:4px">Step ${dep.step} · ${dstDepBadge(dep.status)}
+    ${dep.prereq ? ' Depends on “' + esc(dep.prereq.description || dep.prereq.taskType) + '”' + (dep.status === 'Blocked' ? ', which has to be completed first.' : '.') : ''}
+    Expected output: ${esc(dep.output)}.</div>` : '';
+  openModal(id?'Edit Task':'Add Service Task', parentNote + depNote + moduleFieldsVisible('DST').map(f=>fieldInput(f, task[f.k])).join('') + subsHtml,
     `<button class="btn" onclick="closeModal()">Cancel</button><button class="btn primary" onclick="saveTask('${id||''}')">Save Task</button>`);
 }
 async function completeSubTask(subId){
   const sub = DB.tasks.find(t=>t.id===subId);
   if(!sub) return;
+  const dep = sub.parentTaskId ? dstDependency(sub.parentTaskId).find(r=>r.task.id === subId) : null;
+  if(dep && dep.status === 'Blocked'
+     && !confirm('“' + (dep.prereq.description || dep.prereq.taskType) + '” has to be completed first — this step depends on it.\n\nMark this one complete anyway?')) return;
   sub.overallStatus = 'Completed';
   await save('tasks');
   await onTaskCompleted(sub);
@@ -43300,6 +43506,7 @@ async function saveTask(id){
   const fields = moduleFieldsVisible('DST');
   const data = readFields(fields);
   if(!validateRequired(fields, data)) return;
+  if(dstDateCheck() || dstDueProblem(data.assignedDate, data.dueDate)){ alert(DST_DUE_MSG); return; }
   const wasCompleted = id ? (DB.tasks.find(t=>t.id===id)||{}).overallStatus==='Completed' : false;
   let newTask = null;
   if(id){
@@ -59830,11 +60037,14 @@ function repKpiBoard(){
     {k:'late',     label:'Reviews overdue',  value: f.late.length},
     {k:'queries',  label:'Open queries',     value: f.openQ.length},
   ];
-  return `<div class="small-note" style="margin-top:14px">Click any figure to throw it on the wall.</div>
+  return `<div class="small-note" style="margin-top:14px">Click any figure to see the records behind it. Each list has a
+      ⛶ button to throw the figure on the wall for a meeting.</div>
     <div class="grid-kpi" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr))">
-      ${nums.map(n=>`<div class="kpi rep-kpi-click" onclick="openKpiPresentation('${esc(n.k)}')">
+      ${nums.map(n=>`<div class="kpi rep-kpi-click kpi-click" role="button" tabindex="0" data-kpi="${esc(n.k)}"
+          title="See the ${esc(n.label.toLowerCase())} behind this figure"
+          onclick="openKpiDetail('${esc(n.k)}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openKpiDetail('${esc(n.k)}')}">
         <div class="num">${n.money? money(n.value) : Number(n.value||0).toLocaleString(numberLocale())}</div>
-        <div class="lbl">${esc(n.label)}</div></div>`).join('')}
+        <div class="lbl">${esc(n.label)} <span aria-hidden="true" style="opacity:.55">›</span></div></div>`).join('')}
     </div>
     <div class="rep-bar">
       <button class="btn sm ghost" onclick="navigate('mis')">Open the full MIS board \u2192</button>
@@ -59842,6 +60052,186 @@ function repKpiBoard(){
     <div class="small-note">Counted over the MIS period, and over what your own scope lets you see.
       The board behind that button is the same figures laid out the way the firm reads them month by month;
       this is the wall version.</div>`;
+}
+/* THE RECORDS BEHIND A KPI.
+
+   Each card's list is the very array its number was counted from —
+   misFigures(), over the MIS period and the viewer's own scope — so the
+   rows always reconcile with the card: 19 on the card, 19 in the list.
+   Search, the date range, the RM and branch filters and the sort only
+   narrow what is shown, and the count at the top says how many of the
+   card's records are on screen. Nothing is written by opening one. */
+const KPI_DETAIL = {
+  leads: {label:'New leads', what:'leads created in the MIS period',
+    rows: f=>f.newLeads.map(kpiLeadRow),
+    cols: [['id','Lead ID'],['name','Lead Name'],['mobile','Mobile'],['source','Lead Source'],['rm','Assigned RM'],
+           ['branch','Branch'],['date','Created','date'],['status','Current Status'],['followup','Follow-up','date']]},
+  converted: {label:'Converted', what:'leads created in the MIS period that became clients',
+    rows: f=>f.converted.map(kpiLeadRow),
+    cols: [['id','Lead ID'],['name','Lead Name'],['convDate','Conversion Date','date'],['clientId','Client ID'],
+           ['rm','Assigned RM'],['branch','Branch'],['status','Conversion Status']]},
+  clients: {label:'Clients', what:'clients you can see',
+    rows: f=>f.clients.map(c=>({open:`navigate('cms','${c.id}')`, id:c.id, name:c.cmsName||'', date:String(c.createdAt||c.dateOfOnboarding||'').slice(0,10),
+      rm:c.rmName, rmName:teamName(c.rmName), branch:c.branch||'', status:kpiClientStatus(c)})),
+    cols: [['id','Client ID'],['name','Client Name'],['date','Created','date'],['rmName','Assigned RM'],['branch','Branch'],['status','Client Status']]},
+  biz: {label:'Business logged', what:'business entries logged in the MIS period', money:true,
+    rows: f=>f.bizIn.map(e=>({open:`openBusinessForm('${e.id}')`, id:e.id,
+      name: e.clientId ? clientName(e.clientId) : (e.leadId ? leadName(e.leadId) : ''),
+      category:[e.dbtType, e.productCategory || e.product].filter(Boolean).join(' · '), amount:numVal(e.amount),
+      date:String(e.loggedDate || e.executionDate || e.createdAt || '').slice(0,10),
+      rm:bizOwnerOf(e), rmName:teamName(bizOwnerOf(e)), branch:bizBranchOf(e), status:e.status||''})),
+    cols: [['name','Client / Lead'],['id','Reference'],['category','Product / Category'],['amount','Amount','money'],
+           ['date','Logged','date'],['rmName','Assigned RM'],['branch','Branch'],['status','Status']]},
+  open: {label:'Open tasks', what:'service tasks not completed or cancelled',
+    rows: f=>f.openTasks.map(kpiTaskRow),
+    cols: [['id','Task ID'],['title','Task'],['related','Client / Lead'],['rmName','Assigned To'],['date','Created','date'],
+           ['due','Due Date','date'],['priority','Priority'],['status','Status']]},
+  overdue: {label:'Overdue tasks', what:'open service tasks past their due date',
+    rows: f=>f.overdue.map(kpiTaskRow),
+    cols: [['id','Task ID'],['title','Task'],['related','Client / Lead'],['rmName','Assigned To'],['due','Due Date','date'],
+           ['late','Days Overdue','num'],['priority','Priority'],['status','Status']]},
+  reviews: {label:'Live reviews', what:'reviews not closed',
+    rows: f=>f.live.map(kpiReviewRow),
+    cols: [['id','Review ID'],['name','Client'],['type','Review Type'],['rmName','RM'],['date','Started','date'],
+           ['due','Meeting / Due','date'],['status','Review Status']]},
+  late: {label:'Reviews overdue', what:'live reviews whose meeting date has passed',
+    rows: f=>f.late.map(kpiReviewRow),
+    cols: [['id','Review ID'],['name','Client'],['type','Review Type'],['rmName','RM'],['due','Due Date','date'],
+           ['late','Days Overdue','num'],['status','Status']]},
+  queries: {label:'Open queries', what:'queries not resolved or closed',
+    rows: f=>f.openQ.map(q=>({open:`navigate('queries','${q.id}')`, id:q.id, title:q.subject || String(q.description||'').slice(0,80),
+      related: q.clientId ? clientName(q.clientId) : (q.leadId ? leadName(q.leadId) : ''),
+      rm:queryOwnerFor(q), rmName:teamName(queryOwnerFor(q)), branch:(DB.clients.find(c=>c.id===q.clientId)||{}).branch||'',
+      date:String(q.createdAt||'').slice(0,10), updated:String(q.updatedAt||q.createdAt||'').slice(0,10),
+      priority:q.priority||q.urgency||'', status:q.status||'Open'})),
+    cols: [['id','Query ID'],['title','Subject'],['related','Client / Lead'],['rmName','Assigned To'],['date','Created','date'],
+           ['updated','Last Updated','date'],['priority','Priority'],['status','Status']]},
+};
+function kpiDaysLate(d){
+  if(!d) return '';
+  const n = Math.floor((new Date(new Date().toISOString().slice(0,10)) - new Date(String(d).slice(0,10))) / 86400000);
+  return n > 0 ? n : 0;
+}
+function kpiLeadRow(p){
+  const l = DB.leads.find(x=>x.id===p.id) || {};
+  const c = DB.clients.find(x=>!x.deletedAt && x.convertedFromLeadId===p.id);
+  const name = l.id ? ((l.firstName||'') + ' ' + (l.lastName||'')).trim() : (c ? c.cmsName : '');
+  const mob = l.mobile || (c && c.mobile) || '';
+  return {open: l.id ? `navigate('lms','${l.id}')` : (c ? `navigate('cms','${c.id}')` : ''), id:p.id, name,
+    mobile: !mob ? '' : (can('LMS','edit') ? mob : 'XXXXXX' + String(mob).slice(-4)),
+    source:p.source||'', rm:p.owner, rmName:teamName(p.owner), branch:p.branch||'',
+    date:String(p.createdAt||'').slice(0,10),
+    status: l.id ? stateLabel('LMS', stateOf('LMS', l)) : 'Converted to client',
+    followup:String(l.nextFollowup||'').slice(0,10),
+    convDate: c ? String(c.createdAt||'').slice(0,10) : '', clientId: c ? c.id : '',
+  };
+}
+function kpiClientStatus(c){
+  return [c.investmentsStatus, c.insuranceStatus].filter(Boolean).join(' · ') || stateLabel('CMS', stateOf('CMS', c)) || '';
+}
+function kpiTaskRow(t){
+  return {open:`navigate('dst','${t.id}')`, id:t.id, title:t.taskType || t.description || '',
+    related: t.clientId ? clientName(t.clientId) : (t.leadId ? leadName(t.leadId) : ''),
+    rm:t.assignTo, rmName:teamName(t.assignTo),
+    branch:(DB.clients.find(c=>c.id===t.clientId)||{}).branch || (DB.team.find(x=>x.id===t.assignTo)||{}).branch || '',
+    date:String(t.createdAt||t.assignedDate||'').slice(0,10), due:String(t.dueDate||'').slice(0,10),
+    late:kpiDaysLate(t.dueDate), priority:t.priorityLevel||t.urgencyLevel||'', status:t.overallStatus||''};
+}
+function kpiReviewRow(r){
+  return {open:`navigate('rms','${r.id}')`, id:r.id, name:clientName(r.clientId), type:r.reviewType||'',
+    rm:r.rmName, rmName:teamName(r.rmName), branch:r.branch||(DB.clients.find(c=>c.id===r.clientId)||{}).branch||'',
+    date:String(r.createdAt||'').slice(0,10), due:String(r.meetingDate||'').slice(0,10), late:kpiDaysLate(r.meetingDate),
+    status:stateLabel('RMS', stateOf('RMS', r))};
+}
+function kpiState(){ return window._kpiD || {}; }
+function openKpiDetail(key){
+  const spec = KPI_DETAIL[key]; if(!spec) return;
+  window._kpiD = {key, q:'', from:'', to:'', rm:'', branch:'', sort:'', dir:1, page:1};
+  let rows;
+  try { rows = spec.rows(misFigures()); } catch(e){
+    console.error('kpi detail', e);
+    openModal(esc(spec.label), `<div class="empty">The records behind this figure could not be read: ${esc(e.message)}</div>`,
+      `<button class="btn" onclick="closeModal()">← Back to KPIs / MIS</button>`);
+    return;
+  }
+  window._kpiRows = rows;
+  openModal(`${esc(spec.label)}`, `<div id="kpiDetail"></div>`,
+    `<div style="flex:1"><button class="btn ghost" onclick="openKpiPresentation('${esc(key)}')" title="Fill the screen with this figure">⛶ Present</button></div>
+     <button class="btn primary" onclick="closeModal()">← Back to KPIs / MIS</button>`, {wide: true});
+  kpiDetailDraw();
+}
+function kpiDetailFiltered(){
+  const st = kpiState(), spec = KPI_DETAIL[st.key];
+  const dateKey = (spec.cols.find(c=>c[2]==='date') || [])[0];
+  const q = st.q.trim().toLowerCase();
+  let rows = (window._kpiRows || []).filter(r=>{
+    if(q && !spec.cols.some(c=>String(r[c[0]] == null ? '' : r[c[0]]).toLowerCase().indexOf(q) >= 0)) return false;
+    if(st.rm && r.rm !== st.rm) return false;
+    if(st.branch && r.branch !== st.branch) return false;
+    if(dateKey && st.from && !(r[dateKey] && r[dateKey] >= st.from)) return false;
+    if(dateKey && st.to && !(r[dateKey] && r[dateKey] <= st.to)) return false;
+    return true;
+  });
+  if(st.sort){
+    const col = spec.cols.find(c=>c[0]===st.sort) || [];
+    const num = col[2]==='money' || col[2]==='num';
+    rows = rows.slice().sort((a, b)=>{
+      const x = a[st.sort], y = b[st.sort];
+      return st.dir * (num ? (Number(x)||0) - (Number(y)||0) : String(x||'').localeCompare(String(y||'')));
+    });
+  }
+  return {rows, dateKey};
+}
+function kpiDetailDraw(refocus){
+  const box = document.getElementById('kpiDetail'); if(!box) return;
+  const st = kpiState(), spec = KPI_DETAIL[st.key];
+  const all = window._kpiRows || [];
+  const {rows, dateKey} = kpiDetailFiltered();
+  const per = 25, pages = Math.max(1, Math.ceil(rows.length / per));
+  st.page = Math.min(Math.max(1, st.page), pages);
+  const shown = rows.slice((st.page - 1) * per, st.page * per);
+  const rms = Array.from(new Set(all.map(r=>r.rm).filter(Boolean))).map(id=>[id, teamName(id) || id]).sort((a, b)=>a[1].localeCompare(b[1]));
+  const branches = Array.from(new Set(all.map(r=>r.branch).filter(Boolean))).sort();
+  const total = spec.money ? money(all.reduce((s, r)=>s + (Number(r.amount)||0), 0)) : all.length;
+  const shownTotal = spec.money ? money(rows.reduce((s, r)=>s + (Number(r.amount)||0), 0)) : '';
+  const narrowed = rows.length !== all.length;
+  const cell = (r, c) => {
+    const v = r[c[0]];
+    if(c[2]==='money') return money(Number(v)||0);
+    if(c[2]==='date') return v ? esc(fmtDate(v)) : '—';
+    if(c[0]==='status') return v ? statusBadge(v) : '—';
+    return v === '' || v == null ? '—' : esc(String(v));
+  };
+  box.innerHTML = `
+    <div class="between" style="align-items:flex-end;gap:10px;flex-wrap:wrap">
+      <div><div style="font-size:26px;font-weight:700;line-height:1.1">${esc(String(total))}</div>
+        <div class="small-note" style="margin:2px 0 0">${all.length} record${all.length===1?'':'s'} — ${esc(spec.what)}, counted the way the card counts them,
+          over the MIS period and the records your own access lets you see.</div></div>
+      ${narrowed ? `<span class="badge info">Showing ${rows.length} of ${all.length}${spec.money ? ' · ' + shownTotal : ''}</span>` : ''}
+    </div>
+    <div class="row" style="gap:8px;flex-wrap:wrap;margin:12px 0 8px">
+      <input type="search" id="kpiQ" placeholder="Search" title="Searches name, ID, RM, branch and status" value="${esc(st.q)}" style="flex:1 1 200px"
+        oninput="kpiState().q=this.value;kpiState().page=1;kpiDetailDraw(true)">
+      ${dateKey ? `<input type="date" value="${esc(st.from)}" title="From" onchange="kpiState().from=this.value;kpiState().page=1;kpiDetailDraw()">
+        <input type="date" value="${esc(st.to)}" title="To" onchange="kpiState().to=this.value;kpiState().page=1;kpiDetailDraw()">` : ''}
+      ${rms.length > 1 ? `<select onchange="kpiState().rm=this.value;kpiState().page=1;kpiDetailDraw()"><option value="">Everyone</option>
+        ${rms.map(([id, n])=>`<option value="${esc(id)}" ${st.rm===id?'selected':''}>${esc(n)}</option>`).join('')}</select>` : ''}
+      ${branches.length > 1 ? `<select onchange="kpiState().branch=this.value;kpiState().page=1;kpiDetailDraw()"><option value="">All branches</option>
+        ${branches.map(b=>`<option ${st.branch===b?'selected':''}>${esc(b)}</option>`).join('')}</select>` : ''}
+      ${narrowed ? `<button class="btn sm ghost" onclick="Object.assign(kpiState(),{q:'',from:'',to:'',rm:'',branch:'',page:1});kpiDetailDraw()">Clear</button>` : ''}
+    </div>
+    ${!all.length ? `<div class="empty" style="padding:22px">Nothing is behind this figure right now — it is 0 over the MIS period and your access.</div>`
+      : !rows.length ? `<div class="empty" style="padding:22px">No records match these filters.</div>`
+      : `<div class="table-wrap"><table><thead><tr>${spec.cols.map(c=>`<th style="cursor:pointer;white-space:nowrap"
+            onclick="const s=kpiState(); s.dir = s.sort==='${c[0]}' ? -s.dir : 1; s.sort='${c[0]}'; kpiDetailDraw()"
+            class="${c[2]==='money'||c[2]==='num'?'se-r':''}">${esc(c[1])}${st.sort===c[0] ? (st.dir>0?' ▲':' ▼') : ''}</th>`).join('')}</tr></thead>
+        <tbody>${shown.map(r=>`<tr ${r.open ? `class="row-clickable" onclick="closeModal();${esc(r.open)}" title="Open this record"` : ''}>
+          ${spec.cols.map(c=>`<td class="${c[2]==='money'||c[2]==='num'?'se-r':''}">${cell(r, c)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>
+        ${pages > 1 ? `<div class="row" style="gap:8px;justify-content:flex-end;margin-top:8px">
+          <button class="btn sm" ${st.page<=1?'disabled':''} onclick="kpiState().page--;kpiDetailDraw()">‹ Previous</button>
+          <span class="small-note" style="margin:0">Page ${st.page} of ${pages}</span>
+          <button class="btn sm" ${st.page>=pages?'disabled':''} onclick="kpiState().page++;kpiDetailDraw()">Next ›</button></div>` : ''}`}`;
+  if(refocus){ const q = document.getElementById('kpiQ'); if(q){ q.focus(); const n = q.value.length; try { q.setSelectionRange(n, n); } catch(e){} } }
 }
 function openKpiPresentation(key){
   const f = misFigures();

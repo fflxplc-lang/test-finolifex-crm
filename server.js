@@ -1260,6 +1260,25 @@ function attendanceRulesGuard(before, after) {
   return null;
 }
 
+/* A service task's Due Date cannot be earlier than its Assigned Date. Only a
+   task this write adds, or whose dates it changes, is judged: an old row
+   with odd dates does not block somebody else's edit. */
+function tasksGuard(before, after) {
+  let old, next;
+  try { old = JSON.parse(before || '[]'); next = JSON.parse(after); } catch (e) { return null; }
+  if (!Array.isArray(next)) return null;
+  const byId = new Map((Array.isArray(old) ? old : []).filter((r) => r && r.id).map((r) => [r.id, r]));
+  for (const t of next) {
+    if (!t || t.deletedAt || !t.assignedDate || !t.dueDate) continue;
+    const was = byId.get(t.id);
+    if (was && was.assignedDate === t.assignedDate && was.dueDate === t.dueDate) continue;
+    if (String(t.dueDate).slice(0, 10) < String(t.assignedDate).slice(0, 10))
+      return 'Due Date cannot be earlier than Assigned Date. Please select a valid Due Date.'
+        + (t.id ? ' (' + t.id + (t.taskType ? ', ' + t.taskType : '') + ')' : '');
+  }
+  return null;
+}
+
 // PUT /api/storage/:key  body: { value: "..." } -> { key, value }
 app.put('/api/storage/:key', checkApiKey, (req, res) => {
   let { value } = req.body || {};
@@ -1269,6 +1288,10 @@ app.put('/api/storage/:key', checkApiKey, (req, res) => {
     if (wrong) return res.status(409).json({ error: 'attendance is append-only: ' + wrong });
     const refused = attendanceRulesGuard(store.hrAttendance, value);
     if (refused) return res.status(409).json({ error: refused });
+  }
+  if (req.params.key === 'tasks') {
+    const wrong = tasksGuard(store.tasks, value);
+    if (wrong) return res.status(422).json({ error: wrong });
   }
   if (req.params.key === 'clients') {
     const checked = clientsGuard(store.clients, value, req.get('X-CRM-Form') === 'client');
