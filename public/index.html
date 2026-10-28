@@ -1471,6 +1471,23 @@ html.dark .cw-match{background:rgba(30,107,133,.15);border-color:rgba(30,107,133
 .rem-card .rem-meta{color:var(--muted);font-size:12px;margin-top:3px;white-space:pre-line}
 .rem-card .rem-acts{display:flex;gap:6px;flex-wrap:wrap;margin-top:9px}
 @media (max-width:600px){ .rem-stack{left:12px;right:12px;max-width:none;bottom:12px} }
+.hmb-sort{cursor:pointer;user-select:none;white-space:nowrap}
+.hmb-pct{display:inline-block;width:54px;height:6px;border-radius:3px;background:var(--line,#e5e7eb);margin-right:6px;vertical-align:middle;overflow:hidden}
+.hmb-pct span{display:block;height:100%;background:var(--ok)}
+.hmb-grid{font-size:12px;border-collapse:collapse}
+.hmb-grid th,.hmb-grid td{padding:3px 4px;text-align:center;min-width:24px}
+.hmb-grid th div{font-weight:400;opacity:.6;font-size:10px}
+.hmb-grid .hmb-name{text-align:left;white-space:nowrap;position:sticky;left:0;background:var(--card,#fff);z-index:1;min-width:120px}
+.hmb-grid th.hmb-off{opacity:.55}
+.hmb-grid th.hmb-today{color:var(--info)}
+.hmb-c{font-weight:700;border-radius:4px;font-style:normal}
+.hmb-ok{background:color-mix(in srgb,var(--ok) 18%,transparent);color:var(--ok)}
+.hmb-warn{background:color-mix(in srgb,var(--warn,#d97706) 20%,transparent);color:var(--warn,#b45309)}
+.hmb-danger{background:color-mix(in srgb,var(--danger) 16%,transparent);color:var(--danger)}
+.hmb-info{background:color-mix(in srgb,var(--info) 16%,transparent);color:var(--info)}
+.hmb-muted{color:var(--muted)}
+.hmb-legend{display:flex;flex-wrap:wrap;gap:6px 14px;margin-top:8px}
+.hmb-legend i{display:inline-block;min-width:20px;text-align:center;padding:1px 3px}
 .bp-how-sec{margin:0 0 14px}
 .bp-how-sec h4{margin:0 0 6px;font-size:14px}
 .bp-how-sec p{margin:0;line-height:1.5}
@@ -79584,6 +79601,7 @@ function viewHrDashboard(){
         <button class="btn sm" onclick="hrOpenLeaveRequest()">+ Leave Request</button>
       </div>
     </div>
+    ${hrMonthBoardHtml()}
     ${hrRegInboxHtml()}
     ${hrLeaveInboxHtml()}
     <div class="card" style="margin-top:14px">
@@ -79624,6 +79642,7 @@ function viewHrAttendance(){
       <div><div class="section-title" style="margin:0">⏱ Attendance Management</div></div>
       <div class="row" style="gap:8px">
         <button class="btn" onclick="hrRulesPanel()">📋 Daily Attendance Rules &amp; Regulations</button>
+        ${hrIsStaff()? `<button class="btn" onclick="navigate('hrdashboard'); setTimeout(()=>{ const el = document.getElementById('hrMonthBoard'); if(el) el.scrollIntoView({behavior:'smooth'}); }, 80)">📊 All employees this month</button>` : ''}
         ${hrSetupLinkHtml()}
       </div>
     </div>
@@ -80159,6 +80178,185 @@ function hrTeamAttendanceHtml(){
     <div class="small-note" style="margin-top:8px">A location is recorded only at the moment somebody presses
       Punch In or Punch Out, on their own device, and it shows here only because your role carries HR access.
       Nobody is followed between those two presses.</div>
+  </div>`;
+}
+
+/* EVERYBODY'S MONTH, IN ONE PLACE — for administrators and HR.
+
+   One month, every active employee: the month's working days (Sundays,
+   weekly offs and holidays taken out), how many of them have gone by,
+   and for each person what those days came to — present, absent, leave,
+   late, hours and attendance %. Each date is read through hrAhDay, the
+   same reading My Attendance History uses, so a person's own totals and
+   the ones HR sees here cannot disagree. The grid view lays the same
+   dates out a column a day. Nothing here writes. */
+function hrMbState(){
+  return window._hmb || (window._hmb = {month: hrToday().slice(0, 7), branch: '', q: '', view: 'summary', sort: 'name', dir: 1});
+}
+function hrMbDates(month){
+  const out = [], d = new Date(month + '-01T00:00:00');
+  if(isNaN(d)) return out;
+  while(hrDateKey(d).slice(0, 7) === month){ out.push(hrDateKey(d)); d.setDate(d.getDate() + 1); }
+  return out;
+}
+function hrMbClosed(date){
+  if(hrIsSunday(date)) return 'S';
+  if(hrHolidayOn(date)) return 'H';
+  if(hrIsWeeklyOff(date)) return 'W';
+  return '';
+}
+/* One person's month: a code per date for the grid, and the totals. */
+function hrMbPerson(p, dates){
+  const today = hrToday();
+  const row = {p, codes: [], present: 0, absent: 0, leave: 0, late: 0, mins: 0, credit: 0, pendingLeave: 0, pendingReg: 0, open: 0};
+  dates.forEach(date=>{
+    const closed = hrMbClosed(date);
+    if(date > today){ row.codes.push({c: closed || '', t: closed ? hrMbClosedTitle(date, closed) : ''}); return; }
+    if(closed){
+      /* A Sunday or holiday somebody worked anyway is shown, not counted. */
+      const r0 = hrAttendanceOf(p.id, date);
+      row.codes.push({c: closed, t: hrMbClosedTitle(date, closed) + (r0 && hrWorkedMinutes(r0) > 0 ? ' (worked ' + hrDuration(hrWorkedMinutes(r0)) + ')' : '')});
+      return;
+    }
+    const d = hrAhDay(p.id, date);
+    const mins = hrEligibleMinutes(p.id, date, d.rec);
+    const late = d.rec ? hrLateMinutes(d.rec) : null;
+    row.mins += mins;
+    row.credit += hrDayCredit(p.id, date, d.rec).credit;
+    if(late > 0) row.late++;
+    if(hrAhLeaveOverlapping(p.id, date, ['Pending']).length) row.pendingLeave++;
+    if(hrRegsOn(p.id, date).some(x=>x.status === 'Pending')) row.pendingReg++;
+    let c = '·', t = d.chip;
+    if(d.bucket === 'leave'){ row.leave += d.units; c = d.units < 1 ? '½' : 'L'; }
+    else if(d.bucket === 'present'){
+      row.present++;
+      if(d.chip === 'Punched in'){ c = 'IN'; row.open++; }
+      else if(d.chip === 'Incomplete'){ c = 'I'; }
+      else c = 'P';
+      t = d.chip + ' · ' + hrDuration(mins) + (late > 0 ? ' · late ' + late + ' min' : '');
+    }
+    else if(d.bucket === 'absent'){ row.absent++; c = 'A'; }
+    if(d.remarks && t.indexOf(d.remarks) < 0) t += ' · ' + d.remarks;
+    row.codes.push({c, t: fmtDate(date) + ' — ' + t});
+  });
+  row.leave = Math.round(row.leave * 100) / 100;
+  row.credit = Math.round(row.credit * 100) / 100;
+  return row;
+}
+function hrMbClosedTitle(date, c){
+  const h = hrHolidayOn(date);
+  return fmtDate(date) + ' — ' + (c === 'S' ? 'Sunday' : c === 'H' ? 'Holiday' + (h && h.name ? ': ' + h.name : '') : 'Weekly off');
+}
+function hrMbData(){
+  const s = hrMbState();
+  const dates = hrMbDates(s.month);
+  const today = hrToday();
+  const working = dates.filter(d=>!hrMbClosed(d));
+  const elapsed = working.filter(d=>d <= today);
+  const q = String(s.q || '').trim().toLowerCase();
+  let people = (DB.team || []).filter(t=>t && isMemberActive(t));
+  const branches = [...new Set(people.map(p=>p.branch).filter(Boolean))].sort();
+  if(s.branch) people = people.filter(p=>(p.branch || '') === s.branch);
+  if(q) people = people.filter(p=>[p.name, p.id, p.email, roleOf(p), p.branch].some(v=>String(v || '').toLowerCase().indexOf(q) >= 0));
+  const rows = people.map(p=>{
+    const r = hrMbPerson(p, dates);
+    r.pct = elapsed.length ? Math.round(r.credit * 1000 / elapsed.length) / 10 : 0;
+    return r;
+  });
+  const key = {name: r=>String(r.p.name || '').toLowerCase(), branch: r=>String(r.p.branch || '').toLowerCase(),
+    present: r=>r.present, absent: r=>r.absent, leave: r=>r.leave, late: r=>r.late, mins: r=>r.mins, pct: r=>r.pct}[s.sort] || (r=>r.p.name);
+  rows.sort((a, b)=>{ const x = key(a), y = key(b); return (x < y ? -1 : x > y ? 1 : 0) * s.dir; });
+  return {s, dates, working, elapsed, rows, branches};
+}
+function hrMbSet(k, v){
+  const s = hrMbState();
+  if(k === 'sort'){ s.dir = s.sort === v ? -s.dir : (v === 'name' || v === 'branch' ? 1 : -1); s.sort = v; }
+  else s[k] = v;
+  render();
+  if(k === 'q'){ const el = document.getElementById('hmbQ'); if(el){ el.focus(); try { el.setSelectionRange(el.value.length, el.value.length); } catch(e){} } }
+}
+function hrMbExport(){
+  const D = hrMbData();
+  const cols = ['Employee', 'Employee ID', 'Role', 'Branch', 'Working days in month', 'Working days so far', 'Present',
+    'Absent', 'Leave', 'Late days', 'Hours worked', 'Days credited', 'Attendance %'].concat(D.dates.map(d=>d.slice(8)));
+  const rows = D.rows.map(r=>{
+    const o = {'Employee': r.p.name || '', 'Employee ID': r.p.id, 'Role': roleOf(r.p), 'Branch': r.p.branch || '',
+      'Working days in month': D.working.length, 'Working days so far': D.elapsed.length, 'Present': r.present,
+      'Absent': r.absent, 'Leave': r.leave, 'Late days': r.late, 'Hours worked': Math.round(r.mins / 6) / 10,
+      'Days credited': r.credit, 'Attendance %': r.pct};
+    D.dates.forEach((d, i)=>{ o[d.slice(8)] = r.codes[i].c === '·' ? '' : r.codes[i].c; });
+    return o;
+  });
+  exportDownload('attendance-' + D.s.month + '.csv', exportCsvText(rows, cols));
+}
+const HR_MB_TONE = {P:'ok', IN:'ok', I:'warn', A:'danger', L:'info', '½':'info', S:'muted', H:'muted', W:'muted', '·':'muted', '':'muted'};
+function hrMonthBoardHtml(){
+  if(!hrIsStaff()) return '';
+  const D = hrMbData(), s = D.s, today = hrToday();
+  const todayRows = s.month === today.slice(0, 7) && !hrMbClosed(today);
+  const ti = todayRows ? D.dates.indexOf(today) : -1;
+  const countToday = c => ti < 0 ? '—' : D.rows.filter(r=>c.indexOf(r.codes[ti].c) >= 0).length;
+  const avg = D.rows.length ? Math.round(D.rows.reduce((n, r)=>n + r.pct, 0) * 10 / D.rows.length) / 10 : 0;
+  const th = (k, label) => `<th class="hmb-sort" onclick="hrMbSet('sort','${k}')" title="Sort">${label}${s.sort === k ? (s.dir > 0 ? ' ▲' : ' ▼') : ''}</th>`;
+  const monthName = new Date(s.month + '-01T00:00:00').toLocaleDateString('en-IN', {month: 'long', year: 'numeric'});
+  const summary = `<div class="table-wrap"><table id="hmbTable"><thead><tr>
+      ${th('name', 'Employee')}${th('branch', 'Branch')}<th>Working days</th>${th('present', 'Present')}${th('absent', 'Absent')}
+      ${th('leave', 'Leave')}${th('late', 'Late')}${th('mins', 'Hours')}${th('pct', 'Attendance %')}<th>Pending</th><th></th>
+    </tr></thead><tbody>
+    ${D.rows.map(r=>`<tr class="row-clickable" data-hmb="${esc(r.p.id)}" onclick="hrOpenPerson('${esc(r.p.id)}')">
+      <td><b>${esc(r.p.name || r.p.id)}</b><div class="small-note" style="margin:0">${esc(roleOf(r.p))}</div></td>
+      <td>${esc(r.p.branch || '—')}</td>
+      <td>${D.elapsed.length} <span class="small-note" style="margin:0">of ${D.working.length}</span></td>
+      <td><span class="badge ok">${r.present}</span></td>
+      <td>${r.absent ? `<span class="badge danger">${r.absent}</span>` : '0'}</td>
+      <td>${r.leave ? `<span class="badge info">${hrAhNum(r.leave)}</span>` : '0'}</td>
+      <td>${r.late ? `<span class="badge warn">${r.late}</span>` : '0'}</td>
+      <td>${hrDuration(r.mins)}</td>
+      <td><div class="hmb-pct"><span style="width:${Math.min(100, r.pct)}%"></span></div><b>${r.pct}%</b></td>
+      <td>${[r.pendingLeave ? r.pendingLeave + ' leave' : '', r.pendingReg ? r.pendingReg + ' regularization' : ''].filter(Boolean).join(', ') || '—'}</td>
+      <td onclick="event.stopPropagation()"><button class="btn ghost sm" onclick="hrOpenPerson('${esc(r.p.id)}')">History</button></td>
+    </tr>`).join('') || `<tr><td colspan="11" class="empty">Nobody matches.</td></tr>`}
+    </tbody></table></div>`;
+  const grid = `<div class="table-wrap hmb-grid-wrap"><table class="hmb-grid" id="hmbGrid"><thead><tr><th class="hmb-name">Employee</th>
+      ${D.dates.map(d=>{ const w = new Date(d + 'T00:00:00').toLocaleDateString('en-IN', {weekday: 'narrow'});
+        return `<th class="${hrMbClosed(d) ? 'hmb-off' : ''}${d === today ? ' hmb-today' : ''}">${+d.slice(8)}<div>${esc(w)}</div></th>`; }).join('')}
+      <th>P</th><th>A</th><th>L</th><th>%</th></tr></thead><tbody>
+    ${D.rows.map(r=>`<tr><td class="hmb-name"><a href="javascript:void 0" onclick="hrOpenPerson('${esc(r.p.id)}')">${esc(r.p.name || r.p.id)}</a></td>
+      ${r.codes.map(x=>`<td class="hmb-c hmb-${HR_MB_TONE[x.c] || 'muted'}" title="${esc(x.t)}">${esc(x.c === '·' ? '' : x.c)}</td>`).join('')}
+      <td><b>${r.present}</b></td><td>${r.absent}</td><td>${hrAhNum(r.leave)}</td><td>${r.pct}</td></tr>`).join('')
+      || `<tr><td colspan="${D.dates.length + 5}" class="empty">Nobody matches.</td></tr>`}
+    </tbody></table></div>
+    <div class="hmb-legend small-note">${[['P', 'Present'], ['IN', 'Punched in now'], ['I', 'Incomplete / punch-out missing'], ['A', 'Absent'],
+      ['L', 'Leave'], ['½', 'Half-day leave'], ['S', 'Sunday'], ['H', 'Holiday'], ['W', 'Weekly off']]
+      .map(([c, l])=>`<span><i class="hmb-c hmb-${HR_MB_TONE[c]}">${esc(c)}</i> ${esc(l)}</span>`).join('')}</div>`;
+  return `<div class="card" id="hrMonthBoard" style="margin-top:14px">
+    <div class="between" style="align-items:center;flex-wrap:wrap;gap:8px">
+      <div class="section-title" style="margin:0">📊 All employees — ${esc(monthName)}</div>
+      <div class="row" style="gap:6px;flex-wrap:wrap">
+        <button class="btn sm ${s.view === 'summary' ? 'primary' : ''}" onclick="hrMbSet('view','summary')">Summary</button>
+        <button class="btn sm ${s.view === 'grid' ? 'primary' : ''}" onclick="hrMbSet('view','grid')">Day by day</button>
+        <button class="btn sm" onclick="hrMbExport()">⬇ Export CSV</button>
+      </div>
+    </div>
+    <div class="small-note" style="margin:4px 0 10px">Shown to administrators and HR. Working days leave out Sundays,
+      weekly offs and the firm's holidays; attendance % is the days credited (worked time over a ${esc(String(hrFullDayMinutes() / 60))}-hour
+      day, plus approved leave) over the working days gone so far.</div>
+    <div class="grid-kpi" style="margin-bottom:10px">
+      <div class="kpi"><div class="num">${D.working.length}</div><div class="lbl">Working days in ${esc(monthName.split(' ')[0])}</div></div>
+      <div class="kpi"><div class="num">${D.elapsed.length}</div><div class="lbl">Working days so far</div></div>
+      <div class="kpi"><div class="num">${D.rows.length}</div><div class="lbl">Employees</div></div>
+      <div class="kpi"><div class="num" style="color:var(--ok)">${countToday(['P', 'IN', 'I'])}</div><div class="lbl">Present today</div></div>
+      <div class="kpi"><div class="num" style="color:var(--info)">${countToday(['L', '½'])}</div><div class="lbl">On leave today</div></div>
+      <div class="kpi"><div class="num" style="color:var(--danger)">${ti < 0 ? '—' : D.rows.filter(r=>r.codes[ti].c === '·' || r.codes[ti].c === 'A').length}</div><div class="lbl">Not punched in today</div></div>
+      <div class="kpi"><div class="num">${avg}%</div><div class="lbl">Average attendance</div></div>
+    </div>
+    <div class="row" style="gap:8px;flex-wrap:wrap;margin-bottom:10px">
+      <input type="month" id="hmbMonth" value="${esc(s.month)}" max="${esc(today.slice(0, 7))}" onchange="if(this.value) hrMbSet('month', this.value)">
+      <select id="hmbBranch" onchange="hrMbSet('branch', this.value)"><option value="">All branches</option>
+        ${D.branches.map(b=>`<option value="${esc(b)}"${s.branch === b ? ' selected' : ''}>${esc(b)}</option>`).join('')}</select>
+      <input type="search" id="hmbQ" placeholder="Search" value="${esc(s.q)}" oninput="hrMbSet('q', this.value)" style="flex:1 1 180px">
+    </div>
+    ${s.view === 'grid' ? grid : summary}
   </div>`;
 }
 
