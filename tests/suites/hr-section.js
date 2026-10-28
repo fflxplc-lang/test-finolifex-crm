@@ -280,6 +280,7 @@ suite({mail: true}, async t => {
       document.getElementById('f_hrReqFrom').value = '2026-11-02';
       document.getElementById('f_hrReqTo').value = '2026-11-04';
       document.getElementById('f_hrReqReason').value = 'ZZ family wedding';
+      ['f_hrReqContact','f_hrReqDeclare','f_hrReqSession'].forEach(id => { const el = document.getElementById(id); if(!el) return; if(el.type === 'checkbox') el.checked = true; else el.value = id === 'f_hrReqContact' ? '9876543210' : 'First Half'; });
       await hrSubmitLeaveRequest();
       currentUser = was;
       const row = (DB.hrLeave || []).find(l=>l.userId === a.who && l.reason === 'ZZ family wedding');
@@ -357,6 +358,7 @@ suite({mail: true}, async t => {
       document.getElementById('f_hrReqFrom').value = '2026-12-01';
       document.getElementById('f_hrReqTo').value = '2026-12-01';
       document.getElementById('f_hrReqReason').value = 'ZZ half day for a hospital visit';
+      ['f_hrReqContact','f_hrReqDeclare','f_hrReqSession'].forEach(id => { const el = document.getElementById(id); if(!el) return; if(el.type === 'checkbox') el.checked = true; else el.value = id === 'f_hrReqContact' ? '9876543210' : 'First Half'; });
       hrLeaveBalanceNote();
       out.note = (document.getElementById('hrBalNote') || {}).textContent || '';
       await hrSubmitLeaveRequest();
@@ -438,6 +440,7 @@ suite({mail: true}, async t => {
         document.getElementById('f_hrReqFrom').value = from;
         document.getElementById('f_hrReqTo').value = to;
         document.getElementById('f_hrReqReason').value = reason;
+        ['f_hrReqContact','f_hrReqDeclare','f_hrReqSession'].forEach(id => { const el = document.getElementById(id); if(!el) return; if(el.type === 'checkbox') el.checked = true; else el.value = id === 'f_hrReqContact' ? '9876543210' : 'First Half'; });
         await hrSubmitLeaveRequest();
         currentUser = was;
         return (DB.hrLeave || []).find(l=>l.reason === reason);

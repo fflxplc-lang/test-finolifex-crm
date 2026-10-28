@@ -58,4 +58,41 @@ suite(async t => {
     if(r) throw new Error('drawn for a non-HR account');
     return 'not drawn';
   });
+
+  await t.step('the leave application form asks what the Zoho form asked, and the approver sees it', async () => {
+    const r = await t.eval(async () => {
+      const u = me();
+      if(!DB.team.some(x => x.id === 'USR-HMBA')) DB.team.push({id: 'USR-HMBA', name: 'ZZ Approver', email: 'appr@example.com', role: ADMIN_ROLE,
+        status: 'Active', branch: u.branch, documents: [], notes: [], perms: fullPerms(true), adminFlags: fullAdminFlags(true)});
+      u.parentUserId = 'USR-HMBA';
+      if(!hrApproverFor(u.id)) return {noApprover: true};
+      hrOpenLeaveRequest();
+      const body = document.getElementById('modalBody').textContent;
+      const has = ['Employee details', 'Employee ID', 'Department', 'Reporting manager', 'Number of days',
+        'Contact number during leave', 'Work handed over to', 'Address during leave', 'Supporting document'].filter(x => body.indexOf(x) < 0);
+      const g = id => document.getElementById(id);
+      g('f_hrReqType').value = 'Half Day'; g('f_hrReqType').dispatchEvent(new Event('change'));
+      const sessionShown = g('hrReqSessionWrap').style.display !== 'none';
+      const daysShown = g('f_hrReqDays').value;
+      g('f_hrReqReason').value = 'ZZ zoho form';
+      g('f_hrReqContact').value = '12345';
+      await hrSubmitLeaveRequest();
+      const refused = !(DB.hrLeave || []).some(l => l.reason === 'ZZ zoho form');
+      g('f_hrReqSession').value = 'Second Half'; g('f_hrReqContact').value = '9876543210'; g('f_hrReqDeclare').checked = true;
+      g('f_hrReqAddress').value = 'ZZ address';
+      await hrSubmitLeaveRequest();
+      const row = (DB.hrLeave || []).find(l => l.reason === 'ZZ zoho form') || {};
+      return {missing: has, sessionShown, daysShown, refused, row: {session: row.session, contact: row.contactNumber,
+        addr: row.addressDuringLeave, emp: (row.employee || {}).employeeId}, extra: /ZZ address/.test(hrLeaveExtraHtml(row))};
+    });
+    const said = t.dialogs.splice(0);
+    if(r.noApprover) throw new Error('no approver for the test account');
+    if(!r.missing) throw new Error(JSON.stringify(r) + ' ' + said.join(' | '));
+    if(r.missing.length) throw new Error('the form is missing: ' + r.missing.join(', '));
+    if(!r.sessionShown || r.daysShown !== '½ day') throw new Error(JSON.stringify(r));
+    if(!r.refused) throw new Error('a bad contact number was accepted');
+    if(r.row.session !== 'Second Half' || r.row.contact !== '9876543210' || r.row.addr !== 'ZZ address' || !r.row.emp || !r.extra)
+      throw new Error(JSON.stringify(r.row));
+    return 'all fields asked, stored and shown to the approver';
+  });
 });
