@@ -1334,6 +1334,38 @@ function leaveGuard(before, after) {
   const byId = new Map((Array.isArray(old) ? old : []).filter((r) => r && r.id).map((r) => [r.id, r]));
   const all = new Map(byId);
   next.forEach((r) => { if (r && r.id) all.set(r.id, r); });
+  /* Cancelling: the request must say which dates went, those dates must be
+     its own, and whatever is kept is written as requests that sit inside
+     the original and on none of the cancelled dates. */
+  const CANCELLED = ['Cancelled', 'Partially Cancelled'];
+  const datesOf = (r) => {
+    const out = [], d = new Date(day(r.from) + 'T00:00:00Z'), end = day(r.to || r.from);
+    for (let i = 0; i < 400 && !isNaN(d) && d.toISOString().slice(0, 10) <= end; i++) {
+      out.push(d.toISOString().slice(0, 10)); d.setUTCDate(d.getUTCDate() + 1);
+    }
+    return out;
+  };
+  for (const r of next) {
+    if (!r || !r.id) continue;
+    const was = byId.get(r.id);
+    if (was && ACTIVE.indexOf(was.status) >= 0 && CANCELLED.indexOf(r.status) >= 0) {
+      const c = r.cancellation || {};
+      const own = datesOf(was);
+      if (!Array.isArray(c.dates) || !c.dates.length) return 'A cancelled leave must say which dates were cancelled.';
+      if (c.dates.some((d) => own.indexOf(day(d)) < 0)) return 'Only dates inside the leave itself can be cancelled.';
+      const kept = own.filter((d) => c.dates.map(day).indexOf(d) < 0);
+      if ((r.status === 'Cancelled') !== (kept.length === 0))
+        return r.status === 'Cancelled' ? 'Some dates of this leave are still kept, so it is Partially Cancelled, not Cancelled.'
+          : 'Every date of this leave was cancelled, so it is Cancelled, not Partially Cancelled.';
+    }
+    if (!was && r.remainderOf && ACTIVE.indexOf(r.status) >= 0) {
+      const o = all.get(r.remainderOf);
+      if (!o || CANCELLED.indexOf(o.status) < 0) return 'Kept dates can only follow a cancellation of the leave they belong to.';
+      const own = datesOf(o), gone = ((o.cancellation || {}).dates || []).map(day);
+      if (datesOf(r).some((d) => own.indexOf(d) < 0 || gone.indexOf(d) >= 0))
+        return 'The kept dates must lie inside the original leave and not on a cancelled date.';
+    }
+  }
   for (const r of next) {
     if (!r || !r.id || ACTIVE.indexOf(r.status) < 0 || !r.from) continue;
     const was = byId.get(r.id);

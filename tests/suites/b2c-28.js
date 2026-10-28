@@ -116,6 +116,34 @@ suite(async t => {
     return 'Cancelled, the date is free to request again';
   });
 
+  await t.step('the server refuses a cancellation that does not add up', async () => {
+    t.expectConsole(/422/);
+    const r = await t.eval(async () => {
+      const u = me();
+      const put = async list => {
+        const res = await fetch('/api/storage/hrLeave', {method: 'PUT', headers: Object.assign({'Content-Type': 'application/json'}, apiHeaders()),
+          body: JSON.stringify({value: JSON.stringify(list)})});
+        return res.status + ' ' + ((await res.json().catch(() => ({}))).error || '');
+      };
+      const base = DB.hrLeave.concat([{id: 'HRL-ZZC', userId: u.id, from: '2026-12-01', to: '2026-12-03', type: 'Sick Leave', status: 'Approved'}]);
+      const seeded = await put(base);
+      const swap = (row, extra) => base.map(x => x.id === row ? Object.assign({}, x, extra) : x);
+      return {
+        seeded,
+        noDates: await put(swap('HRL-ZZC', {status: 'Cancelled'})),
+        outside: await put(swap('HRL-ZZC', {status: 'Partially Cancelled', cancellation: {dates: ['2026-12-09']}})),
+        wrongKind: await put(swap('HRL-ZZC', {status: 'Cancelled', cancellation: {dates: ['2026-12-02']}})),
+        badRest: await put(swap('HRL-ZZC', {status: 'Partially Cancelled', cancellation: {dates: ['2026-12-02']}})
+          .concat([{id: 'HRL-ZZD', userId: u.id, from: '2026-12-02', to: '2026-12-03', status: 'Approved', remainderOf: 'HRL-ZZC'}])),
+        good: await put(swap('HRL-ZZC', {status: 'Partially Cancelled', cancellation: {dates: ['2026-12-02']}})
+          .concat([{id: 'HRL-ZZE', userId: u.id, from: '2026-12-01', to: '2026-12-01', status: 'Approved', remainderOf: 'HRL-ZZC'},
+                   {id: 'HRL-ZZF', userId: u.id, from: '2026-12-03', to: '2026-12-03', status: 'Approved', remainderOf: 'HRL-ZZC'}]))};
+    });
+    if(!/^200/.test(r.seeded) || !/^200/.test(r.good)) throw new Error(JSON.stringify(r));
+    for(const k of ['noDates', 'outside', 'wrongKind', 'badRest']) if(!/^422/.test(r[k])) throw new Error(k + ': ' + r[k]);
+    return 'no dates, outside dates, wrong status and kept-on-a-cancelled-date all 422; a proper part-cancel 200';
+  });
+
   await t.step('DST: only your level and below are offered, and the server refuses upwards', async () => {
     t.expectConsole(/422/);
     const r = await t.eval(async (a) => {
