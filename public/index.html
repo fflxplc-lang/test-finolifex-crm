@@ -80266,7 +80266,7 @@ function hrMbData(){
     return r;
   });
   const key = {name: r=>String(r.p.name || '').toLowerCase(), branch: r=>String(r.p.branch || '').toLowerCase(),
-    present: r=>r.present, absent: r=>r.absent, leave: r=>r.leave, late: r=>r.late, mins: r=>r.mins, pct: r=>r.pct}[s.sort] || (r=>r.p.name);
+    present: r=>r.present, worked: r=>r.credit, absent: r=>r.absent, leave: r=>r.leave, late: r=>r.late, mins: r=>r.mins, pct: r=>r.pct}[s.sort] || (r=>r.p.name);
   rows.sort((a, b)=>{ const x = key(a), y = key(b); return (x < y ? -1 : x > y ? 1 : 0) * s.dir; });
   return {s, dates, working, elapsed, rows, branches};
 }
@@ -80280,12 +80280,12 @@ function hrMbSet(k, v){
 function hrMbExport(){
   const D = hrMbData();
   const cols = ['Employee', 'Employee ID', 'Role', 'Branch', 'Working days in month', 'Working days so far', 'Present',
-    'Absent', 'Leave', 'Late days', 'Hours worked', 'Days credited', 'Attendance %'].concat(D.dates.map(d=>d.slice(8)));
+    'Absent', 'Leave', 'Late days', 'Hours worked', 'Days worked this month', 'Attendance %'].concat(D.dates.map(d=>d.slice(8)));
   const rows = D.rows.map(r=>{
     const o = {'Employee': r.p.name || '', 'Employee ID': r.p.id, 'Role': roleOf(r.p), 'Branch': r.p.branch || '',
       'Working days in month': D.working.length, 'Working days so far': D.elapsed.length, 'Present': r.present,
       'Absent': r.absent, 'Leave': r.leave, 'Late days': r.late, 'Hours worked': Math.round(r.mins / 6) / 10,
-      'Days credited': r.credit, 'Attendance %': r.pct};
+      'Days worked this month': r.credit, 'Attendance %': r.pct};
     D.dates.forEach((d, i)=>{ o[d.slice(8)] = r.codes[i].c === '·' ? '' : r.codes[i].c; });
     return o;
   });
@@ -80302,13 +80302,14 @@ function hrMonthBoardHtml(){
   const th = (k, label) => `<th class="hmb-sort" onclick="hrMbSet('sort','${k}')" title="Sort">${label}${s.sort === k ? (s.dir > 0 ? ' ▲' : ' ▼') : ''}</th>`;
   const monthName = new Date(s.month + '-01T00:00:00').toLocaleDateString('en-IN', {month: 'long', year: 'numeric'});
   const summary = `<div class="table-wrap"><table id="hmbTable"><thead><tr>
-      ${th('name', 'Employee')}${th('branch', 'Branch')}<th>Working days</th>${th('present', 'Present')}${th('absent', 'Absent')}
+      ${th('name', 'Employee')}${th('branch', 'Branch')}<th>Working days</th>${th('worked', 'Days worked')}${th('present', 'Present')}${th('absent', 'Absent')}
       ${th('leave', 'Leave')}${th('late', 'Late')}${th('mins', 'Hours')}${th('pct', 'Attendance %')}<th>Pending</th><th></th>
     </tr></thead><tbody>
     ${D.rows.map(r=>`<tr class="row-clickable" data-hmb="${esc(r.p.id)}" onclick="hrOpenPerson('${esc(r.p.id)}')">
       <td><b>${esc(r.p.name || r.p.id)}</b><div class="small-note" style="margin:0">${esc(roleOf(r.p))}</div></td>
       <td>${esc(r.p.branch || '—')}</td>
       <td>${D.elapsed.length} <span class="small-note" style="margin:0">of ${D.working.length}</span></td>
+      <td title="Same figure as Days worked this month on their own Attendance page: worked time over a full day, plus approved leave"><b>${hrAhNum(r.credit)}</b> <span class="small-note" style="margin:0">of ${D.elapsed.length}</span></td>
       <td><span class="badge ok">${r.present}</span></td>
       <td>${r.absent ? `<span class="badge danger">${r.absent}</span>` : '0'}</td>
       <td>${r.leave ? `<span class="badge info">${hrAhNum(r.leave)}</span>` : '0'}</td>
@@ -80317,16 +80318,16 @@ function hrMonthBoardHtml(){
       <td><div class="hmb-pct"><span style="width:${Math.min(100, r.pct)}%"></span></div><b>${r.pct}%</b></td>
       <td>${[r.pendingLeave ? r.pendingLeave + ' leave' : '', r.pendingReg ? r.pendingReg + ' regularization' : ''].filter(Boolean).join(', ') || '—'}</td>
       <td onclick="event.stopPropagation()"><button class="btn ghost sm" onclick="hrOpenPerson('${esc(r.p.id)}')">History</button></td>
-    </tr>`).join('') || `<tr><td colspan="11" class="empty">Nobody matches.</td></tr>`}
+    </tr>`).join('') || `<tr><td colspan="12" class="empty">Nobody matches.</td></tr>`}
     </tbody></table></div>`;
   const grid = `<div class="table-wrap hmb-grid-wrap"><table class="hmb-grid" id="hmbGrid"><thead><tr><th class="hmb-name">Employee</th>
       ${D.dates.map(d=>{ const w = new Date(d + 'T00:00:00').toLocaleDateString('en-IN', {weekday: 'narrow'});
         return `<th class="${hrMbClosed(d) ? 'hmb-off' : ''}${d === today ? ' hmb-today' : ''}">${+d.slice(8)}<div>${esc(w)}</div></th>`; }).join('')}
-      <th>P</th><th>A</th><th>L</th><th>%</th></tr></thead><tbody>
+      <th title="Days worked this month">Days</th><th>P</th><th>A</th><th>L</th><th>%</th></tr></thead><tbody>
     ${D.rows.map(r=>`<tr><td class="hmb-name"><a href="javascript:void 0" onclick="hrOpenPerson('${esc(r.p.id)}')">${esc(r.p.name || r.p.id)}</a></td>
       ${r.codes.map(x=>`<td class="hmb-c hmb-${HR_MB_TONE[x.c] || 'muted'}" title="${esc(x.t)}">${esc(x.c === '·' ? '' : x.c)}</td>`).join('')}
-      <td><b>${r.present}</b></td><td>${r.absent}</td><td>${hrAhNum(r.leave)}</td><td>${r.pct}</td></tr>`).join('')
-      || `<tr><td colspan="${D.dates.length + 5}" class="empty">Nobody matches.</td></tr>`}
+      <td><b>${hrAhNum(r.credit)}</b></td><td>${r.present}</td><td>${r.absent}</td><td>${hrAhNum(r.leave)}</td><td>${r.pct}</td></tr>`).join('')
+      || `<tr><td colspan="${D.dates.length + 6}" class="empty">Nobody matches.</td></tr>`}
     </tbody></table></div>
     <div class="hmb-legend small-note">${[['P', 'Present'], ['IN', 'Punched in now'], ['I', 'Incomplete / punch-out missing'], ['A', 'Absent'],
       ['L', 'Leave'], ['½', 'Half-day leave'], ['S', 'Sunday'], ['H', 'Holiday'], ['W', 'Weekly off']]

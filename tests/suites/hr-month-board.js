@@ -36,12 +36,13 @@ suite(async t => {
       const empty = /Nobody matches/.test((document.getElementById('hrMonthBoard') || {}).textContent || '');
       window._hmb = null;
       return {row: !!row, working: D.working.length, expected: work.length, rows: D.rows.length,
-        present: me.present, leave: me.leave, absent: me.absent, pct: me.pct, cells: cells.length, days: days.length,
+        present: me.present, credit: me.credit, own: hrMonthDays(id, month).days, leave: me.leave, absent: me.absent, pct: me.pct, cells: cells.length, days: days.length,
         sundays: cells.filter(c => c === 'S').length, P: cells.filter(c => c === 'P').length, empty};
     });
     if(!r.row) throw new Error('the employee is not on the board: ' + JSON.stringify(r));
     if(r.working !== r.expected || r.rows !== 1) throw new Error(JSON.stringify(r));
     if(r.present !== 3 || r.leave !== 1 || r.absent !== r.working - 4) throw new Error('totals wrong: ' + JSON.stringify(r));
+    if(r.credit !== r.own) throw new Error('days worked differ from the person\'s own page: ' + JSON.stringify(r));
     if(r.cells !== r.days || r.P !== 3 || r.sundays < 4) throw new Error('grid wrong: ' + JSON.stringify(r));
     if(!r.empty) throw new Error('search does not narrow the board');
     return r.working + ' working days; 3 present, 1 leave, ' + r.absent + ' absent, ' + r.pct + '%';
