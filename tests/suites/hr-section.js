@@ -276,11 +276,11 @@ suite({mail: true}, async t => {
       const was = currentUser; currentUser = a.who;
       const picked = hrApproverFor(a.who);
       hrOpenLeaveRequest();
-      document.getElementById('f_hrReqType').value = 'Full Day';
+      document.getElementById('f_hrReqType').value = 'Casual Leave';
       document.getElementById('f_hrReqFrom').value = '2026-11-02';
       document.getElementById('f_hrReqTo').value = '2026-11-04';
       document.getElementById('f_hrReqReason').value = 'ZZ family wedding';
-      ['f_hrReqContact','f_hrReqDeclare','f_hrReqSession'].forEach(id => { const el = document.getElementById(id); if(!el) return; if(el.type === 'checkbox') el.checked = true; else el.value = id === 'f_hrReqContact' ? '9876543210' : 'First Half'; });
+      ['f_hrReqDuration','f_hrReqDelegated'].forEach(id => { const el = document.getElementById(id); if(el && !el.value) el.value = id === 'f_hrReqDuration' ? 'Full Day' : 'No'; });
       await hrSubmitLeaveRequest();
       currentUser = was;
       const row = (DB.hrLeave || []).find(l=>l.userId === a.who && l.reason === 'ZZ family wedding');
@@ -294,7 +294,7 @@ suite({mail: true}, async t => {
     if(!r.row) throw new Error('no request was written');
     if(r.row.status !== 'Pending') throw new Error('it was written ' + r.row.status);
     if(r.row.approverId !== r.here) throw new Error('it went to the wrong approver');
-    if(!r.row.requestedAt || !r.row.reason || r.row.type !== 'Full Day')
+    if(!r.row.requestedAt || !r.row.reason || r.row.type !== 'Casual Leave')
       throw new Error('the request lost its type, reason or date');
     if(!r.stored) throw new Error('it never reached the server');
     if(!r.notified) throw new Error('the branch head was not told');
@@ -354,11 +354,12 @@ suite({mail: true}, async t => {
       const was = currentUser; currentUser = a.who;
       hrOpenLeaveRequest();
       const options = Array.from(document.querySelectorAll('#f_hrReqType option')).map(o=>o.textContent.trim());
-      document.getElementById('f_hrReqType').value = 'Half Day';
+      document.getElementById('f_hrReqType').value = 'Sick Leave';
+      document.getElementById('f_hrReqDuration').value = 'Half Day (First Half)';
       document.getElementById('f_hrReqFrom').value = '2026-12-01';
       document.getElementById('f_hrReqTo').value = '2026-12-01';
       document.getElementById('f_hrReqReason').value = 'ZZ half day for a hospital visit';
-      ['f_hrReqContact','f_hrReqDeclare','f_hrReqSession'].forEach(id => { const el = document.getElementById(id); if(!el) return; if(el.type === 'checkbox') el.checked = true; else el.value = id === 'f_hrReqContact' ? '9876543210' : 'First Half'; });
+      ['f_hrReqDuration','f_hrReqDelegated'].forEach(id => { const el = document.getElementById(id); if(el && !el.value) el.value = id === 'f_hrReqDuration' ? 'Full Day' : 'No'; });
       hrLeaveBalanceNote();
       out.note = (document.getElementById('hrBalNote') || {}).textContent || '';
       await hrSubmitLeaveRequest();
@@ -436,11 +437,11 @@ suite({mail: true}, async t => {
       const mk = async (reason, from, to) => {
         const was = currentUser; currentUser = a.who;
         hrOpenLeaveRequest();
-        document.getElementById('f_hrReqType').value = 'Full Day';
+        document.getElementById('f_hrReqType').value = 'Casual Leave';
         document.getElementById('f_hrReqFrom').value = from;
         document.getElementById('f_hrReqTo').value = to;
         document.getElementById('f_hrReqReason').value = reason;
-        ['f_hrReqContact','f_hrReqDeclare','f_hrReqSession'].forEach(id => { const el = document.getElementById(id); if(!el) return; if(el.type === 'checkbox') el.checked = true; else el.value = id === 'f_hrReqContact' ? '9876543210' : 'First Half'; });
+        ['f_hrReqDuration','f_hrReqDelegated'].forEach(id => { const el = document.getElementById(id); if(el && !el.value) el.value = id === 'f_hrReqDuration' ? 'Full Day' : 'No'; });
         await hrSubmitLeaveRequest();
         currentUser = was;
         return (DB.hrLeave || []).find(l=>l.reason === reason);

@@ -59,7 +59,7 @@ suite(async t => {
     return 'not drawn';
   });
 
-  await t.step('the leave application form asks what the Zoho form asked, and the approver sees it', async () => {
+  await t.step('the leave application form is the firm’s Zoho form, and the approver sees it', async () => {
     const r = await t.eval(async () => {
       const u = me();
       if(!DB.team.some(x => x.id === 'USR-HMBA')) DB.team.push({id: 'USR-HMBA', name: 'ZZ Approver', email: 'appr@example.com', role: ADMIN_ROLE,
@@ -68,31 +68,37 @@ suite(async t => {
       if(!hrApproverFor(u.id)) return {noApprover: true};
       hrOpenLeaveRequest();
       const body = document.getElementById('modalBody').textContent;
-      const has = ['Employee details', 'Employee ID', 'Department', 'Reporting manager', 'Number of days',
-        'Contact number during leave', 'Work handed over to', 'Address during leave', 'Supporting document'].filter(x => body.indexOf(x) < 0);
+      const missing = ['Name', 'First Name', 'Last Name', 'Email', 'Leave Type', 'Start Date', 'End Date', 'Duration',
+        'Have you Delegate your Pending Task?', 'To Whom?', 'Delegated Person Email', 'Delegated Task #1', 'Delegated Task #2',
+        'Delegated Task #3'].filter(x => body.indexOf(x) < 0);
       const g = id => document.getElementById(id);
-      g('f_hrReqType').value = 'Half Day'; g('f_hrReqType').dispatchEvent(new Event('change'));
-      const sessionShown = g('hrReqSessionWrap').style.display !== 'none';
-      const daysShown = g('f_hrReqDays').value;
+      const types = [...g('f_hrReqType').options].map(o => o.value).filter(Boolean);
+      const said = []; const al = window.alert; window.alert = m => said.push(String(m));
+      g('f_hrReqType').value = 'Sick Leave'; g('f_hrReqDuration').value = 'Half Day (Second Half)';
+      g('f_hrReqDelegated').value = 'Yes'; hrLeaveDelegateShow();
+      const boxShown = g('hrReqDelegateBox').style.display !== 'none';
+      g('f_hrReqHandover').value = 'USR-HMBA'; hrLeaveDelegateShow();
+      const autofill = [g('f_hrReqDelFirst').value, g('f_hrReqDelLast').value, g('f_hrReqDelEmail').value];
+      g('f_hrReqTask1').value = 'ZZ call Mr Gupta'; g('f_hrReqTask2').value = 'ZZ SIP form';
       g('f_hrReqReason').value = 'ZZ zoho form';
-      g('f_hrReqContact').value = '12345';
       await hrSubmitLeaveRequest();
       const refused = !(DB.hrLeave || []).some(l => l.reason === 'ZZ zoho form');
-      g('f_hrReqSession').value = 'Second Half'; g('f_hrReqContact').value = '9876543210'; g('f_hrReqDeclare').checked = true;
-      g('f_hrReqAddress').value = 'ZZ address';
+      g('f_hrReqTask3').value = 'ZZ review deck';
       await hrSubmitLeaveRequest();
+      window.alert = al;
       const row = (DB.hrLeave || []).find(l => l.reason === 'ZZ zoho form') || {};
-      return {missing: has, sessionShown, daysShown, refused, row: {session: row.session, contact: row.contactNumber,
-        addr: row.addressDuringLeave, emp: (row.employee || {}).employeeId}, extra: /ZZ address/.test(hrLeaveExtraHtml(row))};
+      return {missing, types, boxShown, autofill, refused, said,
+        row: {type: row.type, unit: row.unit, session: row.session, to: row.handoverTo, email: row.delegateEmail, tasks: (row.delegatedTasks || []).length},
+        extra: /ZZ review deck/.test(hrLeaveExtraHtml(row))};
     });
-    const said = t.dialogs.splice(0);
+    t.dialogs.splice(0);
     if(r.noApprover) throw new Error('no approver for the test account');
-    if(!r.missing) throw new Error(JSON.stringify(r) + ' ' + said.join(' | '));
     if(r.missing.length) throw new Error('the form is missing: ' + r.missing.join(', '));
-    if(!r.sessionShown || r.daysShown !== '½ day') throw new Error(JSON.stringify(r));
-    if(!r.refused) throw new Error('a bad contact number was accepted');
-    if(r.row.session !== 'Second Half' || r.row.contact !== '9876543210' || r.row.addr !== 'ZZ address' || !r.row.emp || !r.extra)
-      throw new Error(JSON.stringify(r.row));
-    return 'all fields asked, stored and shown to the approver';
+    if(r.types[0] !== 'Sick Leave' || r.types[1] !== 'Casual Leave') throw new Error('leave types: ' + r.types.join(', '));
+    if(!r.boxShown || r.autofill.join('|') !== 'ZZ|Approver|appr@example.com') throw new Error(JSON.stringify(r));
+    if(!r.refused || !/Delegated Task #3/.test(r.said.join(' '))) throw new Error('a missing task was accepted: ' + r.said.join(' | '));
+    if(r.row.type !== 'Sick Leave' || r.row.unit !== 'half' || r.row.session !== 'Second Half' || r.row.to !== 'USR-HMBA'
+      || r.row.email !== 'appr@example.com' || r.row.tasks !== 3 || !r.extra) throw new Error(JSON.stringify(r.row));
+    return 'every Zoho field asked, delegation required when Yes, stored and shown to the approver';
   });
 });

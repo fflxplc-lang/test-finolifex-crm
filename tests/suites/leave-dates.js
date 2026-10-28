@@ -41,7 +41,7 @@ suite(async t => {
     if(a.from) f.value = a.from;
     if(a.to) to.value = a.to;
     document.getElementById('f_hrReqReason').value = a.reason;
-    ['f_hrReqContact','f_hrReqDeclare','f_hrReqSession'].forEach(id => { const el = document.getElementById(id); if(!el) return; if(el.type === 'checkbox') el.checked = true; else el.value = id === 'f_hrReqContact' ? '9876543210' : 'First Half'; });
+    ['f_hrReqDuration','f_hrReqDelegated'].forEach(id => { const el = document.getElementById(id); if(el && !el.value) el.value = id === 'f_hrReqDuration' ? 'Full Day' : 'No'; });
     const said = []; const al = window.alert; window.alert = m => said.push(String(m));
     await hrSubmitLeaveRequest();
     window.alert = al; closeModal(); currentUser = was;

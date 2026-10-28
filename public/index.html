@@ -1471,6 +1471,8 @@ html.dark .cw-match{background:rgba(30,107,133,.15);border-color:rgba(30,107,133
 .rem-card .rem-meta{color:var(--muted);font-size:12px;margin-top:3px;white-space:pre-line}
 .rem-card .rem-acts{display:flex;gap:6px;flex-wrap:wrap;margin-top:9px}
 @media (max-width:600px){ .rem-stack{left:12px;right:12px;max-width:none;bottom:12px} }
+.hr-leave-dates{grid-template-columns:repeat(3,minmax(0,1fr))}
+@media (max-width:600px){.hr-leave-dates{grid-template-columns:1fr}}
 .hmb-sort{cursor:pointer;user-select:none;white-space:nowrap}
 .hmb-pct{display:inline-block;width:54px;height:6px;border-radius:3px;background:var(--line,#e5e7eb);margin-right:6px;vertical-align:middle;overflow:hidden}
 .hmb-pct span{display:block;height:100%;background:var(--ok)}
@@ -80535,75 +80537,86 @@ function hrOpenLeaveRequest(date){
   const dateAttrs = locked
     ? ` min="${esc(locked)}" max="${esc(locked)}" readonly style="background:var(--bg);cursor:not-allowed"`
     : ` min="${esc(hrToday())}" max="${DATE_BOUND_MAX}"`;
-  const types = hrCfg().leaveTypes;
   const approver = hrApproverFor(u.id);
-  const emp = hrLeaveEmployee(u);
-  const ro = (label, v) => `<div class="field"><label>${esc(label)}</label><input type="text" value="${esc(v || '—')}" readonly
-      style="background:var(--bg);cursor:default"></div>`;
+  const nm = hrSplitName(u.name);
+  const ro = 'readonly style="background:var(--bg);cursor:default"';
   const others = (DB.team || []).filter(t=>t && t.id !== u.id && isMemberActive(t))
     .slice().sort((a, b)=>String(a.name || '').localeCompare(String(b.name || '')));
+  const req = '<span class="req">*</span>';
   openModal('Leave Application Form', `
     ${hrMyLeaveSummaryHtml(u.id)}
-    <div class="section-title" style="margin:0 0 6px">Employee details</div>
-    <div class="field-grid">
-      ${ro('Employee name', emp.name)}${ro('Employee ID', emp.employeeId)}
-      ${ro('Department', emp.department)}${ro('Designation', emp.designation)}
-      ${ro('Branch', emp.branch)}${ro('Reporting manager', emp.manager)}
-      ${ro('Email', emp.email)}${ro('Mobile', emp.mobile)}
-    </div>
-    <div class="section-title" style="margin:10px 0 6px">Leave details</div>
-    <div class="field"><label>Leave type${types.length? '<span class="req">*</span>':''}</label>
-      ${types.length
-        ? `<select id="f_hrReqType" onchange="hrLeaveBalanceNote()"><option value="">Select\u2026</option>${
-            types.map(x=>`<option value="${esc(x.name)}">${esc(hrLeaveTypeLabel(x))}</option>`).join('')}</select>`
-        : `<input type="text" id="f_hrReqType" disabled placeholder="No leave types configured yet">`}
+    <div class="field"><label>Name${req}</label>
+      <div class="field-grid" style="gap:0 12px">
+        <div><input type="text" id="f_hrReqFirst" value="${esc(nm.first)}" ${ro}><div class="small-note" style="margin:2px 0 0">First Name</div></div>
+        <div><input type="text" id="f_hrReqLast" value="${esc(nm.last)}" ${ro}><div class="small-note" style="margin:2px 0 0">Last Name</div></div>
+      </div></div>
+    <div class="field"><label>Email${req}</label><input type="email" id="f_hrReqEmail" value="${esc(u.email || '')}" ${ro}></div>
+    <div class="field"><label>Leave Type${req}</label>
+      <select id="f_hrReqType" onchange="hrLeaveBalanceNote()"><option value="">Select…</option>${
+        hrLeaveFormTypes().map(x=>`<option value="${esc(x)}">${esc(x)}</option>`).join('')}</select>
       <div class="small-note" id="hrBalNote" style="margin-top:4px">${esc(hrBalanceLine(u.id, ''))}</div></div>
-    <div class="field-grid">
-      <div class="field"><label>From<span class="req">*</span></label>
-        <input type="date" id="f_hrReqFrom" value="${esc(day)}"${dateAttrs}
-          onchange="hrLeaveBalanceNote()"></div>
-      <div class="field"><label>To<span class="req">*</span></label>
-        <input type="date" id="f_hrReqTo" value="${esc(day)}"${dateAttrs}
-          onchange="hrLeaveBalanceNote()"></div>
+    <div class="field-grid hr-leave-dates">
+      <div class="field"><label>Start Date${req}</label>
+        <input type="date" id="f_hrReqFrom" value="${esc(day)}"${dateAttrs} onchange="hrLeaveBalanceNote()"></div>
+      <div class="field"><label>End Date${req}</label>
+        <input type="date" id="f_hrReqTo" value="${esc(day)}"${dateAttrs} onchange="hrLeaveBalanceNote()"></div>
+      <div class="field"><label>Duration${req}</label>
+        <select id="f_hrReqDuration" onchange="hrLeaveBalanceNote()"><option value="">Select…</option>${
+          HR_LEAVE_DURATIONS.map(x=>`<option value="${esc(x)}">${esc(x)}</option>`).join('')}</select></div>
     </div>
-    <div class="field" id="hrReqSessionWrap" style="display:none"><label>Half-day session<span class="req">*</span></label>
-      <select id="f_hrReqSession"><option value="">Select…</option><option>First Half</option><option>Second Half</option></select></div>
-    <div class="field"><label>Number of days</label>
-      <input type="text" id="f_hrReqDays" readonly style="background:var(--bg);cursor:default" value="${esc(hrDaysLabel(1))}"></div>
     <input type="hidden" id="f_hrReqLock" value="${esc(locked)}">
-    <div class="small-note" style="margin:-4px 0 8px">${locked
-      ? 'This request is for <b>' + esc(fmtDate(locked)) + '</b> only, the day picked in the attendance history.'
-      : 'Leave can be requested from today onwards.'}</div>
-    <div class="field"><label>Reason<span class="req">*</span></label>
-      <textarea id="f_hrReqReason" placeholder="Why you need the time"></textarea></div>
-    <div class="section-title" style="margin:10px 0 6px">While you are away</div>
-    <div class="field-grid">
-      <div class="field"><label>Contact number during leave<span class="req">*</span></label>
-        <input type="tel" id="f_hrReqContact" inputmode="numeric" maxlength="10" value="${esc(String(u.mobile || u.phone || '').replace(/\D/g, '').slice(-10))}" placeholder="10-digit mobile"></div>
-      <div class="field"><label>Work handed over to</label>
-        <select id="f_hrReqHandover"><option value="">Nobody / not needed</option>${
-          others.map(t=>`<option value="${esc(t.id)}">${esc(t.name || t.id)}</option>`).join('')}</select></div>
+    ${locked ? `<div class="small-note" style="margin:-4px 0 8px">This request is for <b>${esc(fmtDate(locked))}</b> only, the day picked in the attendance history.</div>` : ''}
+    <div class="field"><label>Have you Delegate your Pending Task?${req}</label>
+      <select id="f_hrReqDelegated" onchange="hrLeaveDelegateShow()"><option value="">Select…</option><option>Yes</option><option>No</option></select></div>
+    <div id="hrReqDelegateBox" style="display:none">
+      <div class="field"><label>To Whom?${req}</label>
+        <select id="f_hrReqHandover" onchange="hrLeaveDelegateShow()"><option value="">Select the person…</option>${
+          others.map(t=>`<option value="${esc(t.id)}">${esc(t.name || t.id)}</option>`).join('')}</select>
+        <div class="field-grid" style="gap:0 12px;margin-top:6px">
+          <div><input type="text" id="f_hrReqDelFirst" ${ro}><div class="small-note" style="margin:2px 0 0">First Name</div></div>
+          <div><input type="text" id="f_hrReqDelLast" ${ro}><div class="small-note" style="margin:2px 0 0">Last Name</div></div>
+        </div></div>
+      <div class="field"><label>Delegated Person Email${req}</label><input type="email" id="f_hrReqDelEmail" placeholder="Their email"></div>
+      ${[1, 2, 3].map(n=>`<div class="field"><label>Delegated Task #${n}${req}</label><input type="text" id="f_hrReqTask${n}"></div>`).join('')}
     </div>
-    <div class="field"><label>Address during leave</label>
-      <textarea id="f_hrReqAddress" rows="2" placeholder="Only if you will be away from your usual address"></textarea></div>
-    <div class="field"><label>Handover notes</label>
-      <textarea id="f_hrReqHandNotes" rows="2" placeholder="Pending work and who to ask about it"></textarea></div>
-    <div class="field"><label>Supporting document (optional)</label>
-      <input type="file" id="f_hrReqFile" accept=".pdf,.jpg,.jpeg,.png">
-      <div class="small-note" style="margin-top:4px">A medical certificate or similar. PDF, JPG or PNG, up to 2 MB.</div></div>
-    <label style="display:flex;flex-wrap:nowrap;gap:8px;align-items:flex-start;margin:6px 0 10px;font-size:13px;font-weight:400">
-      <input type="checkbox" id="f_hrReqDeclare" style="margin-top:3px;flex:0 0 auto;width:auto">
-      <span>I confirm the details above are correct and I will hand over my pending work before going on leave.</span></label>
+    <div class="field"><label>Reason (optional)</label>
+      <textarea id="f_hrReqReason" rows="2" placeholder="Anything the approver should know"></textarea></div>
     <div class="small-note">${approver
-      ? 'This goes to <b>' + esc(teamName(approver.id)) + '</b> \u2014 ' + esc(approver.why)
-        + ' \u2014 and waits as <b>Pending</b> until they answer. You are told either way.'
+      ? 'This goes to <b>' + esc(teamName(approver.id)) + '</b> — ' + esc(approver.why)
+        + ' — and waits as <b>Pending</b> until they answer. You are told either way.'
       : '<span style="color:var(--danger)">There is nobody who can approve this yet. A leave request goes to '
-        + 'the branch head, the reporting manager or HR \u2014 and whoever it goes to needs HR access, which an '
-        + 'administrator grants in Setup \u203A Users &amp; Access. Ask them to do that first.</span>'}
+        + 'the branch head, the reporting manager or HR — and whoever it goes to needs HR access, which an '
+        + 'administrator grants in Setup › Users &amp; Access. Ask them to do that first.</span>'}
     </div>`,
     `<button class="btn" onclick="closeModal()">Cancel</button>
-     ${approver? `<button class="btn primary" onclick="hrSubmitLeaveRequest()">Submit request</button>`:''}`);
+     ${approver? `<button class="btn primary" onclick="hrSubmitLeaveRequest()">Submit</button>`:''}`);
   hrLeaveBalanceNote();
+}
+/* The firm's own leave form (Zoho, "Leave Application Form"): Sick and
+   Casual Leave, and how long — a full day or one half of it. Any other
+   type HR has set up (Comp Off, say) is offered after those two; the old
+   "Full Day" / "Half Day" types are durations here, not types. */
+const HR_LEAVE_DURATIONS = ['Full Day', 'Half Day (First Half)', 'Half Day (Second Half)'];
+function hrLeaveFormTypes(){
+  const out = ['Sick Leave', 'Casual Leave'];
+  hrCfg().leaveTypes.forEach(t=>{
+    if(t && t.name && !/^(full|half)\s*day$/i.test(t.name) && out.indexOf(t.name) < 0) out.push(t.name);
+  });
+  return out;
+}
+function hrSplitName(name){
+  const parts = String(name || '').trim().split(/\s+/).filter(Boolean);
+  return {first: parts[0] || '', last: parts.slice(1).join(' ')};
+}
+function hrLeaveDelegateShow(){
+  const g = id => document.getElementById(id);
+  const box = g('hrReqDelegateBox');
+  if(box) box.style.display = (g('f_hrReqDelegated') || {}).value === 'Yes' ? '' : 'none';
+  const t = (DB.team || []).find(x=>x.id === (g('f_hrReqHandover') || {}).value);
+  const nm = hrSplitName(t && t.name);
+  if(g('f_hrReqDelFirst')) g('f_hrReqDelFirst').value = nm.first;
+  if(g('f_hrReqDelLast')) g('f_hrReqDelLast').value = nm.last;
+  if(g('f_hrReqDelEmail') && t && (t.email || !g('f_hrReqDelEmail').value)) g('f_hrReqDelEmail').value = (t && t.email) || '';
 }
 /* Who is asking, as the firm's own records have them: shown on the form
    and copied onto the request, so the approver sees what the person saw. */
@@ -80628,21 +80641,17 @@ function hrLeaveBalanceNote(){
   if(!el) return;
   const from = (document.getElementById('f_hrReqFrom') || {}).value || '';
   const to = (document.getElementById('f_hrReqTo') || {}).value || from;
-  const days = from ? hrLeaveDays({from, to, type}) : 0;
+  const dur = (document.getElementById('f_hrReqDuration') || {}).value || '';
+  const days = from ? hrLeaveDays({from, to, unit: /^Half/.test(dur) ? 'half' : 'full'}) : 0;
   el.textContent = hrBalanceLine(currentUser, type)
     + (days ? '  \u00b7  asking for ' + hrDaysLabel(days) + '.' : '');
-  const d = document.getElementById('f_hrReqDays');
-  if(d) d.value = days ? hrDaysLabel(days) : '';
-  const sw = document.getElementById('hrReqSessionWrap');
-  if(sw) sw.style.display = type && hrLeaveTypeUnit(type) === 'half' ? '' : 'none';
 }
 async function hrSubmitLeaveRequest(){
   const u = me(); if(!u) return;
   const g = id => (document.getElementById(id) || {}).value || '';
-  const types = hrCfg().leaveTypes;
   const type = g('f_hrReqType'), from = g('f_hrReqFrom'), to = g('f_hrReqTo') || from;
   const reason = g('f_hrReqReason').trim();
-  if(types.length && !type){ alert('Choose the leave type.'); return; }
+  if(!type){ alert('Choose the Leave Type.'); return; }
   if(!from || !to){ alert('A start and an end date are needed.'); return; }
   const bad = dateRangeProblem('From', from) || dateRangeProblem('To', to);
   if(bad){ alert(bad); return; }
@@ -80651,23 +80660,23 @@ async function hrSubmitLeaveRequest(){
   if(lock && (from !== lock || to !== lock)){
     alert('This request is for ' + fmtDate(lock) + ' only. To ask for other dates, use + Leave Request.'); return; }
   if(!lock && from < hrToday()){ alert('Leave cannot start before today.'); return; }
-  if(!reason){ alert('Say why you need the time \u2014 the person approving it is being asked to agree to something.'); return; }
-  const half = !!type && hrLeaveTypeUnit(type) === 'half';
-  const session = half ? g('f_hrReqSession') : '';
-  if(half && !session){ alert('Choose which half of the day: First Half or Second Half.'); return; }
-  const contact = g('f_hrReqContact').replace(/\D/g, '');
-  if(!/^[6-9]\d{9}$/.test(contact)){ alert('Enter a valid 10-digit mobile number to reach you during your leave.'); return; }
-  const fileEl = document.getElementById('f_hrReqFile');
-  const file = fileEl && fileEl.files && fileEl.files[0];
-  let attachment = null;
-  if(file){
-    if(file.size > 2 * 1024 * 1024){ alert('The supporting document is over 2 MB. Attach a smaller file.'); return; }
-    if(!/\.(pdf|jpe?g|png)$/i.test(file.name)){ alert('The supporting document must be a PDF, JPG or PNG.'); return; }
-    const dataUrl = await new Promise(res=>{ const r = new FileReader(); r.onload = ()=>res(r.result); r.readAsDataURL(file); });
-    attachment = {name: file.name, size: file.size, type: file.type, dataUrl};
+  const duration = g('f_hrReqDuration');
+  if(!duration){ alert('Choose the Duration: Full Day or a Half Day.'); return; }
+  const half = /^Half/.test(duration);
+  if(half && from !== to){ alert('A half day is for one date. Make the Start Date and End Date the same, or choose Full Day.'); return; }
+  const session = half ? (/Second/.test(duration) ? 'Second Half' : 'First Half') : '';
+  const delegated = g('f_hrReqDelegated');
+  if(!delegated){ alert('Answer "Have you Delegate your Pending Task?"'); return; }
+  let handoverTo = '', delegateEmail = '', tasks = [];
+  if(delegated === 'Yes'){
+    handoverTo = g('f_hrReqHandover');
+    delegateEmail = g('f_hrReqDelEmail').trim();
+    tasks = [1, 2, 3].map(n=>g('f_hrReqTask' + n).trim());
+    if(!handoverTo){ alert('Choose who you delegated your pending tasks to (To Whom?).'); return; }
+    if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(delegateEmail)){ alert('Enter a valid Delegated Person Email.'); return; }
+    const gap = tasks.findIndex(x=>!x);
+    if(gap >= 0){ alert('Fill in Delegated Task #' + (gap + 1) + '.'); return; }
   }
-  const declared = document.getElementById('f_hrReqDeclare');
-  if(declared && !declared.checked){ alert('Tick the confirmation at the bottom of the form.'); return; }
   const approver = hrApproverFor(u.id);
   if(!approver){ alert('There is nobody on file to approve this.'); return; }
   const clash = (DB.hrLeave || []).find(l=>l && l.userId === u.id && l.status !== 'Rejected' && l.status !== 'Declined'
@@ -80678,11 +80687,10 @@ async function hrSubmitLeaveRequest(){
   const now = new Date().toISOString();
   /* The unit is written onto the request, not looked up later: what
      this person asked for is what the firm's list said at the time. */
-  const row = {id: uid('HRL'), userId: u.id, from, to, type, unit: hrLeaveTypeUnit(type), reason,
+  const row = {id: uid('HRL'), userId: u.id, from, to, type, unit: half ? 'half' : hrLeaveTypeUnit(type), reason,
     status: 'Pending', approverId: approver.id, approverWhy: approver.why,
     requestedAt: now, requestedBy: u.id, at: now,
-    session, contactNumber: contact, addressDuringLeave: g('f_hrReqAddress').trim(),
-    handoverTo: g('f_hrReqHandover'), handoverNotes: g('f_hrReqHandNotes').trim(), attachment,
+    duration, session, delegated, handoverTo, delegateEmail, delegatedTasks: tasks,
     employee: hrLeaveEmployee(u)};
   DB.hrLeave = (Array.isArray(DB.hrLeave) ? DB.hrLeave : []).concat([row]);
   await save('hrLeave');
@@ -80750,17 +80758,17 @@ function hrOpenLeaveDecision(id, approving){
 /* The rest of what the form asked, for whoever decides it. Rows from
    before the form asked them simply have nothing to show. */
 function hrLeaveExtraHtml(row){
-  const e = row.employee || {};
   const kv = (k, v) => v ? `<div style="padding:3px 0;font-size:13px"><span style="color:var(--muted)">${esc(k)}:</span> <b>${v}</b></div>` : '';
+  const tasks = (row.delegatedTasks || []).filter(Boolean);
   const html = [
-    kv('Employee ID', esc(e.employeeId || '')), kv('Department', esc(e.department || '')), kv('Designation', esc(e.designation || '')),
-    kv('Session', esc(row.session || '')), kv('Contact during leave', esc(row.contactNumber || '')),
-    kv('Address during leave', esc(row.addressDuringLeave || '')),
-    kv('Work handed over to', esc(row.handoverTo ? teamName(row.handoverTo) : '')), kv('Handover notes', esc(row.handoverNotes || '')),
-    kv('Supporting document', row.attachment && row.attachment.dataUrl
-      ? `<a href="${esc(row.attachment.dataUrl)}" download="${esc(row.attachment.name || 'document')}">${esc(row.attachment.name || 'Download')}</a>` : ''),
+    kv('Duration', esc(row.duration || '')),
+    kv('Delegated pending tasks', esc(row.delegated || '')),
+    kv('To whom', esc(row.handoverTo ? teamName(row.handoverTo) : '')),
+    kv('Delegated person email', esc(row.delegateEmail || '')),
   ].join('');
-  return html ? `<div class="field-grid" style="--fg-gap:24px;gap:0 24px;margin-top:6px">${html}</div>` : '';
+  const list = tasks.length ? `<div style="padding:3px 0;font-size:13px"><span style="color:var(--muted)">Delegated tasks:</span>
+    <ol style="margin:2px 0 0;padding-left:20px">${tasks.map(x=>`<li>${esc(x)}</li>`).join('')}</ol></div>` : '';
+  return html || list ? `<div class="field-grid" style="--fg-gap:24px;gap:0 24px;margin-top:6px">${html}</div>${list}` : '';
 }
 async function hrDecideLeave(id, approved){
   const row = (DB.hrLeave || []).find(l=>l && l.id === id);
@@ -80789,6 +80797,13 @@ async function hrDecideLeave(id, approved){
     body: fmtDate(row.from) + ' to ' + fmtDate(row.to || row.from)
       + (row.remarks ? ' \u2014 "' + row.remarks.slice(0, 120) + '"' : ''),
     view: 'hrattendance', kind: 'hr-leave-decided'});
+  if(approved && row.handoverTo && (row.delegatedTasks || []).some(Boolean)){
+    await notifyUser(row.handoverTo, {
+      title: (teamName(row.userId) || 'A colleague') + ' has delegated tasks to you',
+      body: 'While they are on leave, ' + fmtDate(row.from) + ' to ' + fmtDate(row.to || row.from) + ': '
+        + row.delegatedTasks.filter(Boolean).join('; ').slice(0, 200),
+      view: 'hrattendance', kind: 'hr-leave-delegated'});
+  }
   const sent = await hrMailLeaveDecision(row);
   closeModal();
   render();
