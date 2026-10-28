@@ -2430,6 +2430,25 @@ select.fx-in{appearance:none;-webkit-appearance:none;padding-right:40px;
 .dl-report-main{flex:1 1 320px;min-width:0}
 .dl-report-t{font-size:15px;font-weight:800;color:var(--navy-ink)}
 .dl-report .btn{flex:0 0 auto}
+/* The client's approved page: mark on the left, a rule, then the tick and
+   the thank-you beside it. Stacks on a phone. */
+.bp-approved-head{display:flex;align-items:center;gap:26px;padding:24px 28px;background:#fff;
+  border-bottom:1px solid var(--line)}
+.bp-approved-brand{flex:0 0 auto;padding-right:26px;border-right:1px solid var(--line)}
+.bp-approved-brand .brand-logo{max-height:96px;width:auto;display:block}
+.bp-approved-brand .brand-mark{font-size:22px;color:var(--navy)}
+.bp-approved-msg{display:flex;align-items:center;gap:20px;flex:1 1 auto;min-width:0}
+.bp-approved-tick{flex:0 0 auto;width:68px;height:68px;border-radius:50%;display:flex;align-items:center;
+  justify-content:center;font-size:34px;font-weight:800;color:var(--ok);
+  background:color-mix(in srgb, var(--ok) 12%, #fff);box-shadow:0 0 0 6px color-mix(in srgb, var(--ok) 6%, #fff)}
+.bp-approved-t{font-size:24px;font-weight:800;color:var(--navy-ink)}
+.bp-approved-s{margin-top:6px;color:var(--muted);font-size:15px;line-height:1.5}
+@media (max-width:640px){
+  .bp-approved-head{flex-direction:column;align-items:flex-start;gap:16px;padding:18px 14px}
+  .bp-approved-brand{border-right:0;padding-right:0}
+  .bp-approved-tick{width:52px;height:52px;font-size:26px}
+  .bp-approved-t{font-size:19px}
+}
 /* A numbered part of the client's own page. It is deliberately heavier than
    a section title: the client is reading a document somebody sent them, and
    needs to see where one part ends and the next begins. */
@@ -7796,7 +7815,10 @@ function readFormAnswers(fields){
       out[f.k] = picked;
     } else if(f.t==='table'){
       const cols = f.cols && f.cols.length ? f.cols : [{k:'c1'}];
-      const rows = Math.max(1, Number(f.rows)||5);
+      /* Every row on the page, including the ones added with "+ Add" —
+         reading only the starting number of rows dropped every goal added
+         after the first, silently, on save. */
+      const rows = Math.max(1, Number(f.rows)||5, Number(f.maxRows)||0, Number(formTableRows[f.k])||0);
       const list = [];
       for(let r=0;r<rows;r++){
         const row = {}; let any = false;
@@ -9965,6 +9987,10 @@ const BLUEPRINT_CMS = {
     // client on a workflow that does not exist yet.
     {id:'toBoth', from:'clientCreated', to:'cifStage', label:'Both', kind:'forward'},
     {id:'toInsurance', from:'clientCreated', to:'insurancePending', label:'Insurance', kind:'forward', color:'warn'},
+    // A client parked on Insurance by mistake, or who has since decided on
+    // investment as well, goes back to the choice — everything already on
+    // the client stays, and only the route picked next is walked.
+    {id:'insuranceBackT', from:'insurancePending', to:'clientCreated', label:'← Back — Change Product Category', kind:'back'},
     {id:'backToCreated', from:'cifStage', to:'clientCreated', label:'Back', kind:'back'},
     // Stage 2 — Send CIF to Client, then wait for it to come back. The client
     // sits at "Awaiting for CIF" until they submit the form, at which point
@@ -10277,8 +10303,20 @@ setRequiresFields(BLUEPRINT_LMS.transitions, 'fwd_clientCategoryAdded', ['client
 /* Admins can rename/insert/delete stages at runtime (see Settings > Stage
    Management). DB.config.blueprints[module] holds the live, edited copy;
    BLUEPRINTS[module] above stays as the untouched factory default/template. */
+/* Ways back added to the factory journey after a firm may already hold its
+   own edited copy. They are offered on that copy too (not written into it),
+   so long as it still has both ends. */
+const BLUEPRINT_ADDED_TRANSITIONS = {CMS:['insuranceBackT']};
 function getBlueprint(module){
-  return (DB.config && DB.config.blueprints && DB.config.blueprints[module]) || BLUEPRINTS[module];
+  const own = DB.config && DB.config.blueprints && DB.config.blueprints[module];
+  if(!own) return BLUEPRINTS[module];
+  (BLUEPRINT_ADDED_TRANSITIONS[module]||[]).forEach(id=>{
+    if((own.transitions||[]).some(t=>t.id===id)) return;
+    const t = (BLUEPRINTS[module].transitions||[]).find(x=>x.id===id);
+    if(t && (own.states||[]).some(st=>st.id===t.from) && (own.states||[]).some(st=>st.id===t.to))
+      own.transitions = (own.transitions||[]).concat([Object.assign({}, t)]);
+  });
+  return own;
 }
 function ensureEditableBlueprint(module){
   if(!DB.config.blueprints[module]){
@@ -10633,6 +10671,114 @@ function transitionLabel(module, record, t){
 function planIsFinal(record){
   return planClientDecision(record) === 'Approved';
 }
+/* CHANGING A PLAN AFTER THE SENIOR HAS APPROVED IT.
+
+   An approved plan used to be shut to the adviser: the RM's half of the
+   sheet locked, the rates locked, and on Goal Based Planning the page let
+   you add a goal and then quietly dropped it. Now the adviser presses
+   "Edit approved plan" (or simply prepares the plan again) and the round
+   reopens for editing. What the senior approved is kept — who, when, the
+   note, and the figures as they stood — in round.approvalHistory, and the
+   round is marked as needing re-approval. The adviser sends the changes up,
+   the reporting manager approves them or sends them back, and every step is
+   on the round and in the audit trail. Once the client has consented the
+   plan is final and none of this applies. */
+function planReopened(round){ return !!(round && round.reopenedAt); }
+function planFigures(round){
+  const o = (round && round.output) || {}, sm = o.summary || {};
+  return {lumpsum: Math.round(Number(sm.lumpsumTotal || o.lumpsumTotal || 0)), sip: Math.round(Number(sm.sipTotal || o.sipTotal || 0)),
+    allocatable: Math.round(Number((round && round.allocation && round.allocation.allocatable) || o.allocatable || 0))};
+}
+function planReopenRound(round, why){
+  round.approvalHistory = Array.isArray(round.approvalHistory) ? round.approvalHistory : [];
+  round.approvalHistory.push({kind: 'approved', status: round.seniorStatus, by: round.seniorBy || '', at: round.seniorAt || '',
+    note: round.seniorNote || '', figures: planFigures(round)});
+  round.reopenedAt = new Date().toISOString();
+  round.reopenedBy = currentUser || '';
+  round.reopenWhy = why || '';
+  round.reapproval = 'Required';
+}
+async function planEditApproved(recordId){
+  const record = planRecordOf(recordId); if(!record) return;
+  const round = latestPlanRound(record);
+  if(!round || round.seniorStatus !== 'Approved'){ alert('This plan has not been approved yet, so it is already open to edit.'); return; }
+  if(planIsFinal(record)){ alert('The client has consented to this plan, so it is final. A change now is a new version: the client chooses Modify on their link, or the plan is modified from the lead.'); return; }
+  if(!can('LMS', 'edit')){ alert('Editing a plan is not yours to do.'); return; }
+  if(planReopened(round)) return;
+  if(!confirm('Edit the approved plan?\n\nThe approval stays on record, and the changes go back to the reporting manager for re-approval.')) return;
+  planReopenRound(round, 'Edited after approval');
+  await save(planStoreOf(record));
+  await logAudit('LMS', record.id, 'Approved Plan Reopened for Editing', [
+    {field:'Version', oldValue:'', newValue: String(round.n)}, {field:'By', oldValue:'', newValue: teamName(currentUser)}]);
+  render();
+}
+async function planSendReapproval(recordId){
+  const record = planRecordOf(recordId); if(!record) return;
+  const round = latestPlanRound(record);
+  if(!round || !planReopened(round)) return;
+  round.reapproval = 'Pending';
+  round.reapprovalSentAt = new Date().toISOString();
+  round.reapprovalSentBy = currentUser || '';
+  await save(planStoreOf(record));
+  await logAudit('LMS', record.id, 'Plan Changes Sent for Re-approval', [{field:'Version', oldValue:'', newValue: String(round.n)}]);
+  const to = planApprover(record) || (DB.team || []).find(t=>t && t.id !== currentUser && isAdmin(t) && isMemberActive(t));
+  if(to) await notifyUser(to.id, {title: 'Plan changes to re-approve — ' + planOwnerName(record),
+    body: (teamName(currentUser) || 'The adviser') + ' changed the approved plan (version ' + round.n + ') and has sent it for re-approval.',
+    view: 'lms', id: record.id, kind: 'plan-reapproval'});
+  render();
+}
+async function planDecideReapproval(recordId, approved){
+  const record = planRecordOf(recordId); if(!record) return;
+  const round = latestPlanRound(record);
+  if(!round || round.reapproval !== 'Pending') return;
+  if(!canApprovePlan(record)){ alert('These changes are the reporting manager’s to approve.'); return; }
+  const note = approved ? '' : (prompt('Why are these changes being sent back?') || '').trim();
+  if(!approved && !note){ alert('Say why, so the adviser knows what to rework.'); return; }
+  round.approvalHistory = Array.isArray(round.approvalHistory) ? round.approvalHistory : [];
+  round.approvalHistory.push({kind: approved ? 're-approved' : 'changes sent back', by: currentUser, at: new Date().toISOString(),
+    note, figures: planFigures(round)});
+  if(approved){
+    round.reapproval = 'Approved';
+    round.seniorBy = currentUser; round.seniorAt = new Date().toISOString();
+    delete round.reopenedAt;
+  } else round.reapproval = 'Declined';
+  await save(planStoreOf(record));
+  await logAudit('LMS', record.id, approved ? 'Plan Changes Re-approved' : 'Plan Changes Sent Back',
+    [{field:'Version', oldValue:'', newValue: String(round.n)}].concat(note ? [{field:'Note', oldValue:'', newValue: note}] : []));
+  if(record.assignedTo && record.assignedTo !== currentUser) await notifyUser(record.assignedTo, {
+    title: approved ? 'Plan changes re-approved' : 'Plan changes sent back', body: planOwnerName(record) + (note ? ' — ' + note : ''),
+    view: 'lms', id: record.id, kind: 'plan-reapproval'});
+  render();
+}
+function planReapprovalHtml(recId){
+  const record = recId && planRecordOf(recId);
+  const round = record && latestPlanRound(record);
+  if(!round || !round.output || planIsFinal(record)) return '';
+  const last = (round.approvalHistory || []).filter(h=>h.kind === 'approved' || h.kind === 're-approved').slice(-1)[0];
+  const f = planFigures(round), was = last && last.figures;
+  const diff = was && (was.lumpsum !== f.lumpsum || was.sip !== f.sip)
+    ? ` Approved figures: one-time ${money(was.lumpsum)}, monthly ${money(was.sip)} — now one-time ${money(f.lumpsum)}, monthly ${money(f.sip)}.` : '';
+  if(round.seniorStatus === 'Approved' && !planReopened(round)){
+    const re = round.reapproval === 'Approved' ? ` Changes re-approved by ${esc(teamName(round.seniorBy))} on ${esc(fmtDate(round.seniorAt))}.` : '';
+    return can('LMS', 'edit') ? `<div class="small-note plan-reappr" style="margin:10px 0 0">Approved by the reporting manager.${re}
+      <button class="btn sm" onclick="planEditApproved('${esc(record.id)}')">✎ Edit approved plan</button></div>` : '';
+  }
+  if(!planReopened(round)) return '';
+  const st = round.reapproval || 'Required';
+  const tone = st === 'Pending' ? 'warn' : st === 'Declined' ? 'danger' : 'info';
+  const label = {Required: 'Changed after approval — needs re-approval', Pending: 'Changes are with the reporting manager',
+    Declined: 'Changes sent back — rework and send again'}[st] || st;
+  const back = (round.approvalHistory || []).slice(-1)[0];
+  return `<div class="card plan-reappr" style="margin:12px 0 0;border-left:3px solid var(--${tone === 'info' ? 'info' : tone})">
+    <div class="row" style="gap:8px;flex-wrap:wrap;align-items:center"><span class="badge ${tone}">${esc(label)}</span>
+      ${st !== 'Pending' && can('LMS', 'edit') ? `<button class="btn sm primary" onclick="planSendReapproval('${esc(record.id)}')">Send changes for re-approval</button>` : ''}
+      ${st === 'Pending' && canApprovePlan(record) ? `<button class="btn sm" style="background:var(--ok);border-color:var(--ok);color:#fff" onclick="planDecideReapproval('${esc(record.id)}', true)">Approve changes</button>
+        <button class="btn sm" onclick="planDecideReapproval('${esc(record.id)}', false)">Send back</button>` : ''}</div>
+    <div class="small-note" style="margin:6px 0 0">The plan was approved${last && last.by ? ' by ' + esc(teamName(last.by)) : ''}${last && last.at ? ' on ' + esc(fmtDate(last.at)) : ''}
+      and reopened ${esc(fmtDate(round.reopenedAt))} by ${esc(teamName(round.reopenedBy))}. Edit it here; the approval history is kept.${esc(diff)}
+      ${st === 'Declined' && back && back.note ? '<br>Sent back: “' + esc(back.note) + '”' : ''}</div>
+  </div>`;
+}
 const PLAN_REWIND_TARGETS = ['fbpPreparation','dataGatheringSent','planInputSubmitted','planPrepared'];
 function planStepLocked(module, record, t){
   if(module!=='LMS' || !t || t.kind!=='back') return false;
@@ -10941,14 +11087,100 @@ function planApprovedPanelHtml(record, editable){
       <button class="btn sm ghost" onclick="openPlanBlueprint('${record.id}')">Open the plan</button></div>`:''}
   </div>`;
 }
+/* AFTER THE CLIENT DECLINES CONSENT.
+
+   Consent Declined → Modification in Progress → Pending Client Consent →
+   Consent Approved, round after round. "Modify Plan" opens a new version
+   carrying everything the declined one held, so the adviser changes what
+   the client asked about and nothing else; "Resubmit for Consent" sends
+   that version on a link of its own. Every earlier version, and what the
+   client said about it, stays on the record. */
+function planConsentStatus(round){
+  if(!round) return '';
+  if(round.clientDecision === 'Approved') return 'Consent Approved';
+  if(round.clientDecision === 'Modify') return 'Consent Declined';
+  if(round.revisionOf && !round.docToken) return 'Modification in Progress';
+  if(round.docToken) return 'Pending Client Consent';
+  return '';
+}
+async function planModifyAfterDecline(leadId){
+  const lead = DB.leads.find(l=>l.id===leadId); if(!lead) return;
+  const old = latestPlanRound(lead);
+  if(!old || old.clientDecision !== 'Modify'){ openPlanBlueprint(leadId); return; }
+  if(!can('LMS', 'edit')){ alert('Modifying a plan is not yours to do.'); return; }
+  const copy = JSON.parse(JSON.stringify(old));
+  ['docToken', 'clientDecision', 'clientAt', 'clientRemarks', 'clientApprovalId', 'disclosureAckAt', 'disclosureAckPoints',
+   'sentToClientAt', 'sentForApprovalAt', 'seniorStatus', 'seniorBy', 'seniorAt', 'seniorNote', 'approvalNote',
+   'reopenedAt', 'reopenedBy', 'reapproval', 'consentStatus'].forEach(k=>{ delete copy[k]; });
+  const now = new Date().toISOString();
+  const round = Object.assign(copy, {n: planRoundsOf(lead).length + 1, revisionOf: old.n, createdAt: now,
+    modifiedFor: old.clientRemarks || '', consentStatus: 'Modification in Progress'});
+  lead.planRounds = planRoundsOf(lead).concat([round]);
+  old.consentStatus = 'Consent Declined';
+  await save('leads');
+  await logAudit('LMS', lead.id, 'Plan Modification Started', [
+    {field:'Declined version', oldValue:'', newValue: String(old.n)}, {field:'New version', oldValue:'', newValue: String(round.n)},
+    {field:'Client asked', oldValue:'', newValue: old.clientRemarks || '—'}]);
+  openPlanBlueprint(lead.id);
+}
+async function planResubmitForConsent(leadId){
+  const lead = DB.leads.find(l=>l.id===leadId); if(!lead) return;
+  const round = latestPlanRound(lead);
+  if(!round || !round.revisionOf || round.docToken){ alert('There is no modified version waiting to be sent.'); return; }
+  if(!round.output){ alert('Prepare the modified plan first.'); return; }
+  if(!lead.email){ alert('There is no email address on this lead to send it to.'); return; }
+  if(!confirm('Send version ' + round.n + ' to ' + lead.email + ' for consent?')) return;
+  round.docToken = await createDocLink(lead.id, 'BLUEPRINT', {planRound: round.n});
+  lead.blueprintDocToken = round.docToken;
+  round.sentToClientAt = new Date().toISOString();
+  round.consentStatus = 'Pending Client Consent';
+  await save('leads');
+  const who = leadName(lead.id), link = docUrl(round.docToken);
+  const result = await deliverMail({template: 'momPlanResend', to: lead.email,
+    subject: 'Your revised Freedom Blueprint — Execution Plan for your consent',
+    body: 'Dear ' + who + ',\n\nThank you for telling us what you wanted changed. We have revised your plan'
+      + (round.modifiedFor ? ' (you asked: “' + round.modifiedFor + '”)' : '') + '.\n\nYour revised Final Execution Plan\n' + link
+      + '\n\nOpen it to review the plan and the disclosure, and tell us there whether you approve it or would like further changes.\n\n'
+      + teamName(currentUser) + '\n' + ((DB.config.company || {}).name || ''),
+    module: 'LMS', recordId: lead.id, label: 'Revised plan for consent', leadId: lead.id});
+  await logAudit('LMS', lead.id, 'Modified Plan Resubmitted for Consent', [
+    {field:'Version', oldValue:'', newValue: String(round.n)}, {field:'To', oldValue:'', newValue: lead.email}]);
+  render();
+  const problem = mailResultNote(result, 'The revised plan');
+  alert(problem ? problem + '\n\nThe link is live either way:\n\n' + link : 'Sent to ' + lead.email + '.');
+}
+function planConsentHistoryHtml(record){
+  const rs = planRoundsOf(record).filter(r=>r.docToken || r.revisionOf);
+  if(rs.length < 2) return '';
+  return `<div class="small-note" style="margin:8px 0 0">${rs.map(r=>`v${r.n}: <b>${esc(planConsentStatus(r))}</b>${r.clientRemarks ? ' — “' + esc(r.clientRemarks) + '”' : ''}`).join(' · ')}</div>`;
+}
 function awaitingClientPlanPanelHtml(record, editable){
   const round = latestPlanRound(record);
+  if(round && round.clientDecision === 'Modify') return `<div class="stage-panel">
+    ${planStageHeadHtml(record, 'Consent Declined', `<span class="badge danger">The client asked for changes</span>`)}
+    <div class="small-note" style="margin:0">${round.clientAt ? esc(fmtDate(round.clientAt)) + ' — ' : ''}${round.clientRemarks ? '“' + esc(round.clientRemarks) + '”' : 'No reason given.'}</div>
+    <div class="small-note" style="margin:6px 0 0">Modify the plan as a new version, then resubmit it for their consent. The declined version stays on record.</div>
+    ${planConsentHistoryHtml(record)}
+    ${editable ? `<div class="row" style="gap:8px;margin-top:10px">
+      <button class="btn sm primary" onclick="planModifyAfterDecline('${esc(record.id)}')">✎ Modify Plan</button>
+      <button class="btn sm ghost" onclick="planRestartFromInput('${esc(record.id)}')">Start again from the Input Form</button></div>` : ''}
+  </div>`;
+  if(round && round.revisionOf && !round.docToken) return `<div class="stage-panel">
+    ${planStageHeadHtml(record, 'Modification in Progress', `<span class="badge warn">Not sent yet</span>`)}
+    <div class="small-note" style="margin:0">Version ${round.n} is the revision of version ${round.revisionOf}${round.modifiedFor ? ', for: “' + esc(round.modifiedFor) + '”' : ''}.
+      Change the plan, then resubmit it — the client gets it on a new link.</div>
+    ${planConsentHistoryHtml(record)}
+    ${editable ? `<div class="row" style="gap:8px;margin-top:10px">
+      <button class="btn sm ghost" onclick="openPlanBlueprint('${esc(record.id)}')">Open the plan</button>
+      <button class="btn sm primary" onclick="planResubmitForConsent('${esc(record.id)}')">Resubmit for Consent</button></div>` : ''}
+  </div>`;
   if(!round || !round.docToken) return '';
   if(round.clientDecision==='Approved') return `<div class="stage-panel">
     ${planStageHeadHtml(record, 'The client has approved the plan', planRoundBadgeHtml(round))}
     <div class="small-note" style="margin:0">The DBT was raised from version ${round.n} the moment they approved it.</div></div>`;
   return `<div class="stage-panel">
-    ${planStageHeadHtml(record, 'Waiting for the client', `<span class="badge warn">Approve / Modify not answered</span>`)}
+    ${planStageHeadHtml(record, round.revisionOf ? 'Pending Client Consent' : 'Waiting for the client', `<span class="badge warn">Approve / Modify not answered</span>`)}
+    ${round.revisionOf ? `<div class="small-note" style="margin:0 0 6px">The revised version ${round.n} went to the client${round.sentToClientAt ? ' on ' + esc(fmtDate(round.sentToClientAt)) : ''}.</div>${planConsentHistoryHtml(record)}` : ''}
     <div class="small-note" style="margin:0">The minutes went out with the Final Execution Plan on their own link — one request, for both.
       Approve writes the DBT from the version they agreed to and moves this on; Modify sends it back to the Input Form and the next round begins.</div>
     ${clientLinkNote('The minutes and the plan went to the client', round.sentToClientAt)}
@@ -15875,7 +16107,7 @@ function planFootBarHtml(o){
   const isLead = !!DB.leads.find(l=>l.id===recId);
   const mod = isLead ? 'lms' : 'cms';
   const out = (o.save? o.save+' ' : '') + `navigate('${mod}','${esc(recId)}')`;
-  return `<div class="se-stepbar">
+  return `${planReapprovalHtml(recId)}<div class="se-stepbar">
     <button class="btn ghost" onclick="${out}">${mod.toUpperCase()}</button>
     ${o.back? `<button class="btn ghost" onclick="${o.back}">← ${esc(o.backLabel||'Back')}</button>` : ''}
     ${o.extra||''}
@@ -15926,7 +16158,7 @@ function seStepWhy(step, record, round){
 function seRmLocked(record, round){
   if(!round) return false;
   if(planIsFinal(record)) return true;
-  if(round.seniorStatus==='Declined') return false;
+  if(round.seniorStatus==='Declined' || planReopened(round)) return false;
   return !!(round.sentForApprovalAt || round.seniorStatus==='Approved');
 }
 /* The Execution Plan is the exception to that lock. The meeting it is
@@ -20139,7 +20371,7 @@ function fslExecLocked(record, round){
 function fslRmLocked(record, round){
   if(!round) return false;
   if(planIsFinal(record)) return true;
-  if(round.seniorStatus==='Declined') return false;
+  if(round.seniorStatus==='Declined' || planReopened(round)) return false;
   return !!(round.sentForApprovalAt || round.seniorStatus==='Approved');
 }
 /* Submitting on the client's behalf — what happens when the family
@@ -23789,7 +24021,7 @@ function gabStepWhy(step, record, round){
 function gabRmLocked(record, round){
   if(!round) return false;
   if(planIsFinal(record)) return true;
-  if(round.seniorStatus==='Declined') return false;
+  if(round.seniorStatus==='Declined' || planReopened(round)) return false;
   return !!(round.sentForApprovalAt || round.seniorStatus==='Approved');
 }
 async function gabSubmitForClient(recordId){
@@ -24547,6 +24779,8 @@ function canApprovePlan(record){
 async function recomputePlan(record){
   const type = planTypeOf(record);
   const round = ensurePlanRound(record, type);
+  if(round && round.output && round.seniorStatus === 'Approved' && !planReopened(round) && !planIsFinal(record))
+    planReopenRound(round, 'The plan was prepared again after it was approved');
   const answers = planAnswers(record, type);
   const output = computePlan(type, answers);
   if(!output) return null;
@@ -25359,7 +25593,7 @@ function planRatesAreOpen(record, round){
   if(!record || !round || !round.output) return false;
   if(!DB.leads.some(l=>l.id === record.id)) return false;
   if(!can('LMS','edit') || planIsFinal(record)) return false;
-  if(round.seniorStatus === 'Declined') return true;
+  if(round.seniorStatus === 'Declined' || planReopened(round)) return true;
   return !round.sentForApprovalAt && round.seniorStatus !== 'Approved';
 }
 function planDocumentHtml(record, round, opts){
@@ -28870,6 +29104,14 @@ async function handleBlueprintSideEffect(module, record, transition){
       record.productCategory='Both'; await save('clients');
       await logAudit('CMS', record.id, 'Investment and Insurance Selected',
         [{field:'note', oldValue:'', newValue:'Onboarding runs the investment route; the insurance business is tracked on the DBT against this client.'}]);
+    }
+    if(id==='insuranceBackT'){
+      const was = record.productCategory || 'Insurance';
+      record.productCategoryHistory = (record.productCategoryHistory||[]).concat([{from: was, at: new Date().toISOString(), by: currentUser}]);
+      delete record.productCategory; await save('clients');
+      await logAudit('CMS', record.id, 'Product Category Selection Reopened',
+        [{field:'Product Category', oldValue: was, newValue:'to be chosen again'},
+         {field:'note', oldValue:'', newValue:'Back from the Insurance stage. The client\'s details and documents are kept.'}]);
     }
     if(id==='toInsurance'){
       record.productCategory='Insurance'; await save('clients');
@@ -33145,6 +33387,7 @@ function complianceFooterHtml(){
 let systemResetting = false;   // set by a reset; nothing may write after it
 async function save(part){
   if(systemResetting) return;  // the wipe writes through sset directly
+  if(part === 'tasks') dstStampAssignments();
   const wrote = await sset(part, DB[part]);
   if(wrote === false) return false;
   /* The one place in BOSS that can tell a record it has never seen from one
@@ -33663,6 +33906,7 @@ function recordOpenToMe(module, id){
   if(!can(d.perm, 'view')) return false;
   const rec = typeof id === 'object' ? id : d.find(id);
   if(!rec) return true;   // nothing there to protect; the page says "not found"
+  if(module === 'DST' && dstVisible([Object.assign({}, rec, {deletedAt: null})]).length) return true;
   return inMyScope(rec, d.owner, d.branch);
 }
 /* Opening the editor is opening the record, so the door stands in front of
@@ -38025,7 +38269,7 @@ function fieldInput(f, val){
   } else if(f.t==='team'){
     // Deactivated members drop out of every assignment picker, but a record that already
     // points at one keeps showing them — reassigning is a decision, never a silent side effect.
-    const pickable = DB.team.filter(t=>isMemberActive(t) || t.id===val);
+    const pickable = DB.team.filter(t=>(isMemberActive(t) && (!f.only || f.only(t))) || t.id===val);
     control = pickFieldHtml('f_'+f.k, pickable.map(t=>({value:t.id,
         label: teamName(t.id) + (isMemberActive(t) ? '' : ' (inactive)')})), val, 'Select\u2026', 'the team', null, {always:true});
   } else if(f.t==='multidept' || f.t==='multiteam'){
@@ -38924,7 +39168,7 @@ function timelineEntries(module, recordId, blueprintHistory, opts){
       DB.leads.filter(l=>l.assignedTo===uidv && !l.deletedAt).map(l=>({at:l.createdAt, kind:'lead', title:'Lead Assigned: '+((l.firstName||'')+' '+(l.lastName||'')).trim(), by:l.createdBy, detail:'Source: '+(l.source||'—')})),
       DB.clients.filter(c=>c.rmName===uidv && !c.deletedAt).map(c=>({at:c.createdAt, kind:'client', title:'Client Assigned: '+(c.cmsName||''), by:undefined, detail:'KYC: '+(c.kycStatus||'—')})),
       DB.tasks.filter(t=>t.assignTo===uidv && !t.parentTaskId && !t.deletedAt).map(t=>({at:t.createdAt||t.assignedDate, kind:'task', title:'Task: '+(t.taskType||'Task'), by:t.createdBy, detail:'Status: '+(t.overallStatus||'—')})),
-      DB.tasks.filter(t=>t.assignTo===uidv && !t.parentTaskId && t.completedAt).map(t=>({at:t.completedAt, kind:'task', title:'Task Completed: '+(t.taskType||'Task'), by:uidv, detail:t.qualityStatus? 'Quality: '+t.qualityStatus : ''})),
+      DB.tasks.filter(t=>(t.completedBy || t.assignTo)===uidv && !t.parentTaskId && t.completedAt).map(t=>({at:t.completedAt, kind:'task', title:'Task Completed: '+(t.taskType||'Task'), by:uidv, detail:t.qualityStatus? 'Quality: '+t.qualityStatus : ''})),
       DB.meetings.filter(m=>(m.assignTo||m.createdBy)===uidv && !m.deletedAt).map(m=>({at:m.createdAt||m.scheduledDate, kind:'meeting', title:'Meeting: '+(m.subject||m.meetingType||'Meeting'), by:m.createdBy, detail:'Status: '+(m.status||'—')})),
       dbtBusinessOnly(DB.businessEntries.filter(b=>b.createdBy===uidv && !b.deletedAt)).map(b=>({at:b.createdAt, kind:'business', title:'Business Recorded: '+(b.productCategory||'')+' — '+money(numVal(b.amount)), by:uidv, detail:'Status: '+(b.status||'—')})),
       txnBusinessOnly(DB.transactions.filter(t=>t.createdBy===uidv && !t.deletedAt)).map(t=>({at:t.initiatedDate||t.createdAt, kind:'transaction', title:'Transaction: '+(t.transactionType||'Txn')+' — '+money(numVal(t.amount)), by:uidv, detail:'Status: '+(t.status||'—')}))
@@ -42986,8 +43230,10 @@ function viewTaskForm(arg){
       <div class="section-title" style="margin-top:0">DST Information</div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:0 32px">
         <div>
-          ${fieldInput(f('assignTo'), isEdit? t.assignTo : val('assignTo'))}
+          ${fieldInput(Object.assign({}, f('assignTo'), {only: dstMayAssignTo}), isEdit? t.assignTo : val('assignTo'))}
+          ${dstAssignNote()}
           ${fieldInput(f('assignedDate'), isEdit? t.assignedDate : val('assignedDate'))}
+          <input type="hidden" id="dstAssignedWas" value="${esc(isEdit ? (t.assignedDate || '') : '')}">
           ${fieldInput(f('dueDate'), isEdit? t.dueDate : val('dueDate'))}
           <div class="field"><label>Total Days to Complete</label><input type="text" value="${daysToCompleteDisplay(t)}" disabled></div>
           ${fieldInput(f('leadId'), isEdit? t.leadId : val('leadId'))}
@@ -43049,10 +43295,107 @@ function dstDueProblem(assigned, due){
 function dstDateCheck(){
   const a = document.getElementById('f_assignedDate'), d = document.getElementById('f_dueDate');
   if(!a || !d) return '';
+  const was = (document.getElementById('dstAssignedWas') || {}).value || '';
+  if(document.getElementById('dstAssignedWas')){
+    a.min = was && was < dstToday() ? was : dstToday();
+    showFieldError(a, dstAssignedDateProblem(a.value, was));
+  }
   d.min = a.value || DATE_BOUND_MIN;
   const msg = dstDueProblem(a.value, d.value);
   showFieldError(d, msg);
   return msg;
+}
+/* NO WORK GIVEN FOR A DAY ALREADY GONE.
+
+   A new task's Assigned Date is today or later; the calendar does not
+   offer the days before. An existing task keeps the date it was given,
+   however old, but moving it means moving it to today or later. The
+   server holds the same rule for saves from this form. */
+const DST_PAST_MSG = 'Assigned Date cannot be in the past. Please select today or a later date.';
+function dstToday(){ return hrDateKey(new Date()); }
+function dstAssignedDateProblem(value, was){
+  if(!value || value === was) return '';
+  return String(value) < dstToday() ? DST_PAST_MSG : '';
+}
+/* WHO A TASK MAY BE GIVEN TO.
+
+   Your own level of the reporting line and below it — your team and
+   colleagues at your level — never upwards. Level is depth in the
+   reporting tree, the measure the people screens already use. An
+   administrator, or whoever administers users, may give work to anybody.
+   The picker offers only these people and the server refuses the rest. */
+const DST_ASSIGN_MSG = 'You can assign or reassign a task only to people at your own level or below you in the reporting line.';
+function dstMayAssignTo(t){
+  const id = typeof t === 'string' ? t : (t && t.id);
+  const u = me();
+  if(!id || !u || id === u.id || maySeeEveryLevel()) return true;
+  const d = memberDepths();
+  return memberDepth(id, d) >= memberDepth(u.id, d);
+}
+function dstAssignNote(){
+  return maySeeEveryLevel() ? '' : `<div class="small-note" style="margin:-6px 0 10px">Only people at your level or below are listed.</div>`;
+}
+/* WHO GAVE IT, WHO HAD IT, WHO DID IT.
+
+   Stamped on every save of the tasks store, so it holds however a task
+   was assigned — the form, bulk assign, an automation or an owner change.
+   assignHistory keeps every hand-over (when, by whom, from whom, to whom)
+   and is only ever appended to; originalAssignee and assignedBy never
+   change once written. completedBy is the person holding the task when it
+   was completed, written once, so a task reassigned five times still
+   counts once and to the person who finished it. */
+function dstStampAssignments(){
+  const now = new Date().toISOString();
+  (DB.tasks || []).forEach(t=>{
+    if(!t || !t.id || t.deletedAt) return;
+    if(!Array.isArray(t.assignHistory) || !t.assignHistory.length){
+      if(!t.assignTo) return;
+      t.assignHistory = [{at: t.createdAt || now, by: t.createdBy || currentUser || '', from: '', to: t.assignTo}];
+    } else {
+      const last = t.assignHistory[t.assignHistory.length - 1].to;
+      if(t.assignTo && last !== t.assignTo) t.assignHistory.push({at: now, by: currentUser || '', from: last || '', to: t.assignTo});
+    }
+    if(!t.originalAssignee) t.originalAssignee = t.assignHistory[0].to;
+    if(!t.assignedBy) t.assignedBy = t.assignHistory[0].by || t.createdBy || '';
+    if(t.overallStatus === 'Completed'){
+      if(!t.completedBy){ t.completedBy = t.assignTo || currentUser || ''; t.completedMarkedBy = currentUser || ''; }
+      if(!t.completedAt) t.completedAt = now;
+    } else if(t.completedBy){ delete t.completedBy; delete t.completedMarkedBy; }
+  });
+}
+function dstPeopleOf(t){
+  const out = new Set();
+  [t.assignTo, t.createdBy, t.assignedBy, t.originalAssignee, t.completedBy].forEach(x=>{ if(x) out.add(x); });
+  (t.assignHistory || []).forEach(h=>{ [h.by, h.from, h.to].forEach(x=>{ if(x) out.add(x); }); });
+  return out;
+}
+/* A task stays visible to everyone who has given it or held it, on top
+   of whatever the person's own scope already shows. */
+function dstVisible(list){
+  const base = new Set(visibleFor(list, TASK_OWNER_FIELDS).map(t=>t.id));
+  const u = me();
+  const mine = new Set([currentUser]);
+  if(u && u.scope === 'team') userDescendants(u.id).forEach(x=>mine.add(x.id));
+  return list.filter(t=>t && !t.deletedAt && (base.has(t.id) || [...dstPeopleOf(t)].some(p=>mine.has(p))));
+}
+function dstReassigned(t){ return (t.assignHistory || []).filter(h=>h.from).length; }
+function dstAssignHistoryHtml(t){
+  const h = t.assignHistory || [];
+  if(!h.length) return '';
+  return `<div class="section-title">Assignment History</div>
+    <div class="card" style="padding:12px 14px">
+      <div class="field-grid" style="--fg-gap:24px;gap:2px 24px;margin-bottom:8px;font-size:13px">
+        <div><span style="color:var(--muted)">Assigned by:</span> <b>${esc(teamName(t.assignedBy || t.createdBy))}</b></div>
+        <div><span style="color:var(--muted)">Originally assigned to:</span> <b>${esc(teamName(t.originalAssignee || h[0].to))}</b></div>
+        <div><span style="color:var(--muted)">Current owner:</span> <b>${esc(teamName(t.assignTo))}</b> ${statusBadge(t.overallStatus)}</div>
+        ${t.completedBy ? `<div><span style="color:var(--muted)">Completed by:</span> <b>${esc(teamName(t.completedBy))}</b>${t.completedAt ? ' · ' + esc(fmtDate(t.completedAt)) : ''}</div>` : ''}
+      </div>
+      <div class="table-wrap"><table id="dstAssignHistory"><thead><tr><th>When</th><th>By</th><th>From</th><th>To</th></tr></thead><tbody>
+        ${h.map((x, i)=>`<tr><td>${esc(fmtDate(x.at))}</td><td>${esc(teamName(x.by))}</td>
+          <td>${x.from ? esc(teamName(x.from)) : `<span class="small-note" style="margin:0">${i ? '—' : 'First assigned'}</span>`}</td>
+          <td><b>${esc(teamName(x.to))}</b></td></tr>`).join('')}
+      </tbody></table></div>
+    </div>`;
 }
 if(typeof document !== 'undefined'){
   /* After the general date-box check, which clears a field's note once
@@ -43116,17 +43459,26 @@ async function saveTaskForm(arg, andNew){
   const data = readFields(fields);
   if(!validateRequired(fields, data)) return;
   if(dstDateCheck() || dstDueProblem(data.assignedDate, data.dueDate)){ alert(DST_DUE_MSG); return; }
+  const prior = isEdit ? (DB.tasks.find(t=>t.id===id) || {}) : {};
+  const dateWrong = dstAssignedDateProblem(data.assignedDate, prior.assignedDate);
+  if(dateWrong){ alert(dateWrong); return; }
+  if(data.assignTo && data.assignTo !== prior.assignTo && !dstMayAssignTo(data.assignTo)){ alert(DST_ASSIGN_MSG); return; }
+  ssetFormHeader = 'dst';
+  try { await saveTaskFormWrite(isEdit, id, data, fields, andNew); } finally { ssetFormHeader = ''; }
+}
+async function saveTaskFormWrite(isEdit, id, data, fields, andNew){
   if(isEdit){
     const idx = DB.tasks.findIndex(t=>t.id===id);
     const before = Object.assign({}, DB.tasks[idx]);
     const wasCompleted = DB.tasks[idx].overallStatus==='Completed';
     DB.tasks[idx] = Object.assign(DB.tasks[idx], data);
-    await save('tasks');
+    if(await save('tasks') === false){ DB.tasks[idx] = before; return; }
     await logAudit('DST', id, 'Edit', diffFields(before, DB.tasks[idx], fields));
     if(DB.tasks[idx].overallStatus==='Completed' && !wasCompleted) await onTaskCompleted(DB.tasks[idx]);
     navigate('dst', id);
     return;
   }
+  const tasksBefore = DB.tasks.slice();
   data.id = uid('DST');
   data.createdBy = currentUser;
   data.createdAt = new Date().toISOString();
@@ -43143,7 +43495,7 @@ async function saveTaskForm(arg, andNew){
   window._pendingSubTasks.filter(r=>r.desc && r.desc.trim()).forEach(r=>{
     DB.tasks.push({id:uid('DST'), taskType:data.taskType, parentTaskId:data.id, clientId:data.clientId, leadId:data.leadId, assignTo:data.assignTo, assignedDate:r.date, dueDate:r.date, urgencyLevel:data.urgencyLevel||'Medium', overallStatus:r.status||'Not Started', description:r.desc, createdBy:currentUser, createdAt:new Date().toISOString()});
   });
-  await save('tasks');
+  if(await save('tasks') === false){ DB.tasks = tasksBefore; return; }
   if(data.overallStatus==='Completed') await onTaskCompleted(data);
   window._pendingSubTasks = [];
   window._pendingTaskFields = {};
@@ -43296,6 +43648,7 @@ function viewTaskDetail(taskId){
       </tbody></table>
     </div>
     ${can('DST','create') ? `<button class="btn" style="color:var(--danger);border-color:var(--danger);margin-top:10px" onclick="openAddSubTaskModal('${t.id}')">Add row</button>` : ''}
+    ${dstAssignHistoryHtml(t)}
     ${dstDependencyHtml(t)}
     ${renderDSTTimeline(t.id)}
   `;
@@ -43403,7 +43756,7 @@ async function deleteSubTaskRow(parentTaskId, subId){
 async function saveAddSubTaskRow(parentTaskId){ return saveSubTaskRow(parentTaskId); }
 function viewDST(){
   window._dstFilterKind = window._dstFilterKind || 'all';
-  let mainTasks = visibleFor(DB.tasks.filter(t=>!t.deletedAt && !t.parentTaskId), TASK_OWNER_FIELDS);
+  let mainTasks = dstVisible(DB.tasks.filter(t=>!t.deletedAt && !t.parentTaskId));
   if(window._dstFilterKind!=='all'){
     mainTasks = mainTasks.filter(t=>{
       const bankEntry = (DB.config.taskBank||[]).find(b=>b.taskType===t.taskType);
@@ -43411,7 +43764,7 @@ function viewDST(){
     });
   }
   const today = new Date().toISOString().slice(0,10);
-  const allMain = visibleFor(DB.tasks.filter(t=>!t.deletedAt && !t.parentTaskId), TASK_OWNER_FIELDS);
+  const allMain = dstVisible(DB.tasks.filter(t=>!t.deletedAt && !t.parentTaskId));
   const nStatus = s => allMain.filter(t=>t.overallStatus===s).length;
   const overdue = allMain.filter(t=>t.dueDate && t.dueDate<today && t.overallStatus!=='Completed' && t.overallStatus!=='Cancelled').length;
   window._dstScope = window._dstScope || 'all';
@@ -43420,7 +43773,8 @@ function viewDST(){
     return (c&&c.branch) || (l&&l.branch) || (DB.team.find(x=>x.id===t.assignTo)||{}).branch || '';
   }, '_dstTeam', t=>t.assignTo);
   if(window._dstScope==='mine') mainTasks = mainTasks.filter(t=>t.assignTo===currentUser);
-  if(window._dstScope==='byme') mainTasks = mainTasks.filter(t=>t.createdBy===currentUser);
+  if(window._dstScope==='byme') mainTasks = mainTasks.filter(t=>t.createdBy===currentUser || t.assignedBy===currentUser
+    || (t.assignHistory || []).some(h=>h.by===currentUser && h.to!==currentUser));
   window._dstDateField = window._dstDateField || 'dueDate';
   mainTasks = applyDateRange(mainTasks, '_dstDate', t=>t[window._dstDateField]);
   mainTasks = mainTasks.filter(t=>matchesSearch(window._dstSearch, t, {
@@ -43463,7 +43817,7 @@ function viewDST(){
     ${bulkBar('DST', {assign:true})}
     <div class="table-wrap">
       <table id="dstTable">
-        <thead><tr>${bulkHeadCell('DST')}<th>Task</th><th>Client / Lead</th><th>Assigned To</th><th>Due</th><th>Urgency</th><th>Status</th><th>Sub-Tasks</th><th>Raised From</th><th></th></tr></thead>
+        <thead><tr>${bulkHeadCell('DST')}<th>Task</th><th>Client / Lead</th><th>Assigned By</th><th>Assigned To</th><th>Due</th><th>Urgency</th><th>Status</th><th>Sub-Tasks</th><th>Raised From</th><th></th></tr></thead>
         <tbody>
           ${mainTasks.map(t=>{
             const subs = subTasksOf(t.id);
@@ -43473,14 +43827,15 @@ function viewDST(){
               ${bulkRowCell('DST', t.id)}
               <td><b style="color:var(--info)">${esc(t.taskType)}</b>${t.description?`<div style="color:var(--muted);font-size:12px">${esc(t.description)}</div>`:''}</td>
               <td>${recordLinkHtml(t)}</td>
-              <td>${esc(teamName(t.assignTo))}</td>
+              <td>${esc(teamName(t.assignedBy || t.createdBy))}</td>
+              <td>${esc(teamName(t.assignTo))}${dstReassigned(t) ? `<div class="small-note" style="margin:0" title="${esc((t.assignHistory || []).map(h=>teamName(h.to)).join(' → '))}">first ${esc(teamName(t.originalAssignee))} · reassigned ${dstReassigned(t)}×</div>` : ''}${t.completedBy && t.completedBy !== t.assignTo ? `<div class="small-note" style="margin:0">completed by ${esc(teamName(t.completedBy))}</div>` : ''}</td>
               <td>${fmtDate(t.dueDate)}</td>
               <td>${statusBadge(t.urgencyLevel)}</td>
               <td>${statusBadge(t.overallStatus)}</td>
               <td>${subs.length? `<span class="badge ${subDone===subs.length?'ok':'info'}">${subDone}/${subs.length}</span>` : '—'}</td>
               <td>${taskSourceHtml(t)}</td>
               <td onclick="event.stopPropagation()">${can('DST','delete')?`<button class="btn ghost" style="color:var(--danger)" onclick="softDeleteRecord('DST','${t.id}')">Delete</button>`:''}</td>
-            </tr>`;}).join('') || `<tr><td colspan="10" class="empty">No tasks yet.</td></tr>`}
+            </tr>`;}).join('') || `<tr><td colspan="11" class="empty">No tasks yet.</td></tr>`}
         </tbody>
       </table>
     </div>
@@ -43526,6 +43881,8 @@ async function saveTask(id){
   const data = readFields(fields);
   if(!validateRequired(fields, data)) return;
   if(dstDateCheck() || dstDueProblem(data.assignedDate, data.dueDate)){ alert(DST_DUE_MSG); return; }
+  const prior = id ? (DB.tasks.find(t=>t.id===id) || {}) : {};
+  if(data.assignTo && data.assignTo !== prior.assignTo && !dstMayAssignTo(data.assignTo)){ alert(DST_ASSIGN_MSG); return; }
   const wasCompleted = id ? (DB.tasks.find(t=>t.id===id)||{}).overallStatus==='Completed' : false;
   let newTask = null;
   if(id){
@@ -62350,12 +62707,19 @@ function renderBlueprintApprovalPage(link, existingSub){
   if(decided==='Approved'){
     // Approving is what unlocks the report. It is written from this round
     // and nothing else, so what they download is what they approved.
+    // The thank-you is a header of its own — the firm's mark, then the tick
+    // and what happens next. The report is offered once, in the band below
+    // it, not in the header as well.
     root.innerHTML = `<div class="public-wrap"><div class="public-card">
-      <div class="public-head">${brandMarkHtml()}<p>Your Plan</p></div>
+      <div class="bp-approved-head">
+        <div class="bp-approved-brand">${brandMarkHtml()}</div>
+        <div class="bp-approved-msg">
+          <div class="bp-approved-tick">✓</div>
+          <div><div class="bp-approved-t">Approved — thank you</div>
+            <div class="bp-approved-s">Your relationship manager has been told and will take it from here.</div></div>
+        </div>
+      </div>
       <div class="public-body">
-        <div class="empty"><div class="big" style="color:var(--ok)">✓</div>
-          <b style="font-size:17px">Approved — thank you</b>
-          <p style="color:var(--muted)">Your relationship manager has been told and will take it from here.</p></div>
         <div class="card dl-report">
           <div class="dl-report-main">
             <div class="dl-report-t">Your complete plan, as a report</div>
@@ -62523,9 +62887,18 @@ async function submitBlueprintDecision(token, approved, remarksArg){
   if(inPublicMode()) renderBlueprintApprovalPage(link, sub);
   else render();
 }
-/* Changes asked for: the journey goes back to the Input Form, and the next
-   round starts there. */
+/* Changes asked for. The lead stays where it is — on the consent stage —
+   and the declined version is marked so. The adviser modifies the plan as
+   a new version and resubmits it for consent from the stage panel, as
+   many times as it takes; or, when the client wants something quite
+   different, starts again from the Input Form (planRestartFromInput). */
 async function movePlanBackForChanges(lead){
+  const round = latestPlanRound(lead);
+  if(round){ round.consentStatus = 'Consent Declined'; await save('leads'); }
+}
+async function planRestartFromInput(leadId){
+  const lead = DB.leads.find(l=>l.id===leadId); if(!lead) return;
+  if(!confirm('Start the plan again from the Input Form?\n\nThe lead goes back to the Data Gathering Form stage and the plan is rebuilt from the answers.')) return;
   const st = stateOf('LMS', lead);
   const map = {secondMeetingMomSent:'clientChangesFromMom',
                thirdMeetingScheduled:'clientChangesFromThird',
@@ -79421,7 +79794,7 @@ function hrTimesHtml(rec){
    out of step with the task. */
 const HR_SOURCES = [
   {key:'dst',       label:'DST · Service tasks',   module:'DST',  store:'tasks',
-   userFields:['assignTo','createdBy'], dateFields:['createdAt','dueDate'],
+   userFields:['assignTo','completedBy','createdBy'], dateFields:['createdAt','dueDate'],
    titleOf: r=>r.title || r.taskType || r.id},
   {key:'reviews',   label:'RMS · Reviews',         module:'RMS',  store:'reviews',
    userFields:['assignTo','createdBy'], dateFields:['createdAt','meetingDate'],
@@ -80096,19 +80469,20 @@ function hrLeaveCardHtml(userId){
       ${hrFoldBtn('leave')}</div></div>
     ${rows.length? `<div class="table-wrap" style="margin-top:8px"><table><thead><tr>
         <th>From</th><th>To</th><th>Days</th><th>Type</th><th>Status</th><th>With</th>
-        <th>Decided</th><th>Remarks</th>
+        <th>Decided</th><th>Remarks</th>${mine ? '<th></th>' : ''}
       </tr></thead><tbody>
-      ${rows.map(l=>`<tr>
+      ${rows.map(l=>`<tr data-leave="${esc(l.id)}">
         <td>${esc(fmtDate(l.from))}</td><td>${esc(fmtDate(l.to || l.from))}</td>
         <td>${hrDaysLabel(hrLeaveDays(l))}</td><td>${esc(l.type || '—')}</td>
-        <td><span class="badge ${l.status==='Approved'?'ok':(l.status==='Rejected'||l.status==='Declined')?'danger':'warn'}"
+        <td><span class="badge ${l.status==='Approved'?'ok':(l.status==='Rejected'||l.status==='Declined')?'danger':/Cancelled/.test(l.status||'')?'muted':'warn'}"
           >${esc(l.status || 'Pending')}</span></td>
         <td>${esc(teamName(l.approverId) || '—')}${l.approverWhy
           ? `<div class="small-note" style="margin:0">${esc(l.approverWhy)}</div>`:''}</td>
         <td>${l.decidedAt? esc(fmtDate(l.decidedAt)) + (l.decidedBy
               ? `<div class="small-note" style="margin:0">by ${esc(teamName(l.decidedBy) || '')}</div>`:'')
             : '—'}</td>
-        <td>${esc(l.remarks || '—')}</td></tr>`).join('')}
+        <td>${esc(l.remarks || '—')}${hrLeaveCancelNote(l)}</td>
+        ${mine ? `<td>${hrMayCancelLeave(l) ? `<button class="btn ghost sm" onclick="hrOpenLeaveCancel('${esc(l.id)}')">Cancel leave</button>` : ''}</td>` : ''}</tr>`).join('')}
     </tbody></table></div>`
     : `<div class="empty" style="padding:14px">No leave requested yet.</div>`}
     ${types.length? '' : `<div class="small-note" style="margin-top:8px">Leave types are not configured yet, so a
@@ -80291,6 +80665,41 @@ function hrMbExport(){
   });
   exportDownload('attendance-' + D.s.month + '.csv', exportCsvText(rows, cols));
 }
+/* Today's three counts, and the people behind each. */
+const HR_MB_TODAY = {present: ['P', 'IN', 'I'], leave: ['L', '½'], none: ['·', 'A']};
+function hrMbToday(kind){
+  const D = hrMbData(), today = hrToday(), ti = D.dates.indexOf(today);
+  if(ti < 0) return;
+  const label = {present: 'Present today', leave: 'On leave today', none: 'Not punched in today'}[kind];
+  const rows = D.rows.filter(r=>HR_MB_TODAY[kind].indexOf(r.codes[ti].c) >= 0);
+  const body = rows.length ? `<div class="table-wrap"><table id="hmbTodayTable"><thead><tr><th>Employee</th><th>Role</th><th>Branch</th>${
+      kind === 'present' ? '<th>Status</th><th>In</th><th>Out</th><th>Worked</th><th>Late</th>'
+      : kind === 'leave' ? '<th>Leave type</th><th>Dates</th><th>Duration</th>'
+      : '<th>Mobile</th><th>Reporting manager</th><th>Note</th>'}<th></th></tr></thead><tbody>
+    ${rows.map(r=>{
+      const p = r.p, rec = hrAttendanceOf(p.id, today);
+      let cells = '';
+      if(kind === 'present'){
+        const st = hrDayStatus(p.id, today, rec), late = hrLateMinutes(rec);
+        cells = `<td><span class="badge ${st.tone}">${esc(st.label)}</span></td><td>${hrClock(hrFirstIn(rec))}</td><td>${hrClock(hrLastOut(rec))}</td>
+          <td>${hrDuration(hrWorkedMinutes(rec))}</td><td>${late === null ? '—' : late > 0 ? late + ' min' : 'On time'}</td>`;
+      } else if(kind === 'leave'){
+        const lv = hrLeaveOn(p.id, today) || {};
+        cells = `<td>${esc(lv.type || 'Leave')}</td><td>${esc(fmtDate(lv.from))}${lv.to && lv.to !== lv.from ? ' – ' + esc(fmtDate(lv.to)) : ''}</td>
+          <td>${esc(lv.duration || ((lv.unit || hrLeaveTypeUnit(lv.type)) === 'half' ? 'Half Day' : 'Full Day'))}</td>`;
+      } else {
+        const mgr = userManagers(p)[0];
+        const pend = hrAhLeaveOverlapping(p.id, today, ['Pending'])[0];
+        cells = `<td>${esc(p.mobile || p.phone || '—')}</td><td>${esc(mgr ? mgr.name || mgr.id : '—')}</td>
+          <td>${pend ? '<span class="badge warn">Leave request pending</span>' : '—'}</td>`;
+      }
+      return `<tr><td><b>${esc(p.name || p.id)}</b></td><td>${esc(roleOf(p))}</td><td>${esc(p.branch || '—')}</td>${cells}
+        <td><button class="btn ghost sm" onclick="hrOpenPerson('${esc(p.id)}')">History</button></td></tr>`;
+    }).join('')}</tbody></table></div>`
+    : `<div class="empty" style="padding:16px">Nobody${D.s.branch ? ' in ' + esc(D.s.branch) : ''} right now.</div>`;
+  openModal(esc(label) + ' — ' + esc(fmtDate(today)) + ' (' + rows.length + ')', body,
+    `<button class="btn" onclick="closeModal()">Close</button>`, {wide:true});
+}
 const HR_MB_TONE = {P:'ok', IN:'ok', I:'warn', A:'danger', L:'info', '½':'info', S:'muted', H:'muted', W:'muted', '·':'muted', '':'muted'};
 function hrMonthBoardHtml(){
   if(!hrIsStaff()) return '';
@@ -80348,9 +80757,10 @@ function hrMonthBoardHtml(){
       <div class="kpi"><div class="num">${D.working.length}</div><div class="lbl">Working days in ${esc(monthName.split(' ')[0])}</div></div>
       <div class="kpi"><div class="num">${D.elapsed.length}</div><div class="lbl">Working days so far</div></div>
       <div class="kpi"><div class="num">${D.rows.length}</div><div class="lbl">Employees</div></div>
-      <div class="kpi"><div class="num" style="color:var(--ok)">${countToday(['P', 'IN', 'I'])}</div><div class="lbl">Present today</div></div>
-      <div class="kpi"><div class="num" style="color:var(--info)">${countToday(['L', '½'])}</div><div class="lbl">On leave today</div></div>
-      <div class="kpi"><div class="num" style="color:var(--danger)">${ti < 0 ? '—' : D.rows.filter(r=>r.codes[ti].c === '·' || r.codes[ti].c === 'A').length}</div><div class="lbl">Not punched in today</div></div>
+      ${[['present', 'Present today', 'var(--ok)'], ['leave', 'On leave today', 'var(--info)'], ['none', 'Not punched in today', 'var(--danger)']]
+        .map(([k, label, color])=>`<div class="kpi${ti < 0 ? '' : ' kpi-click'}" ${ti < 0 ? '' : `role="button" tabindex="0" data-hmb-today="${k}" title="See who"
+          onclick="hrMbToday('${k}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();hrMbToday('${k}')}"`}>
+          <div class="num" style="color:${color}">${countToday(HR_MB_TODAY[k])}</div><div class="lbl">${label}${ti < 0 ? '' : ' <span aria-hidden="true" style="opacity:.55">›</span>'}</div></div>`).join('')}
       <div class="kpi"><div class="num">${avg}%</div><div class="lbl">Average attendance</div></div>
     </div>
     <div class="row" style="gap:8px;flex-wrap:wrap;margin-bottom:10px">
@@ -80680,11 +81090,13 @@ async function hrSubmitLeaveRequest(){
   }
   const approver = hrApproverFor(u.id);
   if(!approver){ alert('There is nobody on file to approve this.'); return; }
-  const clash = (DB.hrLeave || []).find(l=>l && l.userId === u.id && l.status !== 'Rejected' && l.status !== 'Declined'
-    && String(l.from || '') <= to && from <= String(l.to || l.from || ''));
-  if(clash && !confirm('You already have ' + (clash.status || 'a request').toLowerCase()
-      + ' leave over those dates (' + fmtDate(clash.from) + ' to ' + fmtDate(clash.to || clash.from)
-      + ').\n\nSend this one as well?')) return;
+  const clash = hrLeaveClash(u.id, from, to);
+  if(clash){
+    alert('You already have ' + (clash.status === 'Approved' ? 'approved' : 'pending') + ' leave from '
+      + fmtDate(clash.from) + ' to ' + fmtDate(clash.to || clash.from) + ', which overlaps the dates you chose ('
+      + fmtDate(from) + ' to ' + fmtDate(to) + ').\n\nChoose dates that do not overlap, or cancel the earlier request first.');
+    return;
+  }
   const now = new Date().toISOString();
   /* The unit is written onto the request, not looked up later: what
      this person asked for is what the firm's list said at the time. */
@@ -80693,8 +81105,14 @@ async function hrSubmitLeaveRequest(){
     requestedAt: now, requestedBy: u.id, at: now,
     duration, session, delegated, handoverTo, delegateEmail, delegatedTasks: tasks,
     employee: hrLeaveEmployee(u)};
-  DB.hrLeave = (Array.isArray(DB.hrLeave) ? DB.hrLeave : []).concat([row]);
-  await save('hrLeave');
+  const before = Array.isArray(DB.hrLeave) ? DB.hrLeave : [];
+  DB.hrLeave = before.concat([row]);
+  if(await save('hrLeave') === false){
+    // The server refused it (another request for those dates got there first).
+    DB.hrLeave = before;
+    try { const fresh = await sget('hrLeave'); if(Array.isArray(fresh)) DB.hrLeave = fresh; } catch(e){}
+    return;
+  }
   await logAudit('HR', row.id, 'Leave Requested', [
     {field:'Person', oldValue:'', newValue: u.name || u.id},
     {field:'Dates', oldValue:'', newValue: from + ' to ' + to + ' (' + hrDaysLabel(hrLeaveDays(row)) + ')'},
@@ -80707,6 +81125,118 @@ async function hrSubmitLeaveRequest(){
     view: 'hrattendance', kind: 'hr-leave-request'});
   closeModal();
   alert('Requested.\n\nIt is with ' + teamName(approver.id) + ' and shows as Pending until they answer.');
+  render();
+}
+/* ONE ACTIVE REQUEST PER DATE.
+
+   A Pending or Approved request may not overlap another Pending or
+   Approved request of the same person. The server holds the same rule
+   (leaveGuard), so a second tab or a request sent at the same moment is
+   refused there too. */
+const HR_LEAVE_ACTIVE = ['Pending', 'Approved'];
+function hrLeaveClash(userId, from, to, exceptId){
+  return (DB.hrLeave || []).find(l=>l && l.userId === userId && l.id !== exceptId
+    && HR_LEAVE_ACTIVE.indexOf(l.status) >= 0 && l.from
+    && String(l.from).slice(0, 10) <= to && from <= String(l.to || l.from).slice(0, 10)) || null;
+}
+/* CANCELLING LEAVE, ALL OF IT OR SOME DAYS.
+
+   The person cancels their own Pending or Approved request — the whole
+   of it, or chosen dates. The request itself is never edited or removed:
+   it is marked Cancelled (or Partially Cancelled) with who, when, why
+   and which dates, and the dates still wanted are written as new
+   Approved requests that point back at it. Everything that reads leave —
+   attendance, the punch clock, working days, balances, the dashboards and
+   the server's reminders — counts only Approved rows, so a cancelled date
+   stops being leave everywhere at once, with nothing else to update. An
+   HR administrator may cancel any date; the person, today onwards. */
+function hrMayCancelLeave(l){
+  if(!l || HR_LEAVE_ACTIVE.indexOf(l.status) < 0) return false;
+  if(l.userId !== currentUser && !hrIsAdmin()) return false;
+  return hrIsAdmin() || String(l.to || l.from) >= hrToday();
+}
+function hrLeaveDatesOf(l){
+  const out = [], d = new Date(String(l.from).slice(0, 10) + 'T00:00:00'), end = String(l.to || l.from).slice(0, 10);
+  while(!isNaN(d) && hrDateKey(d) <= end){ out.push(hrDateKey(d)); d.setDate(d.getDate() + 1); }
+  return out;
+}
+function hrLeaveCancelNote(l){
+  const c = l && l.cancellation;
+  if(!c) return l && l.remainderOf ? `<div class="small-note" style="margin:0">Left after a part cancellation</div>` : '';
+  return `<div class="small-note" style="margin:0">${esc(l.status)} ${esc(fmtDate(c.at))} by ${esc(teamName(c.by) || '')}:
+    ${esc(c.dates.map(fmtDate).join(', '))}${c.reason ? ' — “' + esc(c.reason) + '”' : ''}</div>`;
+}
+function hrOpenLeaveCancel(id){
+  const l = (DB.hrLeave || []).find(x=>x && x.id === id);
+  if(!hrMayCancelLeave(l)){ alert('This leave cannot be cancelled.'); return; }
+  const dates = hrLeaveDatesOf(l);
+  const open = d => hrIsAdmin() || d >= hrToday();
+  openModal('Cancel leave', `
+    <div class="small-note" style="margin-top:0">${esc(l.type || 'Leave')} · ${esc(fmtDate(l.from))}${l.to && l.to !== l.from ? ' to ' + esc(fmtDate(l.to)) : ''}
+      · ${esc(hrDaysLabel(hrLeaveDays(l)))} · <b>${esc(l.status)}</b></div>
+    <div class="field"><label>What do you want to cancel?</label>
+      <label class="row" style="gap:8px;font-weight:400"><input type="radio" name="hrCxMode" value="all" checked onchange="hrLeaveCancelMode()" style="width:auto"> The whole leave</label>
+      ${dates.length > 1 ? `<label class="row" style="gap:8px;font-weight:400"><input type="radio" name="hrCxMode" value="some" onchange="hrLeaveCancelMode()" style="width:auto"> Only some dates</label>` : ''}</div>
+    <div id="hrCxDates" style="display:none;margin:0 0 10px">
+      ${dates.map(d=>`<label class="row" style="gap:8px;font-weight:400;padding:2px 0">
+        <input type="checkbox" class="hrCxDate" value="${esc(d)}" style="width:auto"${open(d) ? '' : ' disabled'}>
+        ${esc(fmtDate(d))} <span class="small-note" style="margin:0">${esc(new Date(d + 'T00:00:00').toLocaleDateString('en-IN', {weekday: 'long'}))}${open(d) ? '' : ' · already passed'}</span></label>`).join('')}
+    </div>
+    <div class="field"><label>Reason for cancelling<span class="req">*</span></label>
+      <textarea id="f_hrCxReason" rows="2" placeholder="Why you no longer need these days"></textarea></div>
+    <div class="small-note">Cancelled dates stop counting as leave straight away. ${l.status === 'Approved'
+      ? esc(teamName(l.decidedBy || l.approverId) || 'Your approver') + ' is told.' : 'The request is withdrawn from your approver.'}</div>`,
+    `<button class="btn" onclick="closeModal()">Keep it</button>
+     <button class="btn" style="background:var(--danger);border-color:var(--danger);color:#fff" onclick="hrCancelLeave('${esc(id)}')">Cancel leave</button>`);
+}
+function hrLeaveCancelMode(){
+  const some = (document.querySelector('input[name="hrCxMode"]:checked') || {}).value === 'some';
+  const box = document.getElementById('hrCxDates'); if(box) box.style.display = some ? '' : 'none';
+}
+async function hrCancelLeave(id, picked){
+  const l = (DB.hrLeave || []).find(x=>x && x.id === id);
+  if(!hrMayCancelLeave(l)){ alert('This leave cannot be cancelled.'); return; }
+  const all = hrLeaveDatesOf(l);
+  const some = (document.querySelector('input[name="hrCxMode"]:checked') || {}).value === 'some';
+  let dates = picked || (some ? [...document.querySelectorAll('.hrCxDate:checked')].map(x=>x.value) : all.slice());
+  const reason = ((document.getElementById('f_hrCxReason') || {}).value || '').trim();
+  if(!dates.length){ alert('Tick the dates to cancel.'); return; }
+  if(!reason){ alert('Say why you are cancelling.'); return; }
+  if(!hrIsAdmin()){
+    const past = dates.filter(d=>d < hrToday());
+    if(past.length){ alert('Dates that have already passed cannot be cancelled: ' + past.map(fmtDate).join(', ') + '. Ask HR.'); return; }
+  }
+  dates = all.filter(d=>dates.indexOf(d) >= 0);
+  const keep = all.filter(d=>dates.indexOf(d) < 0);
+  const now = new Date().toISOString();
+  const before = (DB.hrLeave || []).map(x=>x);
+  const updated = Object.assign({}, l, {status: keep.length ? 'Partially Cancelled' : 'Cancelled',
+    cancellation: {dates, keep, reason, at: now, by: currentUser, wasStatus: l.status}});
+  /* What is left, as runs of consecutive dates, each its own request. */
+  const runs = [];
+  keep.forEach(d=>{
+    const last = runs[runs.length - 1];
+    const prev = last && new Date(last.to + 'T00:00:00'); if(prev) prev.setDate(prev.getDate() + 1);
+    if(last && hrDateKey(prev) === d) last.to = d; else runs.push({from: d, to: d});
+  });
+  const rest = runs.map((r, i)=>Object.assign({}, l, {id: uid('HRL'), from: r.from, to: r.to, remainderOf: l.id,
+    requestedAt: l.requestedAt, at: now, cancellation: undefined}));
+  updated.remainders = rest.map(r=>r.id);
+  DB.hrLeave = before.map(x=>x.id === id ? updated : x).concat(rest);
+  if(await save('hrLeave') === false){ DB.hrLeave = before; return; }
+  await logAudit('HR', l.id, keep.length ? 'Leave Partly Cancelled' : 'Leave Cancelled', [
+    {field:'Person', oldValue:'', newValue: teamName(l.userId) || l.userId},
+    {field:'Cancelled dates', oldValue:'', newValue: dates.join(', ')},
+    {field:'Still on leave', oldValue: all.join(', '), newValue: keep.join(', ') || '\u2014'},
+    {field:'Reason', oldValue:'', newValue: reason}]);
+  const tell = l.status === 'Approved' ? (l.decidedBy || l.approverId) : l.approverId;
+  if(tell && tell !== currentUser) await notifyUser(tell, {
+    title: (teamName(l.userId) || 'A colleague') + ' cancelled ' + (keep.length ? 'part of their' : 'their') + ' leave',
+    body: 'Cancelled: ' + dates.map(fmtDate).join(', ') + (keep.length ? '. Still on leave: ' + keep.map(fmtDate).join(', ') : '') + '. ' + reason.slice(0, 120),
+    view: 'hrattendance', kind: 'hr-leave-cancelled'});
+  closeModal();
+  alert(keep.length ? 'Cancelled ' + hrDaysLabel(dates.length * (l.unit === 'half' ? 0.5 : 1)) + '. You are still on leave on ' + keep.map(fmtDate).join(', ') + '.'
+    : 'Your leave is cancelled.');
   render();
 }
 /* APPROVE, OR DECLINE WITH A REASON.

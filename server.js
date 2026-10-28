@@ -1263,11 +1263,52 @@ function attendanceRulesGuard(before, after) {
 /* A service task's Due Date cannot be earlier than its Assigned Date. Only a
    task this write adds, or whose dates it changes, is judged: an old row
    with odd dates does not block somebody else's edit. */
-function tasksGuard(before, after) {
+// Depth in the reporting tree (parentUserId), the same measure the page uses
+// for "your level and below". A ring counts as top level.
+function teamDepths(team) {
+  const by = {};
+  team.forEach((t) => { if (t && t.id) by[t.id] = t; });
+  const depth = {};
+  Object.keys(by).forEach((start) => {
+    if (depth[start] !== undefined) return;
+    const path = []; const walked = new Set();
+    let cur = start;
+    while (cur && by[cur] && !walked.has(cur) && depth[cur] === undefined) { walked.add(cur); path.push(cur); cur = by[cur].parentUserId; }
+    if (cur && walked.has(cur)) { path.forEach((id) => { depth[id] = 0; }); return; }
+    let d = (cur && depth[cur] !== undefined) ? depth[cur] : -1;
+    for (let i = path.length - 1; i >= 0; i--) depth[path[i]] = ++d;
+  });
+  return depth;
+}
+// May this member give work to that one? Administrators and people who
+// administer users may give it to anybody; everyone else to their own level
+// of the reporting tree or below, never upwards.
+function mayAssignTask(member, toId, team) {
+  if (!member || !toId || toId === member.id) return true;
+  const f = member.adminFlags || {};
+  if (member.role === 'Admin' || f.manageUsers || f.managePermissions) return true;
+  const d = teamDepths(team);
+  return (d[toId] === undefined ? 0 : d[toId]) >= (d[member.id] === undefined ? 0 : d[member.id]);
+}
+function tasksGuard(before, after, member, fromForm) {
   let old, next;
   try { old = JSON.parse(before || '[]'); next = JSON.parse(after); } catch (e) { return null; }
   if (!Array.isArray(next)) return null;
   const byId = new Map((Array.isArray(old) ? old : []).filter((r) => r && r.id).map((r) => [r.id, r]));
+  const team = storeList('team');
+  const today = bizNow().date;
+  for (const t of next) {
+    if (!t || t.deletedAt) continue;
+    const was = byId.get(t.id);
+    if (member && t.assignTo && (!was || was.assignTo !== t.assignTo) && !mayAssignTask(member, t.assignTo, team)) {
+      const to = team.find((x) => x && x.id === t.assignTo);
+      return 'You can assign or reassign a task only to people at your own level or below you in the reporting line. '
+        + ((to && to.name) || t.assignTo) + ' is above you' + (t.id ? ' (' + t.id + ')' : '') + '.';
+    }
+    if (fromForm && t.assignedDate && (!was || was.assignedDate !== t.assignedDate)
+        && String(t.assignedDate).slice(0, 10) < today)
+      return 'Assigned Date cannot be in the past. Please select today or a later date.';
+  }
   for (const t of next) {
     if (!t || t.deletedAt || !t.assignedDate || !t.dueDate) continue;
     const was = byId.get(t.id);
@@ -1275,6 +1316,37 @@ function tasksGuard(before, after) {
     if (String(t.dueDate).slice(0, 10) < String(t.assignedDate).slice(0, 10))
       return 'Due Date cannot be earlier than Assigned Date. Please select a valid Due Date.'
         + (t.id ? ' (' + t.id + (t.taskType ? ', ' + t.taskType : '') + ')' : '');
+  }
+  return null;
+}
+
+// Leave: one active request per person per date. A new or changed request
+// that is Pending or Approved must not overlap another Pending or Approved
+// request of the same person. Rows already on the server count even when the
+// page sending this write never saw them, so two requests sent at the same
+// moment cannot both land. Untouched older rows are left as they are.
+function leaveGuard(before, after) {
+  let old, next;
+  try { old = JSON.parse(before || '[]'); next = JSON.parse(after); } catch (e) { return null; }
+  if (!Array.isArray(next)) return null;
+  const ACTIVE = ['Pending', 'Approved'];
+  const day = (v) => String(v || '').slice(0, 10);
+  const byId = new Map((Array.isArray(old) ? old : []).filter((r) => r && r.id).map((r) => [r.id, r]));
+  const all = new Map(byId);
+  next.forEach((r) => { if (r && r.id) all.set(r.id, r); });
+  for (const r of next) {
+    if (!r || !r.id || ACTIVE.indexOf(r.status) < 0 || !r.from) continue;
+    const was = byId.get(r.id);
+    if (was && was.status === r.status && day(was.from) === day(r.from) && day(was.to) === day(r.to)) continue;
+    const a1 = day(r.from), a2 = day(r.to || r.from);
+    for (const o of all.values()) {
+      if (!o || o.id === r.id || o.userId !== r.userId || ACTIVE.indexOf(o.status) < 0 || !o.from) continue;
+      const b1 = day(o.from), b2 = day(o.to || o.from);
+      if (a1 <= b2 && b1 <= a2)
+        return 'Leave is already ' + (o.status === 'Approved' ? 'approved' : 'requested') + ' for ' + b1
+          + (b2 !== b1 ? ' to ' + b2 : '') + ', which overlaps ' + a1 + (a2 !== a1 ? ' to ' + a2 : '')
+          + '. Choose dates that do not overlap, or cancel the earlier request first.';
+    }
   }
   return null;
 }
@@ -1289,8 +1361,12 @@ app.put('/api/storage/:key', checkApiKey, (req, res) => {
     const refused = attendanceRulesGuard(store.hrAttendance, value);
     if (refused) return res.status(409).json({ error: refused });
   }
+  if (req.params.key === 'hrLeave') {
+    const wrong = leaveGuard(store.hrLeave, value);
+    if (wrong) return res.status(422).json({ error: wrong });
+  }
   if (req.params.key === 'tasks') {
-    const wrong = tasksGuard(store.tasks, value);
+    const wrong = tasksGuard(store.tasks, value, memberOfUser(signedInUser(req)), req.get('X-CRM-Form') === 'dst');
     if (wrong) return res.status(422).json({ error: wrong });
   }
   if (req.params.key === 'clients') {
@@ -3767,9 +3843,6 @@ function bizNow(at) {
     .formatToParts(d).forEach((p) => { parts[p.type] = p.value; });
   return { date: parts.year + '-' + parts.month + '-' + parts.day, hhmm: parts.hour + ':' + parts.minute,
     mins: Number(parts.hour) * 60 + Number(parts.minute), dow: ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].indexOf(parts.weekday) };
-}
-function storeList(key) {
-  try { const v = JSON.parse(store[key] || '[]'); return Array.isArray(v) ? v : []; } catch (e) { return []; }
 }
 function storeObj(key) {
   try { const v = JSON.parse(store[key] || '{}'); return v && typeof v === 'object' && !Array.isArray(v) ? v : {}; } catch (e) { return {}; }

@@ -43,7 +43,9 @@ suite(async t => {
     document.getElementById('f_hrReqReason').value = a.reason;
     ['f_hrReqDuration','f_hrReqDelegated'].forEach(id => { const el = document.getElementById(id); if(el && !el.value) el.value = id === 'f_hrReqDuration' ? 'Full Day' : 'No'; });
     const said = []; const al = window.alert; window.alert = m => said.push(String(m));
-    await hrSubmitLeaveRequest();
+    /* Only looking: a request sent here would hold those dates, and a
+       second request over the same dates is now refused. */
+    if(!a.look) await hrSubmitLeaveRequest();
     window.alert = al; closeModal(); currentUser = was;
     const row = (DB.hrLeave || []).find(l=>l.reason === a.reason);
     return Object.assign(seen, {said, row: row && {from: row.from, to: row.to, status: row.status}});
@@ -52,7 +54,7 @@ suite(async t => {
   t.section('+ Leave Request');
 
   await t.step('the calendar starts at today and nothing before it is offered', async () => {
-    const r = await fill({who: plain, reason: 'ZZ look only', from: '', to: ''});
+    const r = await fill({who: plain, reason: 'ZZ look only', from: '', to: '', look: true});
     if(r.min !== today || r.toMin !== today) throw new Error('min ' + r.min + ' / ' + r.toMin);
     if(r.readonly) throw new Error('the regular form should be editable');
     return 'From and To min = ' + r.min;
@@ -74,7 +76,7 @@ suite(async t => {
   t.section('Apply Leave from the attendance history');
 
   await t.step('the form opens on that day, and the dates cannot be changed', async () => {
-    const r = await fill({who: plain, lock: day, reason: 'ZZ look only 2', from: '', to: ''});
+    const r = await fill({who: plain, lock: day, reason: 'ZZ look only 2', from: '', to: '', look: true});
     if(r.from !== day || r.to !== day) throw new Error('opened on ' + r.from + ' / ' + r.to);
     if(!r.readonly || !r.toReadonly || r.min !== day || r.max !== day) throw new Error(JSON.stringify(r));
     if(!/only/.test(r.note)) throw new Error('no note saying it is for that day only');
