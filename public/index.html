@@ -5338,43 +5338,63 @@ const CMS_FIELDS = {
      paid, what the underwriter decided, the policy as issued, and its
      renewals. Each stage asks for its own part of it (INS_STEPS). */
   'Insurance Policy': [
+    {k:'insInquiryOn',l:'Inquiry Received On',t:'date'},
+    {k:'insDiscoveryCallOn',l:'Discovery Call On',t:'date'},
     {k:'insCategory',l:'Insurance Category',t:'select',opts:INS_CATEGORIES},
+    {k:'insCompany',l:'Insurance Company',t:'select',opts:INS_COMPANIES},
+    {k:'insCompanyOther',l:'Company Name',t:'text',show:{field:'insCompany',values:['Other']},ph:'e.g., HDFC Life'},
     {k:'insLifeType',l:'Life Plan Type',t:'select',opts:INS_LIFE_TYPES,show:{field:'insCategory',values:['Life Insurance']}},
     {k:'insGeneralCategory',l:'General Insurance Category',t:'select',opts:INS_GENERAL_CATEGORIES,show:{field:'insCategory',values:['General Insurance']}},
     {k:'insHealthType',l:'Health Type',t:'select',opts:INS_HEALTH_TYPES,show:{field:'insGeneralCategory',values:['Health']}},
-    {k:'insCompany',l:'Insurance Company',t:'select',opts:INS_COMPANIES},
-    {k:'insCompanyOther',l:'Company Name',t:'text',show:{field:'insCompany',values:['Other']},ph:'e.g., HDFC Life'},
     {k:'insPlanName',l:'Plan / Product Name',t:'text',ph:'e.g., Tech Term'},
     {k:'insSumAssured',l:'Sum Assured / Cover (₹)',t:'number',money:1},
-    {k:'insPremium',l:'Premium (₹)',t:'number',money:1},
+    {k:'insPremium',l:'Modal Premium (₹)',t:'number',money:1},
     {k:'insPremiumFrequency',l:'Premium Frequency',t:'select',opts:Object.keys(INS_FREQUENCY_MONTHS)},
     {k:'insPolicyTerm',l:'Policy Term (years)',t:'number',num:{min:0,max:100}},
     {k:'insPayingTerm',l:'Premium Paying Term (years)',t:'number',num:{min:0,max:100}},
+    {k:'insRiders',l:'Riders',t:'text',ph:'e.g., Accidental death, Critical illness'},
     {k:'insIllustrationSentOn',l:'Illustration Sent On',t:'date'},
     {k:'insIllustrationVia',l:'Illustration Sent Via',t:'select',opts:['Email','WhatsApp','In person']},
     {k:'insRevisionReason',l:'What the Client Asked to Change',t:'textarea',transient:1},
     {k:'insProposalNo',l:'Proposal / Application No.',t:'text'},
+    {k:'insProposalDate',l:'Proposal Form Signed On',t:'date'},
+    {k:'insCifIncomeOk',l:'Income documents (ITR, bank statements) match the declared annual income',t:'select',opts:['Yes','No']},
+    {k:'insCifKycOk',l:'KYC, address proof and medical / family history received on the CIF',t:'select',opts:['Yes','No']},
+    {k:'insProposalUpdatedOn',l:'Proposal Updated with CIF On',t:'date'},
     {k:'insPremiumPaidOn',l:'First Premium Paid On',t:'date'},
     {k:'insPaymentMode',l:'Payment Mode',t:'select',opts:['Cheque','NEFT/RTGS','UPI','Card','Auto-debit','Cash']},
     {k:'insPaymentRef',l:'Payment Reference',t:'text'},
+    {k:'insScrubDisclosureOk',l:'Medical answers on the proposal match the CIF disclosures',t:'select',opts:['Yes','No']},
+    {k:'insScrubDocsOk',l:'Identity and financial documents complete for underwriting',t:'select',opts:['Yes','No']},
     {k:'insDocsNote',l:'Missing Documents or Corrections',t:'textarea',transient:1},
+    {k:'insMedicalType',l:'Medical Examination',t:'select',opts:['Tele-medical','Physical (diagnostic centre)','Home visit']},
     {k:'insMedicalDate',l:'Medical Checkup Date',t:'date'},
-    {k:'insMedicalCentre',l:'Medical Centre / TPA',t:'text'},
+    {k:'insMedicalCentre',l:'Diagnostic Centre / TPA',t:'text'},
     {k:'insMedicalCompletedOn',l:'Medical Completed On',t:'date'},
+    {k:'insMedicalReportsUploaded',l:'Reports uploaded to the insurer portal',t:'select',opts:['Yes','No']},
     {k:'insMedicalNote',l:'Pending Medical Requirement',t:'textarea',transient:1},
-    {k:'insUwNote',l:"Underwriter's Additional Requirement",t:'textarea',transient:1},
+    {k:'insUwNote',l:"Underwriter's Query (counter-offer, loading, exclusion)",t:'textarea',transient:1},
+    {k:'insUwOutcome',l:'Underwriting Outcome',t:'select',opts:['Standard','Accepted with loading','Accepted with exclusion','Counter-offer accepted']},
+    {k:'insUwTerms',l:'Loading / Exclusion / Counter-offer Details',t:'text',show:{field:'insUwOutcome',values:['Accepted with loading','Accepted with exclusion','Counter-offer accepted']}},
     {k:'insUwDecisionOn',l:'Underwriting Decision On',t:'date'},
     {k:'insRejectionReason',l:'Reason for Rejection',t:'textarea'},
     {k:'insPolicyNo',l:'Policy No.',t:'text'},
-    {k:'insCommencementDate',l:'Commencement Date',t:'date'},
-    {k:'insFinalPremiumDate',l:'Date of Last Payment (final premium)',t:'date'},
+    {k:'insPolicyNoCheck',l:'Policy No. (type it again)',t:'text',transient:1},
+    {k:'insCommencementDate',l:'Commencement / Risk Date',t:'date'},
+    {k:'insCommencementCheck',l:'Commencement Date (enter it again)',t:'date',transient:1},
+    {k:'insFinalPremiumDate',l:'Date of Last Premium Payment',t:'date'},
+    {k:'insFinalPremiumCheck',l:'Date of Last Premium Payment (enter it again)',t:'date',transient:1},
     {k:'insMaturityDate',l:'Maturity Date',t:'date'},
+    {k:'insNomineeName',l:'Nominee Name',t:'text',vk:'person'},
+    {k:'insNomineeRelation',l:'Nominee Relationship',t:'select',opts:['Spouse','Son','Daughter','Father','Mother','Brother','Sister','Other']},
     {k:'insNextDueDate',l:'Next Premium Due',t:'date'},
     {k:'insOriginalPolicyOn',l:'Original Policy Document Received On',t:'date'},
-    {k:'insClientConfirmedOn',l:'Client Confirmed On',t:'date'},
+    {k:'insClientConfirmedOn',l:'Client Confirmed Delivery On',t:'date'},
     {k:'insRenewalNote',l:'Follow-up Note',t:'textarea',transient:1},
     {k:'insRenewalPaidOn',l:'Renewal Premium Paid On',t:'date',transient:1},
     {k:'insRenewalAmount',l:'Renewal Premium Paid (₹)',t:'number',money:1,transient:1},
+    {k:'insRenewalReceiptRef',l:'Insurer Receipt No.',t:'text',transient:1},
+    {k:'insFundValue',l:'Fund / Cash Value (₹), where applicable',t:'number',money:1,transient:1},
     {k:'insClosureReason',l:'Why the Policy Closed',t:'select',opts:['Lapsed','Surrendered','Matured','Claim Settled','Cancelled (free look)','Other']},
     {k:'insClosureNote',l:'Closure Note',t:'textarea',transient:1},
   ],
@@ -10015,8 +10035,10 @@ const BLUEPRINT_CMS = {
        standing on it simply finds the first stage of the new journey. */
     {id:'insurancePending', label:'Insurance — Category & Plan'},
     {id:'insIllustration', label:'Insurance — Illustration with Client'},
-    {id:'insProposal', label:'Insurance — Proposal Form & Premium'},
-    {id:'insDocsVerification', label:'Insurance — Documents Verification'},
+    {id:'insProposal', label:'Insurance — Proposal Form Submission'},
+    {id:'insCif', label:'Insurance — Client Information Form (CIF)'},
+    {id:'insProposalUpdate', label:'Insurance — Proposal Update & Premium Payment'},
+    {id:'insDocsVerification', label:'Insurance — Pre-Underwriting Scrub'},
     {id:'insMedical', label:'Insurance — Medical Required?'},
     {id:'insMedicalCheckup', label:'Insurance — Medical Checkup'},
     {id:'insUnderwriting', label:'Insurance — Underwriting'},
@@ -10063,12 +10085,17 @@ const BLUEPRINT_CMS = {
     {id:'insIllustrationAccepted', from:'insIllustration', to:'insProposal', label:'Illustration Accepted', kind:'forward', color:'ok'},
     {id:'insIllustrationRevised', from:'insIllustration', to:'insIllustration', label:'Not Accepted — Send Revised Illustration', kind:'forward', color:'warn'},
     {id:'insBackToPlan', from:'insIllustration', to:'insurancePending', label:'Back', kind:'back'},
-    {id:'insProposalDone', from:'insProposal', to:'insDocsVerification', label:'Proposal Submitted & Premium Paid', kind:'forward'},
+    {id:'insProposalSubmitted', from:'insProposal', to:'insCif', label:'Proposal Form Submitted', kind:'forward'},
     {id:'insBackToIllustration', from:'insProposal', to:'insIllustration', label:'Back', kind:'back'},
+    {id:'insCifSend', from:'insCif', to:'insCif', label:'Request CIF from Client', kind:'forward'},
+    {id:'insCifValidated', from:'insCif', to:'insProposalUpdate', label:'CIF Received & Validated', kind:'forward', color:'ok'},
+    {id:'insBackToProposalForm', from:'insCif', to:'insProposal', label:'Back', kind:'back'},
+    {id:'insProposalDone', from:'insProposalUpdate', to:'insDocsVerification', label:'Proposal Updated & Premium Paid (Sales Completed)', kind:'forward', color:'ok'},
+    {id:'insBackToCif', from:'insProposalUpdate', to:'insCif', label:'Back', kind:'back'},
     // Documents, then Phase 3 — Medical & Underwriting.
-    {id:'insDocsVerified', from:'insDocsVerification', to:'insMedical', label:'Documents Verified', kind:'forward', color:'ok'},
+    {id:'insDocsVerified', from:'insDocsVerification', to:'insMedical', label:'Scrub Complete — Proceed', kind:'forward', color:'ok'},
     {id:'insDocsMissing', from:'insDocsVerification', to:'insDocsVerification', label:'Request Missing Documents or Corrections', kind:'forward', color:'warn'},
-    {id:'insBackToProposal', from:'insDocsVerification', to:'insProposal', label:'Back', kind:'back'},
+    {id:'insBackToProposal', from:'insDocsVerification', to:'insProposalUpdate', label:'Back', kind:'back'},
     {id:'insMedicalYes', from:'insMedical', to:'insMedicalCheckup', label:'Yes — Coordinate Medical Checkup', kind:'forward'},
     {id:'insMedicalNo', from:'insMedical', to:'insUnderwriting', label:'No — Underwriter Coordination', kind:'forward'},
     {id:'insBackToDocs', from:'insMedical', to:'insDocsVerification', label:'Back', kind:'back'},
@@ -10076,7 +10103,7 @@ const BLUEPRINT_CMS = {
     {id:'insMedicalPending', from:'insMedicalCheckup', to:'insMedicalCheckup', label:'Pending Medical Requirement', kind:'forward', color:'warn'},
     {id:'insBackToMedical', from:'insMedicalCheckup', to:'insMedical', label:'Back', kind:'back'},
     {id:'insUwApproved', from:'insUnderwriting', to:'insPolicyIssuance', label:'Underwriting Completed — Approved', kind:'forward', color:'ok'},
-    {id:'insUwMore', from:'insUnderwriting', to:'insUnderwriting', label:'Additional Requirement', kind:'forward', color:'warn'},
+    {id:'insUwMore', from:'insUnderwriting', to:'insUnderwriting', label:'Underwriter Query', kind:'forward', color:'warn'},
     {id:'insUwRejected', from:'insUnderwriting', to:'insClosed', label:'Rejected — Close Application', kind:'forward', color:'danger'},
     {id:'insBackToMedicalQ', from:'insUnderwriting', to:'insMedical', label:'Back', kind:'back'},
     // Phase 4 — Policy Issuance & Onboarding.
@@ -10408,7 +10435,7 @@ const BLUEPRINT_ADDED_TRANSITIONS = {CMS:['insuranceBackT']};
 /* The insurance journey replaced a single parked stage. A firm's edited copy
    gets its stages and steps too, beside whatever else it changed. */
 function blueprintAddInsurance(own){
-  if(own._insMerged) return;
+  if(own._insMerged === 2) return;
   const f = BLUEPRINTS.CMS;
   own.states = own.states || []; own.transitions = own.transitions || [];
   const pend = own.states.find(st=>st.id==='insurancePending');
@@ -10416,10 +10443,14 @@ function blueprintAddInsurance(own){
   const at = own.states.findIndex(st=>st.id==='insurancePending');
   const add = f.states.filter(st=>/^ins[A-Z]/.test(st.id) && !own.states.some(x=>x.id===st.id)).map(st=>Object.assign({}, st));
   if(add.length){ if(at >= 0) own.states.splice(at + 1, 0, ...add); else own.states.push(...add); }
-  f.transitions.filter(t=>/^ins[A-Z]/.test(t.id) && !own.transitions.some(x=>x.id===t.id)).forEach(t=>{
+  /* The ins* stages and steps are the SOP's, so the factory's copy of them
+     wins: an edited copy made before the SOP changed them follows it. */
+  own.states.forEach(st=>{ const fs = /^ins[A-Z]/.test(st.id) && f.states.find(x=>x.id===st.id); if(fs) st.label = fs.label; });
+  own.transitions = own.transitions.filter(t=>!/^ins[A-Z]/.test(t.id));
+  f.transitions.filter(t=>/^ins[A-Z]/.test(t.id)).forEach(t=>{
     if(own.states.some(st=>st.id===t.from) && own.states.some(st=>st.id===t.to)) own.transitions.push(Object.assign({}, t));
   });
-  own._insMerged = 1;
+  own._insMerged = 2;
 }
 function getBlueprint(module){
   const own = DB.config && DB.config.blueprints && DB.config.blueprints[module];
@@ -10552,6 +10583,7 @@ const STAGE_FORM_HANDLERS = {
 };
 /* Every insurance step that has something to record opens its own box. */
 Object.keys(INS_STEPS_ASK()).forEach(id=>{ STAGE_FORM_HANDLERS[id] = 'openInsuranceStepModal'; });
+STAGE_FORM_HANDLERS.insCifSend = 'openSendCifModal';   // the same CIF formats and letter the investment route sends
 const BLUEPRINT_ATTACHMENT_TRANSITIONS = new Set();   // the plan lives in the CRM now — nothing to attach
 const BUSINESS_ENTRY_TRANSITIONS = new Set(['businessYes','sosBusinessYes']);
 function blueprintWidget(module, record, opts){
@@ -12769,6 +12801,11 @@ async function doTransition(module, recordId, transitionId){
       openMissingFieldsModal(module, recordId, transitionId, missing);
       return;
     }
+  }
+  // The insurance CIF gate: no proposal update or premium before the CIF is in.
+  if(module==='CMS' && t.id==='insCifValidated'){
+    const g = insCifGate(record);
+    if(g){ alert(g); return; }
   }
   // KYC is shut until the documents have actually been looked at. Enforced
   // here as well as on the button, so the profile's "Move to" link and a
@@ -28351,66 +28388,98 @@ async function completeLeadDST(leadId, taskType){
 /* =====================================================================
    THE INSURANCE JOURNEY (CMS)
 
-   The firm's Insurance Agency Process Flow, stage by stage:
-   1 Inquiry & Classification — category (Life / General), the type
-     under it, the company and the plan; then the illustration goes out.
-   2 Client Response — accepted, or a revised illustration (as often as
-     it takes); then the proposal form and the first premium.
-   3 Documents, Medical & Underwriting — documents verified (or what is
-     missing asked for), a medical checkup when one is required, and the
-     underwriter's decision.
-   4 Policy Issuance — the policy entered (number, commencement, premium,
-     date of last payment, maturity), the original received and the
-     client's confirmation.
-   5 Post-Renewal — the next premium due is worked out, a follow-up task
-     is raised thirty days before it, and each payment confirmed moves it on.
+   The firm's Insurance Agency SOP, stage by stage:
+   1 Inquiry & Classification — intake, category (Life / General), the
+     company FIRST, then the type under it, then the plan (sum assured,
+     terms, riders); the benefit illustration is emailed to the client.
+   2 Client Response & Decision — accepted, or a revised illustration as
+     often as it takes; the signed Proposal Form; the Client Information
+     Form requested (the CIF validation gate: no premium before it is in
+     and checked); then the proposal updated and the premium collected.
+   3 Medical & Underwriting — the pre-underwriting scrub (income and
+     disclosures checked against the CIF), tele-medical / physical /
+     home-visit checkup when required, and the underwriter's sign-off
+     (standard, loading, exclusion, counter-offer) or rejection.
+   4 Policy Issuance — the policy entered (number, commencement, modal
+     premium, date of last payment, maturity, nominee), with the number
+     and the two dates typed twice; the client is emailed; the original
+     is received and the client confirms.
+   5 Post-Renewal — the next due date is worked out; the server emails
+     the client from T-30 through the grace period (insuranceRenewalReminders
+     in server.js) and the RM gets a follow-up task; each payment confirmed
+     moves the due date on, records the fund value and can send a receipt.
 
    Each step's box asks for its own part of the "Insurance Policy" fields
-   (INS_STEPS_ASK); every step is written to record.insHistory.
+   (INS_STEPS_ASK) and, where the SOP sends something, offers the email;
+   every step is written to record.insHistory.
    ===================================================================== */
 /* A function rather than a constant: the stage buttons are wired from it
    long before this part of the file has run. `req` must be answered; a
-   field hidden by an earlier answer (Life vs General) is not asked. */
+   field hidden by an earlier answer (Life vs General) is not asked.
+   `mustBe` is a check that has to come out a particular way; `twice`
+   pairs a re-typed box with the one it must match; `mail` is the letter
+   the step can send. */
 function INS_STEPS_ASK(){
   return {
     insIllustrationSentT: {title:'Send Illustration to Client',
-      ask:['insCategory','insLifeType','insGeneralCategory','insHealthType','insCompany','insCompanyOther','insPlanName',
-           'insSumAssured','insPremium','insPremiumFrequency','insPolicyTerm','insPayingTerm','insIllustrationSentOn','insIllustrationVia'],
-      req:['insCategory','insLifeType','insGeneralCategory','insHealthType','insCompany','insCompanyOther','insPlanName','insPremium','insIllustrationSentOn'],
-      today:['insIllustrationSentOn']},
+      note:'Category, then the company, then the type under it — the SOP has the carrier chosen before the product.',
+      ask:['insInquiryOn','insDiscoveryCallOn','insCategory','insCompany','insCompanyOther','insLifeType','insGeneralCategory','insHealthType',
+           'insPlanName','insSumAssured','insPremium','insPremiumFrequency','insPolicyTerm','insPayingTerm','insRiders',
+           'insIllustrationSentOn','insIllustrationVia'],
+      req:['insCategory','insCompany','insCompanyOther','insLifeType','insGeneralCategory','insHealthType','insPlanName','insPremium','insIllustrationSentOn'],
+      today:['insIllustrationSentOn'], mail:{template:'insIllustration', label:'Insurance Illustration Sent', attach:1, what:'The illustration'}},
     insIllustrationRevised: {title:'Send Revised Illustration',
       ask:['insRevisionReason','insCompany','insCompanyOther','insPlanName','insSumAssured','insPremium','insPremiumFrequency',
-           'insPolicyTerm','insPayingTerm','insIllustrationSentOn','insIllustrationVia'],
+           'insPolicyTerm','insPayingTerm','insRiders','insIllustrationSentOn','insIllustrationVia'],
       req:['insRevisionReason','insCompany','insCompanyOther','insPlanName','insPremium','insIllustrationSentOn'],
-      today:['insIllustrationSentOn'], fresh:['insIllustrationSentOn']},
-    insProposalDone: {title:'Proposal Form & Premium Payment',
-      note:'Fill in the product’s proposal form with the client, and upload it with the mandatory documents (ID, address, income, photograph) on the Documents tab.',
-      ask:['insProposalNo','insPremiumPaidOn','insPaymentMode','insPaymentRef'],
-      req:['insProposalNo','insPremiumPaidOn','insPaymentMode'], today:['insPremiumPaidOn']},
+      today:['insIllustrationSentOn'], fresh:['insIllustrationSentOn'],
+      mail:{template:'insIllustrationRevised', label:'Revised Insurance Illustration Sent', attach:1, what:'The revised illustration'}},
+    insProposalSubmitted: {title:'Proposal Form Submitted',
+      note:'The proposal form signed by the client. Upload it on the Documents tab.',
+      ask:['insProposalNo','insProposalDate'], req:['insProposalDate'], today:['insProposalDate']},
+    insCifValidated: {title:'CIF Validated',
+      note:'The CIF validation gate: never take the premium before the Client Information Form is in and checked.',
+      ask:['insCifIncomeOk','insCifKycOk'], req:['insCifIncomeOk','insCifKycOk'], mustBe:{insCifIncomeOk:'Yes', insCifKycOk:'Yes'}},
+    insProposalDone: {title:'Proposal Update & Premium Payment',
+      note:'Update the proposal with the verified CIF details, then collect the first premium. This closes the sale.',
+      ask:['insProposalNo','insProposalUpdatedOn','insPremiumPaidOn','insPaymentMode','insPaymentRef'],
+      req:['insProposalNo','insProposalUpdatedOn','insPremiumPaidOn','insPaymentMode'], today:['insProposalUpdatedOn','insPremiumPaidOn']},
+    insDocsVerified: {title:'Pre-Underwriting Scrub',
+      note:'Audit the medical answers on the updated proposal against the CIF disclosures, so nothing is disputed at underwriting or claim.',
+      ask:['insScrubDisclosureOk','insScrubDocsOk'], req:['insScrubDisclosureOk','insScrubDocsOk'], mustBe:{insScrubDisclosureOk:'Yes', insScrubDocsOk:'Yes'}},
     insDocsMissing: {title:'Request Missing Documents or Corrections',
       ask:['insDocsNote'], req:['insDocsNote']},
     insMedicalYes: {title:'Coordinate Medical Checkup',
-      ask:['insMedicalDate','insMedicalCentre'], req:['insMedicalDate']},
+      ask:['insMedicalType','insMedicalDate','insMedicalCentre'], req:['insMedicalType','insMedicalDate']},
     insMedicalDone: {title:'Medical Completed',
-      ask:['insMedicalCompletedOn'], req:['insMedicalCompletedOn'], today:['insMedicalCompletedOn']},
+      ask:['insMedicalCompletedOn','insMedicalReportsUploaded'], req:['insMedicalCompletedOn','insMedicalReportsUploaded'],
+      mustBe:{insMedicalReportsUploaded:'Yes'}, today:['insMedicalCompletedOn']},
     insMedicalPending: {title:'Pending Medical Requirement',
       ask:['insMedicalNote','insMedicalDate'], req:['insMedicalNote']},
     insUwApproved: {title:'Underwriting Completed',
-      ask:['insUwDecisionOn'], req:['insUwDecisionOn'], today:['insUwDecisionOn']},
-    insUwMore: {title:'Additional Requirement from the Underwriter',
+      ask:['insUwOutcome','insUwTerms','insUwDecisionOn'], req:['insUwOutcome','insUwDecisionOn'], today:['insUwDecisionOn']},
+    insUwMore: {title:'Underwriter Query (counter-offer, loading or exclusion)',
       ask:['insUwNote'], req:['insUwNote']},
     insUwRejected: {title:'Close Application — Rejected',
       ask:['insRejectionReason','insUwDecisionOn'], req:['insRejectionReason'], today:['insUwDecisionOn']},
     insPolicyEntered: {title:'Policy Data Entry',
-      ask:['insPolicyNo','insCommencementDate','insPremium','insPremiumFrequency','insSumAssured','insFinalPremiumDate','insMaturityDate'],
-      req:['insPolicyNo','insCommencementDate','insPremium','insPremiumFrequency','insMaturityDate']},
+      note:'Policy number, commencement date and date of last payment are typed twice: the renewal reminders are worked out from them.',
+      ask:['insPolicyNo','insPolicyNoCheck','insCommencementDate','insCommencementCheck','insPremium','insPremiumFrequency','insSumAssured',
+           'insFinalPremiumDate','insFinalPremiumCheck','insMaturityDate','insNomineeName','insNomineeRelation'],
+      req:['insPolicyNo','insPolicyNoCheck','insCommencementDate','insCommencementCheck','insPremium','insPremiumFrequency',
+           'insFinalPremiumDate','insFinalPremiumCheck','insMaturityDate','insNomineeName'],
+      twice:{insPolicyNoCheck:'insPolicyNo', insCommencementCheck:'insCommencementDate', insFinalPremiumCheck:'insFinalPremiumDate'},
+      mail:{template:'insPolicyIssued', label:'Insurance Policy Issued', attach:1, what:'The policy letter'}},
     insPolicyConfirmed: {title:'Original Policy & Client Confirmation',
       ask:['insOriginalPolicyOn','insClientConfirmedOn'], req:['insOriginalPolicyOn','insClientConfirmedOn'],
       today:['insOriginalPolicyOn','insClientConfirmedOn']},
     insRenewalFollowUp: {title:'Renewal Premium Follow-up',
-      ask:['insRenewalNote'], req:['insRenewalNote']},
+      note:'The client is also emailed automatically from 30 days before the due date through the grace period.',
+      ask:['insRenewalNote'], req:['insRenewalNote'],
+      mail:{template:'insRenewalReminder', label:'Insurance Renewal Reminder', what:'The reminder', optional:1}},
     insRenewalPaid: {title:'Renewal Payment Confirmation',
-      ask:['insRenewalPaidOn','insRenewalAmount'], req:['insRenewalPaidOn','insRenewalAmount'], today:['insRenewalPaidOn']},
+      ask:['insRenewalPaidOn','insRenewalAmount','insRenewalReceiptRef','insFundValue'], req:['insRenewalPaidOn','insRenewalAmount'],
+      today:['insRenewalPaidOn'], mail:{template:'insRenewalReceived', label:'Insurance Renewal Received', what:'The receipt'}},
     insPolicyEnded: {title:'Close the Policy',
       ask:['insClosureReason','insClosureNote'], req:['insClosureReason']},
   };
@@ -28419,11 +28488,13 @@ const INS_RENEWAL_TASK = 'Renewal Premium Follow-up';
 function insIsStage(id){ return id==='insurancePending' || /^ins[A-Z]/.test(String(id||'')); }
 function insField(k){ return (CMS_FIELDS['Insurance Policy'] || []).find(f=>f.k===k); }
 function insCompanyName(r){ return r.insCompany==='Other' ? (r.insCompanyOther || 'Other') : (r.insCompany || ''); }
-function insPlanLine(r){
-  const type = r.insCategory==='Life Insurance' ? r.insLifeType
+function insTypeOf(r){
+  return r.insCategory==='Life Insurance' ? (r.insLifeType || '')
     : [r.insGeneralCategory, r.insGeneralCategory==='Health' ? r.insHealthType : ''].filter(Boolean).join(' — ');
-  return [r.insCategory, type, insCompanyName(r), r.insPlanName].filter(Boolean).join(' › ');
 }
+/* Category › Company › Type › Plan — the SOP's own order. */
+function insPlanLine(r){ return [r.insCategory, insCompanyName(r), insTypeOf(r), r.insPlanName].filter(Boolean).join(' › '); }
+function insMoney(v){ return v ? '₹' + Number(v).toLocaleString('en-IN') : ''; }
 /* Dates are counted as calendar days in the firm's own day, never through
    UTC, so a due date never slips back a day in India. */
 function insAddMonths(dateStr, months){
@@ -28452,29 +28523,77 @@ function insFieldsFor(stepId){
   /* fieldInput reads `showIf`; the CMS form reads `show`. Same rule. */
   return st.ask.map(insField).filter(Boolean).map(f=>Object.assign({}, f, f.show ? {showIf: f.show} : {}, {req: st.req.indexOf(f.k) >= 0}));
 }
+/* What an insurance letter can say, from the client as it stands. */
+function insMailVars(r, extra){
+  return Object.assign({ClientName: r.cmsName || '', Name: r.cmsName || '', Category: r.insCategory || '', Company: insCompanyName(r),
+    Type: insTypeOf(r), Plan: r.insPlanName || '', SumAssured: insMoney(r.insSumAssured), Premium: insMoney(r.insPremium),
+    Frequency: r.insPremiumFrequency || '', PolicyTerm: r.insPolicyTerm ? r.insPolicyTerm + ' years' : '',
+    PayingTerm: r.insPayingTerm ? r.insPayingTerm + ' years' : '', Riders: r.insRiders || 'None',
+    PolicyNo: r.insPolicyNo || '', Commencement: r.insCommencementDate ? fmtDate(r.insCommencementDate) : '',
+    LastPaymentDate: r.insFinalPremiumDate ? fmtDate(r.insFinalPremiumDate) : '', Maturity: r.insMaturityDate ? fmtDate(r.insMaturityDate) : '',
+    Nominee: [r.insNomineeName, r.insNomineeRelation ? '(' + r.insNomineeRelation + ')' : ''].filter(Boolean).join(' '),
+    DueDate: r.insNextDueDate ? fmtDate(r.insNextDueDate) : '', Revision: '', Amount: '', PaidOn: '', ReceiptRef: '',
+    RMName: teamName(r.rmName || r.assignedTo || currentUser), FirmName: (DB.config.company || {}).name || ''}, extra || {});
+}
+function insMailBoxHtml(r, st){
+  if(!st.mail) return '';
+  const on = !!r.email && !st.mail.optional;
+  return `<div class="card" style="margin-top:12px;padding:12px 14px" id="insMailBox">
+    <label style="display:flex;gap:8px;align-items:center;font-weight:700"><input type="checkbox" id="f_insMail" ${on ? 'checked' : ''}
+      onchange="document.getElementById('insMailMore').style.display=this.checked?'':'none'"> Email the client</label>
+    <div id="insMailMore" style="${on ? '' : 'display:none'}">
+      <div class="field"><label>Send To</label><input type="text" id="f_insMailTo" value="${esc(r.email || '')}" placeholder="name@example.com"></div>
+      <div class="small-note" style="margin:0 0 6px">The wording is the “${esc((mailTemplateMeta(st.mail.template) || {}).name || st.mail.template)}” template in Setup › Forms &amp; Mail Templates, filled from this box.</div>
+      ${st.mail.attach ? composeAttachFieldHtml('Attach the PDF from the insurer — up to 10MB in total.') : ''}
+    </div></div>`;
+}
 function openInsuranceStepModal(module, recordId, stepId){
   const r = DB.clients.find(c=>c.id===recordId); if(!r) return;
   const st = INS_STEPS_ASK()[stepId]; if(!st) return doTransition('CMS', recordId, stepId);
+  if(stepId==='insCifValidated' && insCifGate(r)){ alert(insCifGate(r)); return; }
   const today = hrToday();
   const val = f => {
     if(f.transient || (st.fresh||[]).indexOf(f.k) >= 0) return (st.today||[]).indexOf(f.k) >= 0 ? today : '';
     return r[f.k] || ((st.today||[]).indexOf(f.k) >= 0 ? today : '');
   };
+  if(st.mail && st.mail.attach && typeof resetComposeAttachments === 'function') resetComposeAttachments();
   openModal(st.title,
     `<div class="small-note" style="margin:0 0 10px">${esc(r.cmsName || '')}${insPlanLine(r) ? ' · ' + esc(insPlanLine(r)) : ''}</div>`
     + (st.note ? `<div class="small-note" style="margin:0 0 10px">${esc(st.note)}</div>` : '')
-    + `<div id="insStepForm">${insFieldsFor(stepId).map(f=>fieldInput(f, val(f))).join('')}</div>`,
+    + `<div id="insStepForm">${insFieldsFor(stepId).map(f=>fieldInput(f, val(f))).join('')}</div>`
+    + insMailBoxHtml(r, st),
     `<button class="btn" onclick="closeModal()">Cancel</button>
      <button class="btn primary" onclick="submitInsuranceStep('${esc(recordId)}','${esc(stepId)}')">Save &amp; Continue</button>`);
   applyConditionalFields();
 }
 async function submitInsuranceStep(recordId, stepId){
   const r = DB.clients.find(c=>c.id===recordId); if(!r) return;
+  const st = INS_STEPS_ASK()[stepId] || {};
   const fields = insFieldsFor(stepId);
   const shown = f => { const el = document.getElementById('f_' + f.k); const w = el && el.closest('[data-conditional-field]'); return !!el && !(w && w.style.display==='none'); };
   const data = readFields(fields);
-  const missing = fields.filter(f=>f.req && shown(f) && (data[f.k]===undefined || data[f.k]===null || String(data[f.k]).trim()===''));
+  const blank = v => v===undefined || v===null || String(v).trim()==='';
+  const missing = fields.filter(f=>f.req && shown(f) && blank(data[f.k]));
   if(missing.length){ alert('Please fill: ' + missing.map(f=>f.l).join(', ')); return; }
+  const wrong = Object.keys(st.mustBe || {}).filter(k=>shown({k}) && data[k] !== st.mustBe[k]);
+  if(wrong.length){
+    alert('This step cannot be completed until these are ' + wrong.map(k=>'“' + st.mustBe[k] + '”').join(' / ') + ':\n\n• '
+      + wrong.map(k=>(insField(k) || {}).l || k).join('\n• ') + '\n\nResolve them first, or record what is outstanding with the step for it.');
+    return;
+  }
+  const unmatched = Object.keys(st.twice || {}).filter(k=>String(data[k] || '').trim() !== String(data[st.twice[k]] || '').trim());
+  if(unmatched.length){
+    alert('These do not match what was typed the first time — check them against the policy document:\n\n• '
+      + unmatched.map(k=>(insField(st.twice[k]) || {}).l).join('\n• '));
+    return;
+  }
+  let mailTo = '';
+  const wantsMail = !!(st.mail && (document.getElementById('f_insMail') || {}).checked);
+  if(wantsMail){
+    mailTo = ((document.getElementById('f_insMailTo') || {}).value || '').trim();
+    if(!EMAIL_RE.test(mailTo)){ alert('Enter a valid email address to send to, or untick “Email the client”.'); return; }
+  }
+  const attachments = wantsMail && st.mail.attach && typeof composeAttachmentsForSend === 'function' ? composeAttachmentsForSend() : [];
   const before = Object.assign({}, r);
   /* What the box holds is kept on the client (hidden answers are cleared,
      so a Life plan does not keep a General category it was switched from);
@@ -28482,14 +28601,37 @@ async function submitInsuranceStep(recordId, stepId){
   const noted = {};
   fields.forEach(f=>{
     const v = shown(f) ? data[f.k] : '';
-    if(f.transient){ if(v!=='' && v!==undefined) noted[f.k] = v; return; }
-    if(v==='' || v===undefined) delete r[f.k]; else r[f.k] = v;
+    if(f.transient){ if(!blank(v)) noted[f.k] = v; return; }
+    if(blank(v)) delete r[f.k]; else r[f.k] = v;
   });
-  window._insNoted = noted;
+  if(mailTo && mailTo !== r.email) r.email = mailTo;
   await save('clients');
   await logAudit('CMS', r.id, 'Edit (insurance step)', diffFields(before, r, fields.filter(f=>!f.transient)));
+  if(wantsMail){
+    /* The letter is filled from the box as just saved, so it says what
+       the step records. A step that depends on it going (the illustration,
+       the policy letter) does not move when it did not go. */
+    const extra = {Revision: noted.insRevisionReason || '', Amount: insMoney(noted.insRenewalAmount),
+      PaidOn: noted.insRenewalPaidOn ? fmtDate(noted.insRenewalPaidOn) : '', ReceiptRef: noted.insRenewalReceiptRef ? ' (receipt ' + noted.insRenewalReceiptRef + ')' : ''};
+    const result = await insSendMail(r, st.mail, mailTo, extra, attachments);
+    if(!result.sent){
+      alert(mailResultNote(result, st.mail.what) + '\n\nWhat you entered is saved; the stage has not moved. Fix the address or the email connector and press the step again — or untick “Email the client” if it went another way.');
+      return;
+    }
+    noted._mailed = mailTo;
+    if(attachments.length && typeof resetComposeAttachments === 'function') resetComposeAttachments();
+  }
+  window._insNoted = noted;
   closeModal();
   await doTransition('CMS', recordId, stepId);
+}
+async function insSendMail(r, mail, to, extra, attachments){
+  const tpl = mailTemplateOf(mail.template);
+  const vars = insMailVars(r, extra);
+  return deliverMail({template: mail.template, to, subject: fillTemplate(tpl.subject, vars), body: fillTemplate(tpl.body, vars),
+    module:'CMS', recordId: r.id, clientId: r.id, label: mail.label, attachments: attachments || [],
+    extraDetails: [{field:'Plan', oldValue:'', newValue: insPlanLine(r) || '—'}]
+      .concat(r.insPolicyNo ? [{field:'Policy No.', oldValue:'', newValue: r.insPolicyNo}] : [])});
 }
 async function insuranceAfterStep(r, id){
   const noted = window._insNoted || {}; window._insNoted = null;
@@ -28499,20 +28641,27 @@ async function insuranceAfterStep(r, id){
   const note = noted.insRevisionReason || noted.insDocsNote || noted.insMedicalNote || noted.insUwNote
     || noted.insRenewalNote || noted.insClosureNote || '';
   if(note) line.note = note;
+  if(noted._mailed) line.mailedTo = noted._mailed;
   if(id==='insIllustrationSentT' || id==='insIllustrationRevised'){
     r.insIllustrations = (r.insIllustrations || []).concat([{n: (r.insIllustrations || []).length + 1, at: now,
-      sentOn: r.insIllustrationSentOn || today, via: r.insIllustrationVia || '', plan: insPlanLine(r),
-      premium: r.insPremium || '', sumAssured: r.insSumAssured || '', frequency: r.insPremiumFrequency || '', reason: noted.insRevisionReason || ''}]);
-    line.note = 'Illustration ' + r.insIllustrations.length + ': ' + insPlanLine(r) + (r.insPremium ? ', premium ₹' + Number(r.insPremium).toLocaleString('en-IN') : '') + (note ? ' — ' + note : '');
+      sentOn: r.insIllustrationSentOn || today, via: noted._mailed ? 'Email' : (r.insIllustrationVia || ''), plan: insPlanLine(r),
+      premium: r.insPremium || '', sumAssured: r.insSumAssured || '', frequency: r.insPremiumFrequency || '',
+      riders: r.insRiders || '', reason: noted.insRevisionReason || ''}]);
+    line.note = 'Illustration ' + r.insIllustrations.length + ': ' + insPlanLine(r) + (r.insPremium ? ', premium ' + insMoney(r.insPremium) : '') + (note ? ' — ' + note : '');
   }
-  if(id==='insProposalDone') r.insuranceStatus = 'Applied';
+  if(id==='insProposalSubmitted') line.note = 'Proposal ' + (r.insProposalNo || '') + ' signed ' + fmtDate(r.insProposalDate || today);
+  if(id==='insCifSend'){ r.insCifRequestedAt = now; line.note = 'CIF requested' + (r.cifFormName ? ' (' + r.cifFormName + ')' : ''); }
+  if(id==='insCifValidated') line.note = 'CIF received ' + (r.cifSubmittedAt ? fmtDate(r.cifSubmittedAt) : '') + ' and validated';
+  if(id==='insProposalDone'){ r.insuranceStatus = 'Applied'; line.note = 'Premium ' + insMoney(r.insPremium) + ' paid ' + fmtDate(r.insPremiumPaidOn || today) + (r.insPaymentMode ? ' by ' + r.insPaymentMode : ''); }
   if(id==='insDocsMissing') await createClientDST(r, 'Collect Missing Insurance Documents', 2, note);
   if(id==='insDocsVerified') await completeClientDST(r.id, 'Collect Missing Insurance Documents');
   if(id==='insMedicalYes'){
     const days = Math.max(0, insDaysUntil(r.insMedicalDate) || 0);
-    await createClientDST(r, 'Coordinate Insurance Medical Checkup', days, 'Medical checkup on ' + fmtDate(r.insMedicalDate) + (r.insMedicalCentre ? ' at ' + r.insMedicalCentre : ''));
+    line.note = (r.insMedicalType || 'Medical') + ' on ' + fmtDate(r.insMedicalDate) + (r.insMedicalCentre ? ' at ' + r.insMedicalCentre : '');
+    await createClientDST(r, 'Coordinate Insurance Medical Checkup', days, line.note);
   }
   if(id==='insMedicalDone') await completeClientDST(r.id, 'Coordinate Insurance Medical Checkup');
+  if(id==='insUwApproved') line.note = (r.insUwOutcome || '') + (r.insUwTerms ? ' — ' + r.insUwTerms : '');
   if(id==='insUwRejected'){ r.insuranceStatus = 'Rejected'; line.note = r.insRejectionReason || ''; }
   if(id==='insPolicyEntered'){
     /* The first premium was paid with the proposal, so the next one is a
@@ -28530,11 +28679,13 @@ async function insuranceAfterStep(r, id){
   if(id==='insRenewalPaid'){
     const paidFor = r.insNextDueDate || '';
     r.insRenewals = (r.insRenewals || []).concat([{dueOn: paidFor, paidOn: noted.insRenewalPaidOn || today,
-      amount: noted.insRenewalAmount || '', at: now, by: currentUser}]);
+      amount: noted.insRenewalAmount || '', receiptRef: noted.insRenewalReceiptRef || '', fundValue: noted.insFundValue || '',
+      at: now, by: currentUser}]);
+    if(noted.insFundValue){ r.insFundValue = noted.insFundValue; r.insFundValueOn = noted.insRenewalPaidOn || today; }
     await completeClientDST(r.id, INS_RENEWAL_TASK);
     const next = insNextDue(r, paidFor || noted.insRenewalPaidOn || today);
     if(next) r.insNextDueDate = next; else delete r.insNextDueDate;
-    line.note = 'Paid ₹' + Number(noted.insRenewalAmount || 0).toLocaleString('en-IN') + ' on ' + fmtDate(noted.insRenewalPaidOn || today)
+    line.note = 'Paid ' + insMoney(noted.insRenewalAmount) + ' on ' + fmtDate(noted.insRenewalPaidOn || today)
       + (paidFor ? ' for the premium due ' + fmtDate(paidFor) : '') + (next ? '; next due ' + fmtDate(next) : '; no further premium due');
     await insRaiseRenewalTask(r);
   }
@@ -28549,10 +28700,12 @@ async function insuranceAfterStep(r, id){
     if(r.insPolicyNo) r.insPastPolicies = (r.insPastPolicies || []).concat([{policyNo: r.insPolicyNo, plan: insPlanLine(r),
       commencement: r.insCommencementDate || '', closed: r.insClosureReason || r.insuranceStatus || '', at: now}]);
     ['insPolicyNo','insCommencementDate','insFinalPremiumDate','insMaturityDate','insNextDueDate','insOriginalPolicyOn','insClientConfirmedOn',
-     'insProposalNo','insPremiumPaidOn','insPaymentRef','insMedicalDate','insMedicalCompletedOn','insUwDecisionOn','insRejectionReason','insClosureReason']
+     'insProposalNo','insProposalDate','insProposalUpdatedOn','insPremiumPaidOn','insPaymentRef','insMedicalDate','insMedicalCompletedOn',
+     'insUwDecisionOn','insUwOutcome','insUwTerms','insRejectionReason','insClosureReason','insCifRequestedAt','insFundValue','insFundValueOn']
       .forEach(k=>{ delete r[k]; });
     r.insuranceStatus = 'Pending';
   }
+  if(line.mailedTo) line.note = (line.note ? line.note + ' · ' : '') + 'emailed to ' + line.mailedTo;
   r.insHistory = (r.insHistory || []).concat([line]);
   await save('clients');
 }
@@ -28564,45 +28717,72 @@ async function insRaiseRenewalTask(r){
   if(open) return;
   const days = Math.max(0, (insDaysUntil(r.insNextDueDate) || 0) - 30);
   await createClientDST(r, INS_RENEWAL_TASK, days,
-    'Premium of ₹' + (r.insPremium || '') + ' on policy ' + (r.insPolicyNo || '') + ' (' + insCompanyName(r) + ') is due on ' + fmtDate(r.insNextDueDate) + '.');
+    'Premium of ' + insMoney(r.insPremium) + ' on policy ' + (r.insPolicyNo || '') + ' (' + insCompanyName(r) + ') is due on ' + fmtDate(r.insNextDueDate) + '.');
+}
+/* The CIF gate holds here as well as on the button. */
+function insCifGate(r){
+  if(r.cifSubmittedAt) return '';
+  return 'The Client Information Form has not come back yet.\n\nThe SOP does not let the premium be taken before the CIF is in and validated. '
+    + (r.cifDocToken ? 'The client’s link:\n\n' + docUrl(r.cifDocToken) + '\n\n' : 'Send it from this stage first. ')
+    + 'If it came back on paper, record it from the stage.';
+}
+async function insRecordPaperCif(clientId){
+  const r = DB.clients.find(c=>c.id===clientId); if(!r) return;
+  if(!confirm('Record the CIF as received on paper?')) return;
+  r.cifSubmittedAt = new Date().toISOString();
+  r.cifReceivedOnPaper = true;
+  r.insHistory = (r.insHistory || []).concat([{at: r.cifSubmittedAt, by: currentUser, step:'insCifPaper', label:'CIF received on paper'}]);
+  await save('clients');
+  await logAudit('CMS', r.id, 'CIF Recorded as Received on Paper', [{field:'By', oldValue:'', newValue: teamName(currentUser)}]);
+  render();
 }
 const INS_STAGE_NOTE = {
-  insurancePending: 'Choose Life or General, the type under it, the company and the plan, and send the client the illustration.',
-  insIllustration: 'Waiting for the client’s answer. Accepted goes on to the proposal; otherwise send a revised illustration, as often as it takes.',
-  insProposal: 'Fill in the proposal form, collect the first premium, and upload the documents on the Documents tab.',
-  insDocsVerification: 'Check the proposal and documents. Ask for anything missing, or mark them verified.',
-  insMedical: 'Does the insurer need a medical checkup for this proposal?',
-  insMedicalCheckup: 'Coordinate the checkup with the client and the centre, then mark it completed.',
-  insUnderwriting: 'With the underwriter. Record any additional requirement, then the decision.',
-  insPolicyIssuance: 'Enter the policy as issued: number, commencement, premium, date of last payment and maturity.',
+  insurancePending: 'Intake: choose Life or General, then the company, then the type and the plan, and send the client the benefit illustration.',
+  insIllustration: 'Waiting for the client’s answer. Accepted goes on to the proposal form; otherwise send a revised illustration, as often as it takes.',
+  insProposal: 'Get the proposal form signed by the client and record it.',
+  insCif: 'Request the Client Information Form: KYC, address and financial proofs (ITR, bank statements), medical and family history. No premium before it is in and validated.',
+  insProposalUpdate: 'Update the proposal with the verified CIF details and collect the first premium. This closes the sale.',
+  insDocsVerification: 'Pre-underwriting scrub: check the proposal’s medical answers against the CIF disclosures and the documents. Ask for anything missing.',
+  insMedical: 'Does the carrier’s grid (age, sum assured, disclosures) call for a tele-medical or physical examination?',
+  insMedicalCheckup: 'Coordinate the checkup with the diagnostic centre or home visit, make sure the reports reach the insurer portal, then mark it completed.',
+  insUnderwriting: 'With the underwriter. Record any counter-offer, loading or exclusion query, then the sign-off.',
+  insPolicyIssuance: 'Enter the policy as issued and email the client. Policy number and the two dates are typed twice.',
   insPolicyDelivery: 'Record when the original policy document arrived and when the client confirmed it.',
-  insActive: 'The policy is in force. A follow-up task is raised 30 days before each premium; confirm each payment here.',
+  insActive: 'In force. The client is emailed from 30 days before each premium through the grace period, and the RM gets a follow-up task; confirm each payment here.',
   insClosed: 'This insurance application or policy is closed.',
 };
 function insurancePanelHtml(r, cur, editable){
   const due = r.insNextDueDate, left = due ? insDaysUntil(due) : null;
   const row = (l, v) => v ? `<div><span class="small-note" style="margin:0">${esc(l)}</span><div><b>${esc(v)}</b></div></div>` : '';
-  const money = v => v ? '₹' + Number(v).toLocaleString('en-IN') : '';
   const hist = (r.insHistory || []).slice(-8).reverse();
+  const cif = cur==='insCif' ? `<div class="small-note" style="margin:0 0 8px">${r.cifSubmittedAt
+      ? '✔ CIF received ' + esc(fmtDate(r.cifSubmittedAt)) + (r.cifReceivedOnPaper ? ' (on paper)' : '') + ' — validate it and update the proposal.'
+      : r.insCifRequestedAt ? 'CIF requested ' + esc(fmtDate(r.insCifRequestedAt)) + ' — not back yet.' : 'CIF not requested yet.'}
+      ${r.cifDocToken && !r.cifSubmittedAt ? `<br><a href="${esc(docUrl(r.cifDocToken))}" target="_blank" class="cell-link">${esc(docUrl(r.cifDocToken))}</a>` : ''}</div>
+      ${editable && !r.cifSubmittedAt ? `<div class="row" style="gap:8px;margin:0 0 8px"><button class="btn sm" onclick="insRecordPaperCif('${esc(r.id)}')">Record a CIF received on paper</button></div>` : ''}` : '';
   return `<div class="stage-panel" id="insPanel">
     <div class="stage-panel-head"><b>Insurance</b>
       ${r.insuranceStatus ? `<span class="badge ${r.insuranceStatus==='Active' ? 'ok' : r.insuranceStatus==='Rejected' || r.insuranceStatus==='Expired' ? 'danger' : 'warn'}">${esc(r.insuranceStatus)}</span>` : ''}
       ${due ? `<span class="badge ${left <= 30 ? 'warn' : 'info'}">Next premium ${esc(fmtDate(due))}${left !== null ? ' · ' + (left < 0 ? Math.abs(left) + ' days overdue' : left + ' days') : ''}</span>` : ''}</div>
     <div class="small-note" style="margin:0 0 8px">${esc(INS_STAGE_NOTE[cur] || '')}</div>
+    ${cif}
     ${insPlanLine(r) ? `<div style="margin:0 0 8px"><b>${esc(insPlanLine(r))}</b></div>` : ''}
     <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:8px 16px">
-      ${row('Premium', r.insPremium ? money(r.insPremium) + (r.insPremiumFrequency ? ' · ' + r.insPremiumFrequency : '') : '')}
-      ${row('Sum assured', money(r.insSumAssured))}
+      ${row('Premium', r.insPremium ? insMoney(r.insPremium) + (r.insPremiumFrequency ? ' · ' + r.insPremiumFrequency : '') : '')}
+      ${row('Sum assured', insMoney(r.insSumAssured))}
+      ${row('Riders', r.insRiders)}
       ${row('Illustrations sent', (r.insIllustrations || []).length ? String((r.insIllustrations || []).length) : '')}
       ${row('Proposal no.', r.insProposalNo)}
       ${row('Policy no.', r.insPolicyNo)}
       ${row('Commencement', r.insCommencementDate ? fmtDate(r.insCommencementDate) : '')}
       ${row('Date of last payment', r.insFinalPremiumDate ? fmtDate(r.insFinalPremiumDate) : '')}
       ${row('Maturity', r.insMaturityDate ? fmtDate(r.insMaturityDate) : '')}
+      ${row('Nominee', [r.insNomineeName, r.insNomineeRelation ? '(' + r.insNomineeRelation + ')' : ''].filter(Boolean).join(' '))}
+      ${row('Fund value', r.insFundValue ? insMoney(r.insFundValue) + (r.insFundValueOn ? ' on ' + fmtDate(r.insFundValueOn) : '') : '')}
       ${row('Renewals paid', (r.insRenewals || []).length ? String((r.insRenewals || []).length) : '')}
     </div>
     ${hist.length ? `<table class="table" id="insHistory" style="margin-top:10px"><thead><tr><th>When</th><th>Step</th><th>Detail</th><th>By</th></tr></thead><tbody>
-      ${hist.map(h=>`<tr><td>${esc(fmtDate(h.at))}</td><td>${esc(h.label)}</td><td>${esc(h.note || '')}</td><td>${esc(teamName(h.by) || '')}</td></tr>`).join('')}
+      ${hist.map(h=>`<tr><td>${esc(fmtDate(h.at))}</td><td>${esc(h.label)}</td><td>${esc(h.note || '')}</td><td>${esc(h.by==='server' ? 'Automatic' : (teamName(h.by) || ''))}</td></tr>`).join('')}
     </tbody></table>` : ''}
   </div>`;
 }
@@ -33578,6 +33758,18 @@ function defaultConfig(){
       // What the lead or client gets back the moment they submit the ISEQ.
       formSend: {subject:'{Form} — for your completion',
         body:'Dear {Name},\n\nPlease complete the form at the link below and send it back to us.\n\n{Link}\n\nBest regards,\n{FirmName}'},
+      // The insurance journey's letters (Insurance Agency SOP). The renewal
+      // reminder is also sent by the server, T-30 through the grace period.
+      insIllustration: {subject:'Your insurance illustration — {Plan} ({Company})',
+        body:'Dear {ClientName},\n\nThank you for your time. As discussed, here is the benefit illustration for the plan we recommend:\n\nCategory: {Category}\nCompany: {Company}\nType: {Type}\nPlan: {Plan}\nSum assured: {SumAssured}\nPremium: {Premium} ({Frequency})\nPolicy term: {PolicyTerm}\nPremium paying term: {PayingTerm}\nRiders: {Riders}\n\nThe illustration from the insurer is attached. Do go through it, and tell us whether you would like to go ahead or would like anything changed.\n\n{Signature}'},
+      insIllustrationRevised: {subject:'Your revised insurance illustration — {Plan} ({Company})',
+        body:'Dear {ClientName},\n\nThank you for your feedback ({Revision}). We have revised the plan:\n\nCompany: {Company}\nType: {Type}\nPlan: {Plan}\nSum assured: {SumAssured}\nPremium: {Premium} ({Frequency})\nPolicy term: {PolicyTerm}\nPremium paying term: {PayingTerm}\nRiders: {Riders}\n\nThe revised illustration is attached. Let us know if this works for you.\n\n{Signature}'},
+      insPolicyIssued: {subject:'Your policy {PolicyNo} has been issued — {Company}',
+        body:'Dear {ClientName},\n\nWe are pleased to tell you that {Company} has issued your policy.\n\nPolicy number: {PolicyNo}\nPlan: {Plan}\nSum assured: {SumAssured}\nPremium: {Premium} ({Frequency})\nCommencement date: {Commencement}\nDate of last premium payment: {LastPaymentDate}\nMaturity date: {Maturity}\nNominee: {Nominee}\n\nThe original policy document will reach you shortly. Please check these details and confirm to us once you have received it.\n\n{Signature}'},
+      insRenewalReminder: {subject:'Premium due on {DueDate} — policy {PolicyNo}',
+        body:'Dear {ClientName},\n\nThis is a reminder that the premium of {Premium} on your {Company} policy {PolicyNo} ({Plan}) is due on {DueDate}.\n\nPaying on time keeps your cover in force without a break. If you have already paid, please ignore this note, or send us the receipt and we will update our records.\n\n{Signature}'},
+      insRenewalReceived: {subject:'Premium received — policy {PolicyNo}',
+        body:'Dear {ClientName},\n\nThank you. We have recorded your premium of {Amount} paid on {PaidOn} for your {Company} policy {PolicyNo}{ReceiptRef}.\n\nYour next premium is due on {DueDate}. We will remind you before then.\n\n{Signature}'},
       cifSend: {subject:'{Form} — to start your onboarding',
         body:'Dear {Name},\n\nTo open your account we need the details on the form below. It is prefilled with what we already hold, so there should be little left to add.\n\n{Link}\n\nBest regards,\n{FirmName}'},
       // What the C&T form produces: the client's own copy, and the
@@ -39752,7 +39944,7 @@ const CMS_STAGE_GROUPS = [
   ['Ready for RMS',  ['readyForRMS'],                                            'ok'],
   ['In RMS',         ['convertedToRMS'],                                         'ok'],
   ['Insurance',      ['insurancePending','insIllustration','insProposal','insDocsVerification',
-                      'insMedical','insMedicalCheckup','insUnderwriting','insPolicyIssuance','insPolicyDelivery'], 'warn'],
+                      'insCif','insProposalUpdate','insMedical','insMedicalCheckup','insUnderwriting','insPolicyIssuance','insPolicyDelivery'], 'warn'],
   ['Policies In Force', ['insActive'],                                           'ok'],
   ['Insurance Closed', ['insClosed'],                                            'danger'],
 ];
@@ -43171,7 +43363,7 @@ function openClientForm(id, tab){
   const start = cmsFormStartValues(client || {});
   const fields = [], byKey = {};
   const groups = Object.entries(cmsFieldGroupsVisible()).map(([g, list])=>{
-    const shown = list.filter(f=>!f.legacy || String((client || {})[f.k] || '').trim())
+    const shown = list.filter(f=>(!f.legacy && !f.transient) || String((client || {})[f.k] || '').trim())
       .map(f=>Object.assign({}, f, {_group:g},
         f.suggestFrom === 'associates' ? {suggest: cmsAssociateSuggestions()} : {}));
     shown.forEach(f=>{ fields.push(f); byKey[f.k] = f; });
@@ -74463,6 +74655,21 @@ const MAIL_TEMPLATE_DEFS = [
   {group:'Allocation', key:'allocAcknowledgement', label:'Asset allocation — acknowledgement',
    when:'Sent once the client approves the allocation.',
    vars:['ClientName','Ref','ApprovedOn','FirmName']},
+  {group:'Insurance', key:'insIllustration', label:'Insurance — benefit illustration',
+   when:'Sent from Send Illustration to Client on the CMS insurance journey, with the insurer\u2019s illustration attached.',
+   vars:['ClientName','Category','Company','Type','Plan','SumAssured','Premium','Frequency','PolicyTerm','PayingTerm','Riders','RMName','FirmName']},
+  {group:'Insurance', key:'insIllustrationRevised', label:'Insurance — revised illustration',
+   when:'Sent when the client asks for changes and a revised illustration goes out.',
+   vars:['ClientName','Revision','Company','Type','Plan','SumAssured','Premium','Frequency','PolicyTerm','PayingTerm','Riders','RMName','FirmName']},
+  {group:'Insurance', key:'insPolicyIssued', label:'Insurance — policy issued',
+   when:'Sent from Policy Data Entry once the insurer has issued the policy.',
+   vars:['ClientName','PolicyNo','Company','Plan','SumAssured','Premium','Frequency','Commencement','LastPaymentDate','Maturity','Nominee','RMName','FirmName']},
+  {group:'Insurance', key:'insRenewalReminder', label:'Insurance — renewal premium reminder',
+   when:'Sent automatically 30, 15 and 7 days before a premium falls due, on the day, and through the grace period; and from Renewal Follow-up.',
+   vars:['ClientName','PolicyNo','Company','Plan','Premium','DueDate','FirmName']},
+  {group:'Insurance', key:'insRenewalReceived', label:'Insurance — renewal premium received',
+   when:'Sent from Renewal Payment Confirmation.',
+   vars:['ClientName','PolicyNo','Company','Amount','PaidOn','ReceiptRef','DueDate','FirmName']},
   {group:'Client', key:'reportSend', label:'Investment report (Unit Allotted)',
    when:'Composed at the Unit Allotted stage. The stage only moves on once it has been sent.',
    vars:['ClientName','Ref','OrderRef','Total','Date','RMName','FirmName']},

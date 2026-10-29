@@ -4192,6 +4192,88 @@ async function dwtReminders(now) {
     }
   }
 }
+/* ---- insurance renewals (Insurance Agency SOP, Phase 5) ----
+   A policy in force on the CMS insurance journey has its next premium due
+   date on the client (insNextDueDate). The client is emailed 30, 15 and 7
+   days before it, on the day, and through the grace period (7, 15 and 30
+   days after); the RM gets a BOSS notification with the first one. Each
+   is sent once per policy, due date and step, from 10:00 in the firm's day.
+   The wording is the firm's "Insurance — renewal premium reminder"
+   template, and the firm's email switches hold it like any other letter. */
+const INS_REMINDER_DAYS = [30, 15, 7, 0, -7, -15, -30];
+const INS_REMINDER_DEFAULT = {
+  subject: 'Premium due on {DueDate} — policy {PolicyNo}',
+  body: 'Dear {ClientName},\n\nThis is a reminder that the premium of {Premium} on your {Company} policy {PolicyNo} ({Plan}) is due on {DueDate}.\n\nPaying on time keeps your cover in force without a break. If you have already paid, please ignore this note, or send us the receipt and we will update our records.\n\n{Signature}',
+};
+function dayDiff(from, to) {
+  const a = new Date(from + 'T12:00:00Z'), b = new Date(to + 'T12:00:00Z');
+  return Math.round((b - a) / 86400000);
+}
+function addDays(date, n) { const d = new Date(date + 'T12:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); }
+function fmtDay(date) {
+  const d = new Date(date + 'T12:00:00Z');
+  return isNaN(d) ? date : d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
+}
+function inr(v) { const n = Number(v); return v && isFinite(n) ? '₹' + n.toLocaleString('en-IN') : ''; }
+/* Which reminder is due today for a premium `left` days away, or null. */
+function insReminderStep(left) {
+  if (left > INS_REMINDER_DAYS[0] || left < INS_REMINDER_DAYS[INS_REMINDER_DAYS.length - 1]) return null;
+  for (let i = 0; i < INS_REMINDER_DAYS.length; i++) {
+    const step = INS_REMINDER_DAYS[i], next = INS_REMINDER_DAYS[i + 1];
+    if (left <= step && (next === undefined || left > next)) return step;
+  }
+  return null;
+}
+async function insuranceRenewalReminders(now) {
+  if (now.mins < 10 * 60) return;
+  const cfg = storeObj('config');
+  const held = cfg.mailOutflow === false ? 'Email outflow is switched off'
+    : (cfg.mailModuleOff || {}).CMS ? 'Email for CMS is switched off'
+    : (cfg.mailTemplatesOff || {}).insRenewalReminder ? 'The renewal reminder template is switched off' : '';
+  const tpl = Object.assign({}, INS_REMINDER_DEFAULT, (cfg.mailTemplates || {}).insRenewalReminder || {});
+  const firm = (cfg.company || {}).name || '';
+  const clients = storeList('clients');
+  let touched = false;
+  for (const c of clients) {
+    if (!c || c.deletedAt || c.cmsStage !== 'insActive' || !/^\d{4}-\d{2}-\d{2}$/.test(String(c.insNextDueDate || ''))) continue;
+    const due = c.insNextDueDate, left = dayDiff(now.date, due);
+    const step = insReminderStep(left);
+    if (step === null) continue;
+    // Kept until a month past the due date, so a step is never sent twice.
+    if (!claim('ins-renewal:' + c.id + ':' + (c.insPolicyNo || '') + ':' + due + ':' + step, addDays(due, 40))) continue;
+    const company = c.insCompany === 'Other' ? (c.insCompanyOther || '') : (c.insCompany || '');
+    const vars = { ClientName: c.cmsName || '', Name: c.cmsName || '', PolicyNo: c.insPolicyNo || '', Company: company,
+      Plan: c.insPlanName || '', Premium: inr(c.insPremium), DueDate: fmtDay(due), FirmName: firm, Signature: firm };
+    const fill = (t) => String(t || '').replace(/\{(\w+)\}/g, (m, k) => (k in vars ? vars[k] : m));
+    const subject = fill(tpl.subject), body = fill(tpl.body);
+    const address = ADDRESS_RE.test(String(c.email || '')) ? String(c.email).trim() : '';
+    let r;
+    if (held) r = { ok: false, held: true, message: held + ' — nothing was sent.' };
+    else if (!address) r = { ok: false, message: 'no email address on this client' };
+    else r = await mailTo(address, subject, body);
+    const when = left > 0 ? left + ' days before' : left === 0 ? 'on the due date' : -left + ' days into the grace period';
+    reminderLog({ kind: 'insurance-renewal', channel: 'email', clientId: c.id, date: now.date, due, step, ok: r.ok, message: r.message });
+    // On the client's Sent Mail tab and in its insurance history, like a letter sent from the page.
+    const comms = storeList('communications');
+    comms.push({ id: 'COM-' + crypto.randomBytes(6).toString('hex'), clientId: c.id, leadId: null, channel: 'Email', direction: 'Outbound',
+      status: r.ok ? 'Sent' : r.held ? 'Held' : 'Not Sent', statusNote: r.message || '', subject, body, address,
+      at: new Date().toISOString(), by: 'server', module: 'CMS', recordId: c.id, label: 'Insurance Renewal Reminder (automatic)' });
+    store.communications = JSON.stringify(comms);
+    c.insHistory = (Array.isArray(c.insHistory) ? c.insHistory : []).concat([{ at: new Date().toISOString(), by: 'server', step: 'insRenewalAuto',
+      label: 'Renewal reminder (' + when + ')', note: (r.ok ? 'Emailed to ' + address : 'Not sent: ' + (r.message || '')) + ' — premium due ' + fmtDay(due) }]);
+    touched = true;
+    if (step === INS_REMINDER_DAYS[0] && c.rmName) {
+      notifyInApp(c.rmName, { title: 'Renewal premium due in 30 days', kind: 'insurance-renewal', view: 'cms', arg: c.id,
+        body: (c.cmsName || 'A client') + ' — policy ' + (c.insPolicyNo || '') + ', ' + inr(c.insPremium) + ' due ' + fmtDay(due) + '.' });
+    }
+  }
+  if (touched) {
+    store.clients = JSON.stringify(clients);
+    writeToDisk();
+    publishChange(['clients', 'communications'], 'server');
+  }
+}
+
 let reminderRunning = false;
 async function reminderTick(at) {
   if (reminderRunning) return;           // one tick at a time: a slow mail server must not overlap the next
@@ -4200,6 +4282,7 @@ async function reminderTick(at) {
     const now = bizNow(at);
     await attendanceReminders(now);
     await dwtReminders(now);
+    await insuranceRenewalReminders(now);
   } catch (e) { console.error('reminders:', e && e.message || e); }
   finally { remindersWrite(); reminderRunning = false; }
 }
