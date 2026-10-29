@@ -11,6 +11,10 @@
      adapts to it in the integration layer below (apprBoss*), never the other
      way round. -->
 <script src="/appraisal-engine.js"></script>
+<!-- Multi Assets: the multi-product, multi-platform AUM and SIP uploads,
+     their dashboards and the SIPs page. Its own file because it is a
+     module of its own; it only defines functions, and BOSS calls them. -->
+<script src="/multi-asset.js"></script>
 <title>BOSS</title>
 <!-- THE TAB SHOULD SAY WHOSE SYSTEM THIS IS.
      The browser drew its own globe because nothing here named an icon.
@@ -33275,6 +33279,8 @@ let DB = { settings:{}, settingsAudit:[], workActivities:[], djtEntries:[], camp
               rather than inside it: a monthly snapshot poured into the ledger
               would add the same money again every month. */
            platformHoldings:[], platformSips:[], importBatches:[], exportHistory:[], aumMonthly:[],
+           /* Multi Assets: one line per upload. Each upload's rows are a key of their own, assetRows.<id>. */
+           assetUploads:[],
            /* What each import did, record by record, so it can be undone. */
            importUndo:[],
            /* HR's own stores. Nothing else in BOSS reads or writes them,
@@ -33385,6 +33391,8 @@ async function loadAll(){
   DB.platformHoldings = await sget('platformHoldings', []);
   DB.aumMonthly = await sget('aumMonthly', []);
   DB.platformSips = await sget('platformSips', []);
+  DB.assetUploads = await sget('assetUploads', []);
+  await maLoadRows();
   DB.importBatches = await sget('importBatches', []);
   DB.exportHistory = await sget('exportHistory', []);
   DB.hrAttendance = await sget('hrAttendance', []);
@@ -34555,6 +34563,9 @@ function navigate(view, arg){
   if(SETTINGS_ROUTE_ALIAS[view]){ settingsTab = SETTINGS_ROUTE_ALIAS[view]; view = 'settings'; }
   else if(view==='settings' && arg!==undefined) settingsTab = SETTINGS_TAB_MERGED[arg] || arg;
   if(view==='calendar'){ window._meetView = 'agenda'; view = 'meetings'; }   // the old Calendar route is now a Meetings view
+  /* The Multi Assets dashboard opens on the whole book from the rail; a
+     click inside it (a category, a platform, a client) says where to go. */
+  if(view==='assets'){ if(!window._maKeepRoute) window._maRoute = {page:'home'}; window._maKeepRoute = false; }
   // Risk Profiles was a second module over the ISEQ score. It is gone; what it
   // showed is a section of ISEQ Forms, and anything still asking for the old
   // name lands there rather than falling through to the Dashboard.
@@ -34801,7 +34812,7 @@ const LIVE_KEY_TO_DB = {
   queries:'queries', queryReplies:'queryReplies', supportQueries:'supportQueries',
   importHistory:'importHistory', importUndo:'importUndo', backupHistory:'backupHistory', errorLog:'errorLog',
   platformHoldings:'platformHoldings', platformSips:'platformSips', importBatches:'importBatches',
-  aumMonthly:'aumMonthly',
+  aumMonthly:'aumMonthly', assetUploads:'assetUploads',
   exportHistory:'exportHistory',
   hrAttendance:'hrAttendance', hrLeave:'hrLeave', hrSourceMaps:'hrSourceMaps', hrRegularizations:'hrRegularizations',
   hrIncentives:'hrIncentives', hrAppraisals:'hrAppraisals', hrConfig:'hrConfig',
@@ -34960,13 +34971,16 @@ function liveLater(){
 /* Read back only what changed. An unknown key — a store this build does not
    know — is not guessed at: the whole lot is re-read instead. */
 async function liveRefresh(keys){
-  const known = keys.filter(k=>LIVE_KEY_TO_DB[k]);
+  /* A multi-asset upload's rows are a key of their own, named after it. */
+  const known = keys.filter(k=>LIVE_KEY_TO_DB[k] || maIsRowsKey(k));
   if(known.length !== keys.length) return liveReconcile('a store this build does not know changed');
   for(const k of known){
+    if(maIsRowsKey(k)){ DB[k] = await sget(k, []); maInvalidate(); continue; }
     const was = DB[LIVE_KEY_TO_DB[k]];
     const fallback = Array.isArray(was) ? [] : (was && typeof was === 'object' ? {} : null);
     const v = await sget(k, fallback);
     if(v !== null && v !== undefined) DB[LIVE_KEY_TO_DB[k]] = v;
+    if(k === 'assetUploads') await maLoadRows();
   }
   if(known.indexOf('notifications') >= 0) desktopNotifySweep();
 }
@@ -35224,12 +35238,16 @@ function render(){
     hrdashboard:['HR','Attendance, incentives and appraisals — HR’s own records, read from the accounts the firm already has'],
     hrattendance:['Attendance Management','Punch in and out, your own history, and — for HR — everybody’s'],
     hrincentive:['Incentive Management','The existing records a future incentive rule will be read from'],
-    hrappraisal:['Appraisal Management','Ratings, company growth and the increment, year by year']};
+    hrappraisal:['Appraisal Management','Ratings, company growth and the increment, year by year'],
+    assets:['Multi Assets','MF, Stocks, PMS, AIF, Bonds, LAS and Other — the newest version of every platform and category'],
+    assetsips:['SIPs','Every SIP on record across platforms and categories'],
+    assetupload:['Multi Assets · Upload','AUM and SIP files for every platform and category, Excel or PDF']};
   // Modules that draw their own header (and every profile) own the page title, so the
   // topbar one would just repeat it.
   const ownsHeader = (blueprintModuleFor(currentView) && window['_bpRec_'+blueprintModuleFor(currentView).type]
                       && planRecordOf(window['_bpRec_'+blueprintModuleFor(currentView).type]))
-    || ['lms','cms','rms','dst','queries','business','djt','campaigns','projects','calls','mis','analytics'].includes(currentView)
+    || ['lms','cms','rms','dst','queries','business','djt','campaigns','projects','calls','mis','analytics',
+        'assets','assetsips','assetupload'].includes(currentView)
     || (currentView==='settings' && !settingsTab)
     || (currentView==='lms' && leadDetailId) || (currentView==='cms' && clientDetailId)
     || (currentView==='rms' && reviewDetailId);
@@ -35286,6 +35304,9 @@ function render(){
   else if(currentView==='mis') c.innerHTML = viewMIS();
   else if(currentView==='analytics') c.innerHTML = viewAnalytics();
   else if(currentView==='import') c.innerHTML = viewImport();
+  else if(currentView==='assets') c.innerHTML = viewAssets();
+  else if(currentView==='assetsips') c.innerHTML = viewAssetSips();
+  else if(currentView==='assetupload') c.innerHTML = viewAssetUpload();
   else if(currentView==='teammembers') c.innerHTML = viewTeamMembers();
   else if(currentView==='settings') c.innerHTML = isSettingsVisible() ? viewSettings()
     : `<div class="card" style="margin:0;padding:12px;border-left:3px solid var(--danger)">
@@ -35443,6 +35464,7 @@ const NAV_ICONS = {
   fqtests:'🧮', iseqforms:'🛡️', cifforms:'🗂️', planforms:'📐', ctforms:'🤝', mailbox:'✉️', portfolio:'📈',
   systemarchitecture:'🏛️', settings:'⚙️', profile:'👤', teammembers:'🧑‍💼', dwt:'🗓️', arc:'🔁', djt:'📔',
   hrdashboard:'🧭', hrattendance:'⏱️', hrincentive:'💰', hrappraisal:'📈',
+  assets:'💹', assetsips:'🔁', assetupload:'⬆️',
 };
 const NAV_LABELS = {
   dashboard:'Dashboard', lms:'Lead Management System', lng:'LNG · Lead Nurture Group', cms:'Client Management System', rms:'Review Management System',
@@ -35456,6 +35478,7 @@ const NAV_LABELS = {
   queries:'QMS · Query Management', mailbox:'Mail', portfolio:'Portfolio Review',
   fqtests:'FQ Assessments', iseqforms:'ISEQ Forms', cifforms:'CIF Forms',
   planforms:'Plan Input Forms', ctforms:'C&T Forms',
+  assets:'Multi-Asset Dashboard', assetsips:'SIPs', assetupload:'Upload Files',
 };
 /* What the rail calls a module, where the firm already has a name for it
    that is shorter than the one in NAV_LABELS. Only the rail reads this:
@@ -35525,6 +35548,12 @@ const NAV_GROUPS = [
   {id:'business', icon:'💼', label:'Business',
    items:['business','recommendations','transactions'],
    about:'Business logged, the plans being executed, and the orders it turns into.'},
+  /* Multi Assets: every platform and category the firm's clients hold —
+     MF, Stocks, PMS, AIF, Bonds, LAS and Other — uploaded as the platforms'
+     own AUM and SIP files, versioned, and written through to the client
+     records (multi-asset.js). */
+  {id:'assets', icon:'💹', label:'Multi Assets', items:['assets','assetsips','assetupload'],
+   about:'AUM and SIP files from every platform and category, their dashboards and the SIPs on record.'},
   {id:'growth', icon:'🌱', label:'Growth', items:['campaigns','partners'], defaultOff:true,
    about:'Outbound marketing and the partners who refer. Off until the firm turns it on.'},
   /* Team Members is administration of people, and people are administered
@@ -42095,10 +42124,11 @@ function cpPortfolio(c){
     </div>
     ${pfPlatformHoldings(c.id).length || pfPlatformSips(c.id).length
       ? `<div class="card prof-card">${pfPlatformBlockHtml(c.id)}</div>`
+      : maClientBlockHtml(c.id) ? `<div class="card prof-card">${maClientBlockHtml(c.id)}</div>`
       : `<div class="card prof-card"><div class="section-title" style="margin-top:0">◔ Platform-reported holdings</div>
-          <div class="small-note" style="margin:0">No AUM or SIP report from Finowise, Anand Rathi or NJ has been
-          imported for this client. One is imported from
-          <a href="javascript:void(0)" class="cell-link" onclick="navigate('import')">Import</a>, and matched on
+          <div class="small-note" style="margin:0">No AUM or SIP file has been uploaded for this client. Files for any
+          platform and category (MF, Stocks, PMS, AIF, Bonds, LAS, Other) are uploaded from
+          <a href="javascript:void(0)" class="cell-link" onclick="navigate('assetupload')">Multi Assets › Upload</a>, and matched on
           this client's PAN${c.pan? ' (' + esc(impNormPan(c.pan)) + ')' : ' — which is not recorded, so the match would fall back to the name'}.</div>
         </div>`}`;
 }
@@ -53715,6 +53745,7 @@ const RESET_RECORD_STORES = [
   'docLinks','docSubmissions','supportQueries','campaigns','campaignRecipients',
   'projects','projectTasks','projectClients','workActivities','djtEntries','complianceItems',
   'importHistory','importUndo','importBatches','exportHistory','platformHoldings','platformSips','aumMonthly',
+  'assetUploads',
   'auditLog','settingsAudit','backupHistory','automationExecutionLog','errorLog',
   'apiSyncRuns','apiReqLog','apiInbox',
 ];
@@ -53737,6 +53768,7 @@ const RESET_LABELS = {
   exportHistory:'Export history',
   platformHoldings:'Platform AUM snapshots', platformSips:'Platform SIP registrations',
   aumMonthly:'Monthly AUM and SIP totals',
+  assetUploads:'Multi-asset uploads (with their holdings and SIPs)',
   auditLog:'Audit trail', settingsAudit:'Settings change history',
   backupHistory:'Backup history', automationExecutionLog:'Automation history', errorLog:'Error centre',
   amcs:'AMCs', schemes:'Schemes', commissionRates:'Commission rates', partners:'Partners',
@@ -54055,6 +54087,12 @@ async function confirmSystemReset(){
   // late handler — can write the old data back in the moment before the reload.
   systemResetting = true;
   try{
+    /* A multi-asset upload's rows and original file are keys of their own,
+       so they go with the uploads rather than being left behind. */
+    if(stores.indexOf('assetUploads') >= 0){
+      for(const u of (DB.assetUploads || [])){ await sdel(maRowsKey(u.id)); if(u.hasFile) await sdel(maFileKey(u.id)); }
+      Object.keys(DB).filter(maIsRowsKey).forEach(k=>{ delete DB[k]; });
+    }
     // Arrays are emptied; the two object stores are dropped so the defaults are
     // rebuilt from scratch on the next load rather than merged into leftovers.
     for(const key of stores){
@@ -54165,7 +54203,11 @@ function backupInspect(parsed){
     return {ok:false, why:'That file is not a BOSS backup — a backup is a single JSON object of stores, '
       + 'and this is ' + (Array.isArray(parsed) ? 'a list' : typeof parsed) + '.'};
   }
-  const known = backupStoreKeys();
+  /* A multi-asset upload's rows travel under keys named after the upload,
+     which this system may not hold yet — they are part of the backup all
+     the same. */
+  const known = backupStoreKeys().filter(k=>!maIsRowsKey(k))
+    .concat(Object.keys(parsed).filter(k=>maIsRowsKey(k) && Array.isArray(parsed[k])));
   const found = known.filter(k=>Object.prototype.hasOwnProperty.call(parsed, k));
   if(!found.length){
     return {ok:false, why:'That file carries none of the stores a BOSS backup holds. The file you want is the '
@@ -65223,6 +65265,15 @@ function viewImport(){
       </div>
     </div>
     <div class="card" style="margin-top:14px">
+      <div class="between" style="margin-bottom:6px">
+        <div class="section-title" style="margin:0">Multi-asset files — every platform and category</div>
+        <button class="btn primary" onclick="navigate('assetupload')">Open Multi Assets › Upload</button>
+      </div>
+      <div class="small-note" style="margin-top:0">MF, Stocks, PMS, AIF, Bonds, LAS and Other, from any platform, as Excel or
+        PDF, Client Wise or Platform Wise. Each upload is kept as a version; the newest one of each platform and category
+        is what BOSS shows, on the client's Portfolio tab, in Portfolio Review and in the book AUM.</div>
+    </div>
+    <div class="card" style="margin-top:14px">
       <div class="section-title" style="margin-top:0">Any other spreadsheet</div>
       <div class="small-note" style="margin-top:0">A sheet somebody typed, or an export from the system you are
         leaving, goes through <b>Setup › Import</b>. It covers every module rather than four, writes you a
@@ -66731,6 +66782,9 @@ async function impCommit(){
     file: w.file, total: batch.total, imported: batch.written,
     skipped: batch.skipped + batch.failed, date: now, by: currentUser, batchId: batch.id});
   await save('importHistory');
+  /* The same client and platform may also have come in through Multi
+     Assets; whichever arrived last is the one counted. */
+  if(touched.holdings || touched.sips) await maSyncCrm({noLedger: true});
   w.result = {batch, log};
   return w.result;
   } finally {
@@ -67296,8 +67350,8 @@ function pfPlatformBlockHtml(clientId){
           <td class="se-r">${money(s.invested)}</td><td class="se-r">${money(s.current)}</td>
           <td class="se-r ${s.current < s.invested?'md-down':''}">${s.invested? money(s.current - s.invested) : '—'}</td>
           <td class="se-r">${pct(s.xirr)}</td></tr>`))}` : ''}
-    ${repTable([{t:'Platform'},{t:'Invested',r:1},{t:'Current',r:1},{t:'XIRR',r:1},{t:'As at'},{t:'From'}],
-      hold.map(h=>`<tr><td><b>${esc(impPlatformLabel(h.platform))}</b></td>
+    ${repTable([{t:'Platform'},{t:'Category'},{t:'Invested',r:1},{t:'Current',r:1},{t:'XIRR',r:1},{t:'As at'},{t:'From'}],
+      hold.map(h=>`<tr><td><b>${esc(impPlatformLabel(h.platform))}</b></td><td>${esc(h.product || 'MF')}</td>
         <td class="se-r">${h.invested===undefined?'—':money(h.invested)}</td>
         <td class="se-r">${money(h.current)}</td>
         <td class="se-r">${pct(h.xirr)}</td>
@@ -67314,7 +67368,8 @@ function pfPlatformBlockHtml(clientId){
           <td>${esc(s.frequency||'—')}</td>
           <td>${s.startDate? esc(fmtDate(s.startDate)) : '—'}</td>
           <td>${s.endDate? esc(fmtDate(s.endDate)) : '—'}</td>
-          <td class="se-r">${pct(s.xirr)}</td></tr>`))}` : ''}`;
+          <td class="se-r">${pct(s.xirr)}</td></tr>`))}` : ''}
+    ${maClientBlockHtml(clientId)}`;
 }
 
 function moduleFields(m){
