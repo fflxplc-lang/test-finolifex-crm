@@ -33997,9 +33997,10 @@ function complianceFooterHtml(){
 let systemResetting = false;   // set by a reset; nothing may write after it
 async function save(part){
   if(systemResetting) return;  // the wipe writes through sset directly
-  if(part === 'tasks') dstStampAssignments();
+  const handed = part === 'tasks' ? dstStampAssignments() : [];
   const wrote = await sset(part, DB[part]);
   if(wrote === false) return false;
+  if(handed.length) try { await dstNotifyReassigned(handed); } catch(e){ console.error('reassign notice', e && e.message); }
   /* The one place in BOSS that can tell a record it has never seen from one
      it has — which is what "created" and "changed" mean. The Automation
      Builder's triggers come off this and nothing else, so a module added
@@ -36742,36 +36743,59 @@ function notifPanelHtml(){
   if(!window._notifOpen) return '';
   const all = myNotifications().slice(0, 30);
   const unread = all.length;
+  const alerts = notificationAlertLines();
   return `<div class="notif-panel" onclick="event.stopPropagation()">
     <div class="notif-head">
       <b>Notifications</b>
       ${unread? `<a href="javascript:void(0)" class="cell-link" onclick="markAllNotificationsRead()">Mark all read</a>`:''}
     </div>
     <div class="notif-list">
+      ${alerts.map(l=>`<div class="notif-row unread notif-alert" data-alert="${l.key}" onclick="openNotificationAlert('${l.view}')">
+        <div class="notif-title">${esc(l.title)}</div>
+        <div class="notif-body">${esc(l.body)}</div>
+      </div>`).join('')}
       ${all.map(n=>`<div class="notif-row ${n.readAt?'':'unread'}" onclick="openNotification('${n.id}')">
         <div class="notif-title">${esc(n.title)}</div>
         ${n.body? `<div class="notif-body">${esc(String(n.body).slice(0,160))}</div>`:''}
         <div class="notif-when">${fmtDateTime(n.at)}</div>
-      </div>`).join('') || `<div class="empty" style="padding:22px">Nothing new. Read messages leave this list, and unread ones leave it after ${NOTIF_KEEP_DAYS} days.</div>`}
+      </div>`).join('') || (alerts.length ? '' : `<div class="empty" style="padding:22px">Nothing new. Read messages leave this list, and unread ones leave it after ${NOTIF_KEEP_DAYS} days.</div>`)}
     </div>
   </div>`;
 }
 /* What the bell in the top bar counts, per Settings → General → Notifications.
-   Each line is a live query over the module that owns the records — plus
-   anything addressed to this person and not yet read. */
-function pendingNotificationCount(){
+   Each line is a live query over the module that owns the records. Every
+   line with something in it is also listed in the panel, so the number on
+   the bell is always what opening it shows: these lines plus the messages
+   addressed to this person and not yet read. */
+function notificationAlertLines(){
   const today = new Date().toISOString().slice(0,10);
   const u = me() || {};
-  let n = 0;
-  if(cfg('general.notifyOverdueTasks'))
-    n += DB.tasks.filter(t=>t.assignTo===currentUser && !t.deletedAt && t.overallStatus!=='Completed'
+  const lines = [];
+  if(cfg('general.notifyOverdueTasks')){
+    const n = DB.tasks.filter(t=>t.assignTo===currentUser && !t.deletedAt && t.overallStatus!=='Completed'
       && t.overallStatus!=='Cancelled' && t.dueDate && t.dueDate < today).length;
-  if(cfg('general.notifyReviewsDue'))
-    n += visibleRecords(DB.reviews, r=>r.assignTo, r=>(DB.clients.find(c=>c.id===r.clientId)||{}).branch)
+    if(n) lines.push({key:'overdue', count:n, view:'dst', title: n + ' overdue service task' + (n===1?'':'s'),
+      body:'Assigned to you and past the due date.'});
+  }
+  if(cfg('general.notifyReviewsDue')){
+    const n = visibleRecords(DB.reviews, r=>r.assignTo, r=>(DB.clients.find(c=>c.id===r.clientId)||{}).branch)
       .filter(r=>r.status!=='Closed' && r.meetingDate && r.meetingDate <= today).length;
-  if(cfg('general.notifyUnassignedLeads'))
-    n += DB.leads.filter(l=>!l.deletedAt && !l.assignedTo && (!u.branch || l.branch===u.branch)).length;
-  return n + unreadNotifications().length;
+    if(n) lines.push({key:'reviews', count:n, view:'rms', title: n + ' client review' + (n===1?'':'s') + ' due',
+      body:'Reached the meeting date and not yet closed.'});
+  }
+  if(cfg('general.notifyUnassignedLeads')){
+    const n = DB.leads.filter(l=>!l.deletedAt && !l.assignedTo && (!u.branch || l.branch===u.branch)).length;
+    if(n) lines.push({key:'leads', count:n, view:'lms', title: n + ' unassigned lead' + (n===1?'':'s'),
+      body:'In your branch and nobody owns them yet.'});
+  }
+  return lines;
+}
+function pendingNotificationCount(){
+  return notificationAlertLines().reduce((a,l)=>a + l.count, 0) + unreadNotifications().length;
+}
+function openNotificationAlert(view){
+  window._notifOpen = false;
+  navigate(view);
 }
 /* =====================================================================
    COMMAND PALETTE — Ctrl+K / Cmd+K, or the topbar search itself opens it.
@@ -44033,6 +44057,7 @@ function dstAssignNote(){
    counts once and to the person who finished it. */
 function dstStampAssignments(){
   const now = new Date().toISOString();
+  const handed = [];
   (DB.tasks || []).forEach(t=>{
     if(!t || !t.id || t.deletedAt) return;
     if(!Array.isArray(t.assignHistory) || !t.assignHistory.length){
@@ -44040,7 +44065,11 @@ function dstStampAssignments(){
       t.assignHistory = [{at: t.createdAt || now, by: t.createdBy || currentUser || '', from: '', to: t.assignTo}];
     } else {
       const last = t.assignHistory[t.assignHistory.length - 1].to;
-      if(t.assignTo && last !== t.assignTo) t.assignHistory.push({at: now, by: currentUser || '', from: last || '', to: t.assignTo});
+      if(t.assignTo && last !== t.assignTo){
+        const h = {at: now, by: currentUser || '', from: last || '', to: t.assignTo};
+        t.assignHistory.push(h);
+        if(h.from && !t.parentTaskId) handed.push({task: t, entry: h});
+      }
     }
     if(!t.originalAssignee) t.originalAssignee = t.assignHistory[0].to;
     if(!t.assignedBy) t.assignedBy = t.assignHistory[0].by || t.createdBy || '';
@@ -44049,6 +44078,33 @@ function dstStampAssignments(){
       if(!t.completedAt) t.completedAt = now;
     } else if(t.completedBy){ delete t.completedBy; delete t.completedMarkedBy; }
   });
+  return handed;
+}
+/* Everybody the task has passed through, in order: whoever first gave it,
+   then each person who has held it. Bhuvan → Anand → Prajval. */
+function dstChain(t){
+  const h = t.assignHistory || [];
+  const out = [];
+  [t.assignedBy || (h[0] || {}).by || t.createdBy].concat(h.map(x=>x.to)).forEach(id=>{
+    if(id && out[out.length - 1] !== id) out.push(id);
+  });
+  return out;
+}
+function dstChainText(t){ return dstChain(t).map(teamName).join(' \u2192 '); }
+/* The new holder of a reassigned task is told who passed it on and who
+   gave it in the first place — a task that arrives from a colleague reads
+   differently from one handed out fresh. */
+async function dstNotifyReassigned(handed){
+  const notes = handed.filter(x=>x.entry.to && x.entry.to !== currentUser).map(({task: t, entry: h})=>({
+    id:uid('NTF'), at:new Date().toISOString(), userId:h.to, kind:'dst-reassigned', by:currentUser,
+    title:'Task reassigned to you: ' + (t.taskType || 'Task'),
+    body:'Reassigned by ' + teamName(h.by || h.from) + ', originally assigned by '
+      + teamName(t.assignedBy || t.createdBy) + '. ' + dstChainText(t)
+      + (t.dueDate ? ' \u00b7 due ' + fmtDate(t.dueDate) : ''),
+    view:'dst', arg:t.id}));
+  if(!notes.length) return;
+  notes.forEach(n=>DB.notifications.push(n));
+  await save('notifications');
 }
 function dstPeopleOf(t){
   const out = new Set();
@@ -44074,11 +44130,16 @@ function dstAssignHistoryHtml(t){
       <div class="field-grid" style="--fg-gap:24px;gap:2px 24px;margin-bottom:8px;font-size:13px">
         <div><span style="color:var(--muted)">Assigned by:</span> <b>${esc(teamName(t.assignedBy || t.createdBy))}</b></div>
         <div><span style="color:var(--muted)">Originally assigned to:</span> <b>${esc(teamName(t.originalAssignee || h[0].to))}</b></div>
+        ${dstReassigned(t) ? (()=>{ const last = h.filter(x=>x.from).pop(); return `
+        <div><span style="color:var(--muted)">Previously assigned to:</span> <b>${esc(teamName(last.from))}</b></div>
+        <div><span style="color:var(--muted)">Reassigned by:</span> <b>${esc(teamName(last.by || last.from))}</b> · ${esc(fmtDateTime(last.at))}</div>
+        <div><span style="color:var(--muted)">Task type:</span> <span class="badge warn">Reassigned Task</span></div>
+        <div id="dstChain" style="grid-column:1/-1"><span style="color:var(--muted)">Reassignment history:</span> <b>${esc(dstChainText(t))}</b></div>`; })() : ''}
         <div><span style="color:var(--muted)">Current owner:</span> <b>${esc(teamName(t.assignTo))}</b> ${statusBadge(t.overallStatus)}</div>
         ${t.completedBy ? `<div><span style="color:var(--muted)">Completed by:</span> <b>${esc(teamName(t.completedBy))}</b>${t.completedAt ? ' · ' + esc(fmtDate(t.completedAt)) : ''}</div>` : ''}
       </div>
       <div class="table-wrap"><table id="dstAssignHistory"><thead><tr><th>When</th><th>By</th><th>From</th><th>To</th></tr></thead><tbody>
-        ${h.map((x, i)=>`<tr><td>${esc(fmtDate(x.at))}</td><td>${esc(teamName(x.by))}</td>
+        ${h.map((x, i)=>`<tr><td>${esc(fmtDateTime(x.at))}</td><td>${esc(teamName(x.by))}</td>
           <td>${x.from ? esc(teamName(x.from)) : `<span class="small-note" style="margin:0">${i ? '—' : 'First assigned'}</span>`}</td>
           <td><b>${esc(teamName(x.to))}</b></td></tr>`).join('')}
       </tbody></table></div>
@@ -44441,6 +44502,31 @@ async function deleteSubTaskRow(parentTaskId, subId){
 }
 /* The old name for the add path, kept because older call sites use it. */
 async function saveAddSubTaskRow(parentTaskId){ return saveSubTaskRow(parentTaskId); }
+const DST_PENDING = ['Not Started','Assigned','Hold','Pending from Client End'];
+/* Whose completions the Completed card counts on this screen: the person
+   picked in the team filter, yourself on My Tasks, yourself and your team
+   otherwise. Somebody who sees every level counts everyone's, and Assigned
+   by Me counts the work you gave out, since that is what it is for. */
+function dstCompletedCredit(){
+  if(window._dstTeam) return new Set([window._dstTeam]);
+  if(window._dstScope === 'mine') return new Set([currentUser]);
+  if(window._dstScope === 'byme' || maySeeEveryLevel()) return null;
+  const set = new Set([currentUser]);
+  const u = me();
+  if(u && u.scope === 'team') userDescendants(u.id).forEach(x=>set.add(x.id));
+  return set;
+}
+function dstKpiMatch(t, k, credit){
+  const st = t.overallStatus;
+  if(!k) return true;
+  if(k === 'pending') return DST_PENDING.includes(st);
+  if(k === 'progress') return st === 'In Progress';
+  if(k === 'completed') return st === 'Completed' && (!credit || credit.has(t.completedBy || t.assignTo));
+  if(k === 'cancelled') return st === 'Cancelled';
+  if(k === 'overdue') return !!(t.dueDate && t.dueDate < new Date().toISOString().slice(0,10) && st !== 'Completed' && st !== 'Cancelled');
+  if(k === 'reassigned') return dstReassigned(t) > 0;
+  return true;
+}
 function viewDST(){
   window._dstFilterKind = window._dstFilterKind || 'all';
   let mainTasks = dstVisible(DB.tasks.filter(t=>!t.deletedAt && !t.parentTaskId));
@@ -44450,10 +44536,7 @@ function viewDST(){
       return bankEntry && bankEntry.bankType===window._dstFilterKind;
     });
   }
-  const today = new Date().toISOString().slice(0,10);
   const allMain = dstVisible(DB.tasks.filter(t=>!t.deletedAt && !t.parentTaskId));
-  const nStatus = s => allMain.filter(t=>t.overallStatus===s).length;
-  const overdue = allMain.filter(t=>t.dueDate && t.dueDate<today && t.overallStatus!=='Completed' && t.overallStatus!=='Cancelled').length;
   window._dstScope = window._dstScope || 'all';
   mainTasks = applyBranchTab(mainTasks, '_dstBranch', t=>{
     const c = DB.clients.find(x=>x.id===t.clientId); const l = DB.leads.find(x=>x.id===t.leadId);
@@ -44462,12 +44545,22 @@ function viewDST(){
   if(window._dstScope==='mine') mainTasks = mainTasks.filter(t=>t.assignTo===currentUser);
   if(window._dstScope==='byme') mainTasks = mainTasks.filter(t=>t.createdBy===currentUser || t.assignedBy===currentUser
     || (t.assignHistory || []).some(h=>h.by===currentUser && h.to!==currentUser));
+  if(window._dstScope==='reassigned') mainTasks = mainTasks.filter(t=>dstReassigned(t) > 0);
   window._dstDateField = window._dstDateField || 'dueDate';
   mainTasks = applyDateRange(mainTasks, '_dstDate', t=>t[window._dstDateField]);
   mainTasks = mainTasks.filter(t=>matchesSearch(window._dstSearch, t, {
     id:t=>t.id, title:t=>t.description||t.taskType, type:t=>t.taskType,
     owner:t=>teamName(t.assignTo), status:t=>t.overallStatus,
   }));
+  /* The cards count what the filters above have left, and each one is the
+     filter for the list below. Completed counts a task once, for whoever
+     completed it, not for each person who gave or passed it on. */
+  const credit = dstCompletedCredit();
+  const kpiOf = k => mainTasks.filter(t=>dstKpiMatch(t, k, credit));
+  const status = window._dstStatus || '';
+  const kpi = (k, label, tone) => ({label, value:kpiOf(k).length, tone, selected:status===k,
+    onclick:`window._dstStatus='${k}'; render()`});
+  mainTasks = mainTasks.filter(t=>dstKpiMatch(t, status, credit));
   return `
     ${moduleHeader({
       title:'DST — Daily Service Tracker', subtitle:'Central task repository',
@@ -44480,16 +44573,17 @@ function viewDST(){
         const c = DB.clients.find(x=>x.id===t.clientId); const l = DB.leads.find(x=>x.id===t.leadId);
         return (c&&c.branch) || (l&&l.branch) || (DB.team.find(x=>x.id===t.assignTo)||{}).branch || '';
       }, teamFilterKey:'_dstTeam', note:'open tasks'})}
-    ${kpiCards([
-      {label:'Total', value:allMain.length, selected:true},
-      {label:'Pending', value:nStatus('Not Started')+nStatus('Assigned')+nStatus('Hold')+nStatus('Pending from Client End'), tone:'warn'},
-      {label:'In Progress', value:nStatus('In Progress'), tone:'info'},
-      {label:'Completed', value:nStatus('Completed'), tone:'ok'},
-      {label:'Cancelled', value:nStatus('Cancelled')},
-      {label:'Overdue', value:overdue, tone:'danger'},
-    ])}
+    <div id="dstKpis">${kpiCards([
+      kpi('', 'Total'),
+      kpi('pending', 'Pending', 'warn'),
+      kpi('progress', 'In Progress', 'info'),
+      kpi('completed', 'Completed', 'ok'),
+      kpi('cancelled', 'Cancelled'),
+      kpi('overdue', 'Overdue', 'danger'),
+      kpi('reassigned', 'Reassigned', 'warn'),
+    ])}</div>
     <div class="row" style="margin-bottom:12px">
-      ${[['all','All Tasks'],['mine','My Tasks'],['byme','Assigned by Me']].map(([k,l])=>
+      ${[['all','All Tasks'],['mine','My Tasks'],['byme','Assigned by Me'],['reassigned','Reassigned Tasks']].map(([k,l])=>
         `<button class="btn sm ${window._dstScope===k?'primary':''}" onclick="window._dstScope='${k}'; render()">${l}</button>`).join('')}
       <div style="flex:1"></div>
       ${[['all','All Types'],['T','Service Tasks'],['Q','Queries &amp; Complaints']].map(([k,l])=>
@@ -44512,17 +44606,17 @@ function viewDST(){
             return `
             <tr class="row-clickable" onclick="navigate('dst', '${t.id}')">
               ${bulkRowCell('DST', t.id)}
-              <td><b style="color:var(--info)">${esc(t.taskType)}</b>${t.description?`<div style="color:var(--muted);font-size:12px">${esc(t.description)}</div>`:''}</td>
+              <td><b style="color:var(--info)">${esc(t.taskType)}</b>${dstReassigned(t) ? ` <span class="badge warn dst-reassigned">Reassigned</span>` : ''}${t.description?`<div style="color:var(--muted);font-size:12px">${esc(t.description)}</div>`:''}</td>
               <td>${recordLinkHtml(t)}</td>
               <td>${esc(teamName(t.assignedBy || t.createdBy))}</td>
-              <td>${esc(teamName(t.assignTo))}${dstReassigned(t) ? `<div class="small-note" style="margin:0" title="${esc((t.assignHistory || []).map(h=>teamName(h.to)).join(' → '))}">first ${esc(teamName(t.originalAssignee))} · reassigned ${dstReassigned(t)}×</div>` : ''}${t.completedBy && t.completedBy !== t.assignTo ? `<div class="small-note" style="margin:0">completed by ${esc(teamName(t.completedBy))}</div>` : ''}</td>
+              <td>${esc(teamName(t.assignTo))}${dstReassigned(t) ? `<div class="small-note" style="margin:0">reassigned by ${esc(teamName(((t.assignHistory || []).filter(h=>h.from).pop() || {}).by))} · ${esc(dstChainText(t))}</div>` : ''}${t.completedBy && t.completedBy !== t.assignTo ? `<div class="small-note" style="margin:0">completed by ${esc(teamName(t.completedBy))}</div>` : ''}</td>
               <td>${fmtDate(t.dueDate)}</td>
               <td>${statusBadge(t.urgencyLevel)}</td>
               <td>${statusBadge(t.overallStatus)}</td>
               <td>${subs.length? `<span class="badge ${subDone===subs.length?'ok':'info'}">${subDone}/${subs.length}</span>` : '—'}</td>
               <td>${taskSourceHtml(t)}</td>
               <td onclick="event.stopPropagation()">${can('DST','delete')?`<button class="btn ghost" style="color:var(--danger)" onclick="softDeleteRecord('DST','${t.id}')">Delete</button>`:''}</td>
-            </tr>`;}).join('') || `<tr><td colspan="11" class="empty">No tasks yet.</td></tr>`}
+            </tr>`;}).join('') || `<tr><td colspan="11" class="empty">${allMain.length ? 'No tasks match these filters.' : 'No tasks yet.'}</td></tr>`}
         </tbody>
       </table>
     </div>
