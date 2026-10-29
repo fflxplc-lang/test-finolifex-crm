@@ -652,19 +652,18 @@ suite(async t => {
 
   t.section('the mapping is a setting, not a line of code');
 
-  await t.step('Setup carries a screen for every column of every report', async () => {
+  await t.step('Setup has one upload door and no separate column mapping screen', async () => {
     const r = await t.eval(()=>{
       window._impMapSection = 'mapping'; navigate('settings','importmaps');
       const c = document.getElementById('content');
-      return {title: c.textContent.indexOf('Platform Import Mapping') >= 0,
-              selects: c.querySelectorAll('select').length,
-              formats: IMPORT_FORMATS.length,
-              batches: c.textContent.indexOf('Imports run so far') >= 0};
+      return {tabs: Array.from(c.querySelectorAll('.tabs .tab')).map(x=>x.textContent.trim()),
+              upload: !!document.getElementById('maUploadAll'),
+              names: !!document.getElementById('maColumnNames')};
     });
-    if(!r.title) throw new Error('the screen is not there');
-    if(r.selects < 9) throw new Error('only ' + r.selects + ' columns are editable');
-    if(!r.batches) throw new Error('it does not list the imports already run');
-    return r.selects + ' columns editable on the first format, and the batch list under it';
+    if(r.tabs.some(x=>/column mapping/i.test(x))) throw new Error('the Column mapping tab is still there: ' + r.tabs.join(', '));
+    if(!r.upload) throw new Error('an unknown section did not fall back to the upload');
+    if(!r.names) throw new Error('there is nowhere to teach a column name');
+    return r.tabs.join(' · ') + ', with Column names on the upload page';
   });
 
   await t.step('changing one changes what the next import does', async () => {

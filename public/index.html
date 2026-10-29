@@ -65227,41 +65227,22 @@ function viewImport(){
     ${renderMapImport()}
     <div class="card">
       <div class="between" style="margin-bottom:6px">
-        <div class="section-title" style="margin:0">Platform AUM &amp; SIP reports</div>
-        <button class="btn primary" onclick="openPlatformImport()">Import a platform report</button>
-      </div>
-      <div class="small-note" style="margin-top:0">The AUM and SIP reports Finowise, Anand Rathi and NJ produce,
-        read straight from the .xlsx. Clients are matched on PAN, or on name where the report carries no PAN;
-        nothing is written until you have seen the preview. The columns each report carries, and the field each
-        one lands in, are set in
-        <a href="javascript:void(0)" class="cell-link" onclick="navigate('settings','importmaps')">Setup &rsaquo; Platform Import Mapping</a>.</div>
-      <div class="imp-pick" style="margin-top:12px">
-        ${IMPORT_FORMATS.map(f=>{
-          const n = DB.importBatches.filter(b=>b.format===f.id).length;
-          return `<button class="imp-tile" onclick="openPlatformImport('${esc(f.platform)}','${esc(f.id)}')">
-            <span class="imp-tile-t">${esc(f.label)}</span>
-            <span class="imp-tile-d">${esc(f.note)}</span>
-            <span class="imp-tile-n">${f.cols.length} columns${n? ' \u00b7 ' + n + ' import' + (n===1?'':'s') + ' so far' : ''}</span>
-          </button>`;
-        }).join('')}
-      </div>
-    </div>
-    <div class="card" style="margin-top:14px">
-      <div class="between" style="margin-bottom:6px">
-        <div class="section-title" style="margin:0">Multi-asset files — every platform and category</div>
+        <div class="section-title" style="margin:0">Platform AUM &amp; SIP files — every platform and category</div>
         <button class="btn primary" onclick="maNav('upload')">Upload platform files</button>
       </div>
       <div class="small-note" style="margin-top:0">MF, Stocks, PMS, AIF, Bonds, LAS and Other, from any platform, as Excel or
-        PDF, Client Wise or Platform Wise. Each upload is kept as a version; the newest one of each platform and category
-        is what BOSS shows, on the client's Portfolio tab, in Portfolio Review and in the book AUM.</div>
+        PDF, Client Wise or Platform Wise, including the Finowise, Anand Rathi and NJ AUM and SIP reports, read column by column.
+        Clients are matched on PAN, then name; new ones are added and blank details filled in. Each upload is kept as a version,
+        and the newest one of each platform and category is what BOSS shows: the client's Portfolio tab, the Main Dashboard,
+        Portfolio Review and the reports.</div>
     </div>
     <div class="card" style="margin-top:14px">
       <div class="section-title" style="margin-top:0">Any other spreadsheet</div>
       <div class="small-note" style="margin-top:0">A sheet somebody typed, or an export from the system you are
         leaving, goes through <b>Setup › Import</b>. It covers every module rather than four, writes you a
         sample sheet with that module's own fields on it, matches your columns to them, and checks every row
-        against the firm's own validation rules before anything is written. The tiles above stay here because
-        they are different: they know the Finowise, Anand Rathi and NJ reports column by column.</div>
+        against the firm's own validation rules before anything is written. Platform AUM and SIP files go
+        through the upload above instead.</div>
       <button class="btn primary" style="margin-top:10px"
         onclick="openSetupScreen('importback')">Open Setup › Import</button>
     </div>
@@ -67191,74 +67172,15 @@ function renderImpWizard(){
    the import obeys, so a platform renaming a column is a change somebody
    makes in Setup on a Tuesday, not a release. */
 function renderSettingsImportMaps(){
-  if(!canAdmin('manageModuleSettings') && !canAdmin('manageFields'))
-    return `<div class="empty">You do not have permission to change import mappings.</div>`;
-  const pick = window._impMapFmt && impFormat(window._impMapFmt) ? window._impMapFmt : IMPORT_FORMATS[0].id;
-  const fmt = impFormat(pick);
-  const map = impMapFor(pick);
-  const shipped = impDefaultMap(fmt);
-  const targets = impTargets(fmt);
-  const edited = Object.keys(map).filter(k=>map[k] !== shipped[k]);
-  /* Uploading is part of this screen: every platform and category, their
+  if(!canAdmin('manageModuleSettings') && !canAdmin('manageFields') && !maCanUpload())
+    return `<div class="empty">You do not have permission to import platform files.</div>`;
+  /* The one door for platform files: every platform and category, their
      versions, what they hold and the SIPs on them (multi-asset.js). The
-     column mapping of the five named reports is the last section. */
-  const section = ['upload','data','sips','mapping'].indexOf(window._impMapSection) >= 0 ? window._impMapSection : 'upload';
-  if(section !== 'mapping') return maSectionBar(section) + maSectionHtml(section);
-  return maSectionBar(section) + `
-    <div class="section-title" style="margin-top:0">Platform Import Mapping</div>
-    <div class="small-note" style="margin-top:0">Each column of each platform report, and the BOSS field it lands in.
-      Change one here and every future import of that report follows it. Every change is written to
-      <a href="javascript:void(0)" class="cell-link" onclick="navigate('settings','settingsaudit')">Settings Change History</a>.</div>
-    <div class="imp-pick" style="margin:14px 0">
-      ${IMPORT_FORMATS.map(f=>`<button class="imp-tile ${f.id===pick?'on':''}"
-        onclick="window._impMapFmt='${esc(f.id)}'; render()">
-        <span class="imp-tile-t">${esc(f.label)}</span>
-        <span class="imp-tile-n">${f.cols.length} columns</span></button>`).join('')}
-    </div>
-    <div class="between" style="margin-bottom:8px">
-      <div class="small-note" style="margin:0">${esc(fmt.note)}
-        ${edited.length? ` · <b>${edited.length}</b> column${edited.length===1?'':'s'} changed from the shipped mapping` : ''}</div>
-      <div style="display:flex;gap:8px">
-        ${edited.length? `<button class="btn sm" onclick="impResetMap('${esc(pick)}').then(render)">Reset to the shipped mapping</button>`:''}
-        <button class="btn sm primary" onclick="openPlatformImport('${esc(fmt.platform)}','${esc(fmt.id)}')">Import a file in this format</button>
-      </div>
-    </div>
-    <div class="table-wrap"><table><thead><tr>
-      <th>Column in the report</th><th>Read as</th><th>Goes to</th><th>Already in BOSS?</th>
-    </tr></thead><tbody>
-      ${fmt.cols.map(c=>{
-        const to = map[c.src];
-        const existing = to.startsWith('client.');
-        return `<tr>
-          <td><b>${esc(c.src)}</b>${c.req?' <span class="badge danger">required</span>':''}
-            ${c.review? `<div class="small-note" style="margin:2px 0 0;color:var(--warn)">${esc(c.review)}</div>`:''}</td>
-          <td class="small-note">${esc(c.t)}</td>
-          <td><select class="list-sort" style="width:100%"
-                onchange="impSetMap('${esc(pick)}', '${esc(c.src)}', this.value).then(render)">
-              ${targets.map(t=>`<option value="${esc(t.v)}" ${t.v===to?'selected':''}>${esc(t.l)}</option>`).join('')}
-            </select>
-            ${to !== shipped[c.src]? '<div class="small-note" style="margin:3px 0 0;color:var(--warn)">changed from the shipped mapping</div>':''}</td>
-          <td>${!to? '<span class="badge muted">kept in the source row</span>'
-               : existing? '<span class="badge ok">existing client field</span>'
-               : `<span class="badge info">${to.startsWith('aum.')?'AUM snapshot':'SIP registration'}</span>`}</td>
-        </tr>`;
-      }).join('')}
-    </tbody></table></div>
-    <div class="section-title">Imports run so far</div>
-    <div class="table-wrap"><table><thead><tr>
-      <th>Batch</th><th>Platform</th><th>Report</th><th>File</th><th>Rows</th>
-      <th>Created</th><th>Updated</th><th>Skipped</th><th>Failed</th><th>When</th><th>By</th>
-    </tr></thead><tbody>
-      ${DB.importBatches.slice().reverse().slice(0,40).map(b=>`<tr>
-        <td class="small-note">${esc(b.id)}</td>
-        <td>${esc(impPlatformLabel(b.platform))}</td><td>${esc(b.report)}</td>
-        <td>${esc(b.file)}</td><td>${b.total}</td>
-        <td>${b.created||0}</td><td>${b.updated||0}</td>
-        <td>${b.skipped? `<span class="badge warn">${b.skipped}</span>`:'—'}</td>
-        <td>${b.failed? `<span class="badge danger">${b.failed}</span>`:'—'}</td>
-        <td>${esc(fmtDate(String(b.at).slice(0,10)))}</td><td>${esc(teamName(b.by))}</td>
-      </tr>`).join('') || `<tr><td colspan="11" class="empty">No platform report has been imported yet.</td></tr>`}
-    </tbody></table></div>`;
+     Finowise, Anand Rathi and NJ reports are read column by column inside
+     the upload (maKnownLayout), so there is no separate mapping screen;
+     a column a platform names differently is taught under Column names. */
+  const section = ['upload','data','sips'].indexOf(window._impMapSection) >= 0 ? window._impMapSection : 'upload';
+  return maSectionBar(section) + maSectionHtml(section);
 }
 
 /* ---- what the imported figures look like once they are in ---------- */
@@ -73730,7 +73652,7 @@ const SETTINGS_CATEGORIES = [
     ['export','Export','manageModuleSettings','tab','Take data out \u2014 one module, several, or everything at once.'],
     ['importback','Import','manageModuleSettings','tab','Put an exported file back \u2014 the same modules Export covers.'],
     ['import','Bulk Import','manageModuleSettings','route','A spreadsheet that is not a BOSS export \u2014 mapped column by column.'],
-    ['importmaps','Platform Import Mapping','manageModuleSettings','tab','Upload AUM and SIP files for every platform and category, see what they hold, and map the columns of the Finowise, Anand Rathi and NJ reports.'],
+    ['importmaps','Platform Import Mapping','manageModuleSettings','tab','Upload AUM and SIP files for every platform and category (including the Finowise, Anand Rathi and NJ reports) and see what they hold. Uploads update clients, the Main Dashboard and every report.'],
     ['datarecovery','Data Backup','manageModuleSettings','tab','Copies of the database, and getting one back.'],
     ['storage','Storage','manageModuleSettings','tab','What is being kept, and how much room it takes.'],
     ['recyclebin','Recycle Bin','manageModuleSettings','route','Anything deleted, until it is purged.'],

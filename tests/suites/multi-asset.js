@@ -103,6 +103,23 @@ const FILES = {
   ]),
 };
 
+/* The reports the old column-mapping import knew, now through the upload. */
+FILES.fwAum = write('Finowise_AUM_Report.xlsx', 'AUM', [
+  ['Name', 'PAN', 'Branch', 'RM Name', 'Associate Name', 'Inv. Cost', 'Current Value', 'XIRR', 'Mobile'],
+  ['ZZ Mehta Rajesh', 'ZZMEH1234R', '', '', '', '1,50,000', '2,00,000', '15.5', '9876500001'],
+  ['ZZ Newman Kiran', 'ZZNEW1111K', '', '', 'ZZ Assoc', '40,000', '50,000', '11', '9876500002'],
+]);
+FILES.njSip = write('NJ_SIP_Report.xlsx', 'SIP', [
+  ['Sr. No.', 'Investor', 'Folio No', 'Scheme', 'Start Date', 'End Date', 'Amount (₹)', 'Frequency', 'Monthly SIP Amount',
+   'Total No. of Installments', 'SIP Type', 'SIP No.', 'Base SIP No.', 'Top-Up Start Date', 'Registered Top-Up Amt.'],
+  ['1', 'ZZ Newman Kiran', 'NJ-77', 'ZZ Midcap Fund - Growth', '05-01-2024', '05-01-2034', '5,000', 'Monthly', '5,000',
+   '120', 'Normal', 'SIP-9001', '', '', ''],
+]);
+FILES.taught = write('Philip_Holdings.xlsx', 'Holdings', [
+  ['Client Name', 'PAN', 'Mobile No', 'Scrip', 'Qty', 'Holding Worth'],
+  ['ZZ Rao Sunita', 'ZZRAO5678S', '9876500003', 'ZZ Steel Ltd', '50', '25,000'],
+]);
+
 const SEED = async () => {
   const br = (DB.config.branches || ['Varanasi'])[0];
   const mk = (name, pan) => {
@@ -166,18 +183,21 @@ suite(async t => {
 
   t.section('Platform Wise, Excel');
 
-  await t.step('a Motilal Oswal stocks file lands for three clients, two of them matched to BOSS', async () => {
+  await t.step('a Motilal Oswal stocks file lands for three clients, and the one BOSS lacked is added', async () => {
     const r = await upload([['stocks-motilal-oswal:aum', FILES.stocks1]]);
     const x = r.results.find(y=>y.slot === 'Motilal Oswal:aum');
     if(!x || !x.ok) throw new Error('upload: ' + JSON.stringify(r.results));
     if(x.version !== 1) throw new Error('version ' + x.version);
     if(x.rows !== 4) throw new Error(x.rows + ' rows read, expected 4 (the total line is not a holding)');
-    if(x.clients !== 3 || x.matched !== 2) throw new Error(x.clients + ' clients, ' + x.matched + ' matched');
+    if(x.clients !== 3 || x.matched !== 3) throw new Error(x.clients + ' clients, ' + x.matched + ' matched');
+    if(!/1 new client added/.test(r.modal)) throw new Error('the result does not say a client was added: ' + r.modal);
+    const out = await t.eval(()=>DB.clients.find(c=>!c.deletedAt && c.cmsName === 'ZZ Outsider Person'));
+    if(!out || out.pan !== 'ZZOUT9999Z' || !/Platform upload/.test(out.createdVia || '')) throw new Error('the new client: ' + JSON.stringify(out));
     if(!/Added/.test(r.modal)) throw new Error('the result says: ' + r.modal);
     const c = await current();
     const mehta = c.h.filter(h=>h.cid === ids.mehta);
     if(mehta.length !== 2) throw new Error('Mehta has ' + mehta.length + ' current holdings');
-    return '4 holdings, 3 clients (2 in BOSS, 1 kept as uploaded); popup says Added';
+    return '4 holdings, 3 clients (2 already in BOSS, ZZ Outsider Person added with PAN); popup says Added';
   });
 
   await t.step('the stocks reach Mehta\'s book: a platformHoldings line, and the book AUM counts it', async () => {
@@ -306,11 +326,12 @@ suite(async t => {
       const aum = rows.reduce((n, x)=>n + x.aum, 0), sip = rows.reduce((n, x)=>n + x.sip, 0);
       navigate('dashboard'); const txt = document.getElementById('content').innerText;
       return {aum, sip, plats: Array.from(new Set(rows.filter(x=>x.aum).map(x=>x.platform))), txt: txt.slice(0, 2000)}; });
-    /* Mehta: Stocks 69,000 + MF 1,84,000; Rao: Stocks 18,000 + AIF 11,50,000. LAS is not AUM. */
-    if(Math.round(r.aum) !== 69000 + 184000 + 18000 + 1150000) throw new Error('Live AUM ' + r.aum + ' from ' + r.plats);
+    /* Mehta: Stocks 69,000 + MF 1,84,000; Rao: Stocks 18,000 + AIF 11,50,000; the
+       client the upload added: Stocks 5,500. LAS is not AUM. */
+    if(Math.round(r.aum) !== 69000 + 184000 + 18000 + 1150000 + 5500) throw new Error('Live AUM ' + r.aum + ' from ' + r.plats);
     if(Math.round(r.sip) !== 10000) throw new Error('Live SIP ' + r.sip);
-    if(!/14,21,000/.test(r.txt)) throw new Error('the card does not show it: ' + r.txt.slice(0, 600));
-    return 'Live AUM 14,21,000 (' + r.plats.join(', ') + ') · Live SIP 10,000';
+    if(!/14,26,500/.test(r.txt)) throw new Error('the card does not show it: ' + r.txt.slice(0, 600));
+    return 'Live AUM 14,26,500 (' + r.plats.join(', ') + ') · Live SIP 10,000';
   });
 
   await t.step('every dashboard downloads an Excel report with the original system\'s sheets', async () => {
@@ -359,5 +380,59 @@ suite(async t => {
     const wiz = b.pfh.find(h=>h.src === 'wizard');
     if(!wiz || wiz.cur !== 120000) throw new Error(JSON.stringify(b.pfh));
     return 'the 1,20,000 line is counted again';
+  });
+
+  t.section('the Finowise, Anand Rathi and NJ reports, through the same upload');
+
+  await t.step('a Finowise AUM report is read column by column: PAN, mobile, associate, XIRR', async () => {
+    const r = await upload([['mf-finowise:aum', FILES.fwAum]]);
+    const x = r.results.find(y=>y.slot === 'Finowise:aum');
+    if(!x || !x.ok || x.rows !== 2) throw new Error(JSON.stringify(r.results));
+    if(!/read as the Finowise/i.test(r.modal)) throw new Error('not read as the Finowise report: ' + r.modal);
+    if(!/1 new client added/.test(r.modal) || !/1 client record updated/.test(r.modal)) throw new Error(r.modal);
+    const c = await t.eval(()=>{ const f = n => DB.clients.find(c=>!c.deletedAt && c.cmsName === n);
+      return {meh: f('ZZ Mehta Rajesh'), nw: f('ZZ Newman Kiran')}; });
+    if(c.meh.mobile !== '9876500001') throw new Error('Mehta\'s blank mobile was not filled: ' + c.meh.mobile);
+    if(!c.nw || c.nw.pan !== 'ZZNEW1111K' || c.nw.mobile !== '9876500002' || c.nw.associateName !== 'ZZ Assoc')
+      throw new Error('the new client: ' + JSON.stringify(c.nw));
+    const b = await book(ids.mehta);
+    const mf = b.pfh.find(h=>h.prod === 'MF' && h.src === 'multiasset');
+    if(!mf || mf.cur !== 200000 || b.pfh.some(h=>h.src === 'wizard')) throw new Error('Mehta\'s MF: ' + JSON.stringify(b.pfh));
+    const line = await t.eval(id=>DB.platformHoldings.find(h=>!h.deletedAt && h.clientId === id && h.source === 'multiasset'), c.nw.id);
+    if(!line || line.current !== 50000 || line.invested !== 40000 || line.xirr !== 11) throw new Error(JSON.stringify(line));
+    return 'Mehta 2,00,000 replaces the older line, mobile filled; ZZ Newman Kiran added with PAN, mobile and associate';
+  });
+
+  await t.step('an NJ SIP report lands in the SIP book with its own columns (SIP No., installments)', async () => {
+    const r = await upload([['mf-nj:sip', FILES.njSip]]);
+    const x = r.results.find(y=>y.slot === 'NJ:sip');
+    if(!x || !x.ok || x.rows !== 1) throw new Error(JSON.stringify(r.results));
+    const s = await t.eval(()=>{ const c = DB.clients.find(c=>!c.deletedAt && c.cmsName === 'ZZ Newman Kiran');
+      return DB.platformSips.find(x=>!x.deletedAt && x.clientId === c.id); });
+    if(!s || s.monthlyAmount !== 5000 || s.sipNo !== 'SIP-9001' || s.installments !== 120 || s.folio !== 'NJ-77')
+      throw new Error(JSON.stringify(s));
+    const sip = await t.eval(()=>mdBookRows().reduce((n, x)=>n + x.sip, 0));
+    /* Mehta's 10,000 left with the statement removed above, so this is the only live SIP. */
+    if(Math.round(sip) !== 5000) throw new Error('Live SIP ' + sip);
+    return 'ZZ Midcap Fund 5,000/mo, matched by name, with SIP No. and installments; Live SIP 5,000';
+  });
+
+  await t.step('a column a platform names its own way is taught once, and read from then on', async () => {
+    await t.eval(async ()=>{ maNav('upload');
+      document.getElementById('maColHeading').value = 'Holding Worth';
+      document.getElementById('maColField').value = 'current_value';
+      document.getElementById('maColKind').value = 'aum';
+      await maAddColumnName(); });
+    const listed = await t.eval(()=>document.getElementById('maColumnNames').innerText);
+    if(!/Holding Worth/.test(listed)) throw new Error('not listed: ' + listed);
+    const r = await upload([['stocks-philip-capital:aum', FILES.taught]]);
+    const x = r.results.find(y=>y.slot === 'Philip Capital:aum');
+    if(!x || !x.ok) throw new Error(JSON.stringify(r.results));
+    const b = await book(ids.rao);
+    const line = b.pfh.find(h=>h.p === 'Philip Capital');
+    if(!line || line.cur !== 25000) throw new Error(JSON.stringify(b.pfh));
+    const mob = await t.eval(id=>DB.clients.find(c=>c.id === id).mobile, ids.rao);
+    if(mob !== '9876500003') throw new Error('Rao\'s mobile: ' + mob);
+    return '"Holding Worth" read as Current value: Rao 25,000 at Philip Capital; Mobile No filled his record';
   });
 });

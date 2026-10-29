@@ -60,13 +60,14 @@ const MA_SIP_FIELDS = ['client_id','asset_class','security_name','isin','identif
   'frequency','sip_day','start_date','end_date','status','live','as_of'];
 const MA_NUMERIC = new Set(['quantity','avg_cost','invested','current_price','current_value','gain_loss','return_pct',
   'xirr','sip_amount','monthly_amount']);
+const MA_KEEP_OBJECTS = ['sleeves', 'extra', 'src'];
 const MA_MAX_BYTES = 8 * 1024 * 1024;
 const MA_KEEP_FILE_BYTES = 3 * 1024 * 1024;     // originals up to this size are kept for download
 const MA_KIND_LABEL = {aum:'AUM', sip:'SIP'};
 const MA_PAN = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
 
 /* What the module is holding while it runs. */
-const MA = {cache:null, picked:{}, uploadType:'platform', clientName:'', snapDate:'', busy:false,
+const MA = {cache:null, picked:{}, uploadType:'platform', clientName:'', snapDate:'', busy:false, createClients:true, overwrite:false,
   msg:'', result:null, addOpen:false, sipLive:true, sipQ:'', sipProduct:'', sipPlatform:'', clientQ:'',
   histQ:''};
 
@@ -91,16 +92,27 @@ function maPanOf(v){ const p = String(v || '').replace(/\s+/g, '').toUpperCase()
    a PDF by pdf.js, which is loaded only when a PDF is chosen.
    ===================================================================== */
 const MaExtract = (function(){
-  const AUM_FIELDS = ['client_name','client_id','asset_class','category','security_name','isin','identifier','quantity',
+  const AUM_FIELDS = ['client_name','client_id','pan','mobile','email','dob','branch','rm_name','associate','asset_class','category','security_name','isin','identifier','quantity',
     'avg_cost','invested','current_price','current_value','gain_loss','return_pct','xirr','as_of','start_date','end_date','level'];
   const CLIENT_SYNONYMS = {
     client_name: ['client name','client','investor name','investor','customer name','customer',
       'account holder','account holder name','holder name','first holder','first holder name',
       'applicant name','name of investor','name of client','beneficiary name'],
-    client_id: ['client id','client code','ucc','account no','account number','pan','pan no',
+    client_id: ['client id','client code','ucc','account no','account number',
       'investor id','customer id','dp id','bo id','demat account'],
   };
-  const AUM_SYNONYMS = {
+  /* The client's own details, which fill in the BOSS client record. */
+  const DETAIL_SYNONYMS = {
+    pan: ['pan','pan no','pan number','pan card','pan card no','investor pan','client pan','first holder pan'],
+    mobile: ['mobile','mobile no','mobile number','phone','phone no','phone number','contact no','contact number','cell no'],
+    email: ['email','email id','email address','e mail','e mail id','mail id'],
+    dob: ['dob','date of birth','birth date'],
+    branch: ['branch','branch name'],
+    rm_name: ['rm name','relationship manager','relationship manager name'],
+    associate: ['associate name','associate','sub broker','sub broker name'],
+  };
+  const DETAIL_FIELDS = Object.keys(DETAIL_SYNONYMS);
+  const AUM_SYNONYMS = Object.assign({
     client_name: CLIENT_SYNONYMS.client_name,
     client_id: CLIENT_SYNONYMS.client_id,
     category: ['asset class','asset type','category','sub category','instrument type','type',
@@ -134,14 +146,14 @@ const MaExtract = (function(){
       'buy date','first purchase date','first investment date','allotment date','open date','inception date'],
     end_date: ['end date','maturity date','maturity','redemption date','close date','closing date','expiry date',
       'lock in date','lock in end date','exit date'],
-  };
+  }, DETAIL_SYNONYMS);
   const AUM_IGNORE = new Set(['realised gain','realized gain','realised p l','realized p l','realised gain loss',
     'dividend','dividend amount','sch wgt %','weight %','weightage %','avg days','holding days','sip date']);
   const AUM_NUMERIC = new Set(['quantity','avg_cost','invested','current_price','current_value','gain_loss','return_pct','xirr']);
 
-  const SIP_FIELDS = ['client_name','client_id','asset_class','security_name','isin','identifier','sip_amount',
+  const SIP_FIELDS = ['client_name','client_id','pan','mobile','email','dob','branch','rm_name','associate','asset_class','security_name','isin','identifier','sip_amount',
     'frequency','sip_day','start_date','end_date','status','as_of'];
-  const SIP_SYNONYMS = {
+  const SIP_SYNONYMS = Object.assign({
     client_name: CLIENT_SYNONYMS.client_name,
     client_id: CLIENT_SYNONYMS.client_id,
     security_name: ['scheme name','scheme','fund name','fund','security name','security','instrument',
@@ -158,7 +170,7 @@ const MaExtract = (function(){
     end_date: ['end date','sip end date','to date','end','expiry date','sip end','cease date'],
     status: ['status','sip status','state','registration status'],
     as_of: ['as on','as of','report date'],
-  };
+  }, DETAIL_SYNONYMS);
   const SIP_NUMERIC = new Set(['sip_amount']);
   const SIP_IGNORE = new Set(['no of installments','installments','total installments','pending installments',
     'installments paid','units','nav','current value','market value']);
@@ -201,11 +213,11 @@ const MaExtract = (function(){
 
   const PROFILES = {
     aum: {fields: AUM_FIELDS, synonyms: AUM_SYNONYMS, ignore: AUM_IGNORE, numeric: AUM_NUMERIC,
-      dates: new Set(['as_of','start_date','end_date']),
+      dates: new Set(['as_of','start_date','end_date','dob']),
       nameFields: ['security_name','identifier','isin'], amountFields: ['quantity','current_value','invested','current_price'],
       requiredAny: ['quantity','current_value','invested'], special: true, complete: null},
     sip: {fields: SIP_FIELDS, synonyms: SIP_SYNONYMS, ignore: SIP_IGNORE, numeric: SIP_NUMERIC,
-      dates: new Set(['as_of','start_date','end_date']),
+      dates: new Set(['as_of','start_date','end_date','dob']),
       nameFields: ['security_name','identifier','isin'], amountFields: ['sip_amount'],
       requiredAny: ['sip_amount'], special: false, complete: completeSip},
   };
@@ -215,6 +227,9 @@ const MaExtract = (function(){
      "SIP" in its heading). Otherwise a holdings table with an "Invested
      Amount" column would come back as one SIP per scheme. */
   let STRICT = false;
+  /* Column names the firm has taught it (Upload page › Column names):
+     a heading, exactly as a file spells it, and the field it is. */
+  let CUSTOM = new Map();
   const TOTAL_ROW = /^(grand\s+)?(sub\s*)?total\b|^net\s+total|^overall/i;
   const CLIENT_HEADING = /^(?:client|investor|customer|account\s+holder|holder)(?:\s*name)?\s*[:\-–]\s*(.+?)(?:\s+(?:pan|client\s*(?:id|code)|ucc)(?:\s*no)?\s*[:\-–]\s*([A-Z0-9]+))?\s*$/i;
   const NAME_PAN = /^(?:(?:client|investor|customer)?\s*name\s*[:\-–]\s*)?([A-Za-z][A-Za-z .'&-]{1,80}?)\s*\(\s*([A-Z]{5}[0-9]{4}[A-Z])\s*\)\s*$/;
@@ -230,7 +245,9 @@ const MaExtract = (function(){
   }
   function matchField(header){
     const h = norm(header);
-    if(!h || h.length > 60 || P.ignore.has(h)) return null;
+    if(!h || h.length > 60) return null;
+    if(CUSTOM.has(h)) return CUSTOM.get(h);
+    if(P.ignore.has(h)) return null;
     if(P.special){
       if(/\b(xirr|cagr)\b/.test(h)) return 'xirr';
       if(h.indexOf('%') >= 0 && /gain|return|ret|rtn|p l|pnl|chg|change/.test(h) && !/annuali[sz]ed/.test(h)) return 'return_pct';
@@ -336,7 +353,7 @@ const MaExtract = (function(){
     const fields = Object.values(mapping);
     const nameCol = Object.keys(mapping).find(c=>mapping[c] === 'security_name');
     const head = nameCol !== undefined ? norm(row[nameCol]) : '';
-    const investorWise = nameCol !== undefined && fields.indexOf('client_id') >= 0 && fields.indexOf('client_name') < 0
+    const investorWise = nameCol !== undefined && (fields.indexOf('client_id') >= 0 || fields.indexOf('pan') >= 0) && fields.indexOf('client_name') < 0
       && /^(name|investor|investor name|client|client name|customer name)$/.test(head)
       && !['isin','identifier','quantity'].some(f=>fields.indexOf(f) >= 0);
     if(!investorWise) return mapping;
@@ -511,10 +528,15 @@ const MaExtract = (function(){
   async function extract(file, buffer, format, password, kind, strict){
     P = PROFILES[kind] || PROFILES.aum;
     STRICT = !!strict;
+    CUSTOM = new Map();
+    maColumnNames().forEach(c=>{
+      if((c.kind === 'both' || c.kind === (P === PROFILES.sip ? 'sip' : 'aum')) && P.fields.indexOf(c.field) >= 0) CUSTOM.set(norm(c.heading), c.field);
+    });
     return format === 'pdf' ? extractPdf(buffer, password) : extractExcel(file);
   }
-  function matchFieldFor(header, kind){ P = PROFILES[kind || 'aum']; return matchField(header); }
-  return {extract, matchField: matchFieldFor, parseNumber, parseDate, inferAssetClass};
+  function matchFieldFor(header, kind){ P = PROFILES[kind || 'aum']; CUSTOM = new Map(); return matchField(header); }
+  return {extract, matchField: matchFieldFor, parseNumber, parseDate, inferAssetClass, completeSip, norm,
+    fields: {aum: AUM_FIELDS, sip: SIP_FIELDS, details: DETAIL_FIELDS}};
 })();
 
 let _maPdf = null;
@@ -773,10 +795,10 @@ async function maCreateUpload(body){
   /* A PAN gives a name to rows whose file names nobody, from the file
      itself first and then from what is already uploaded. */
   const inFile = new Map();
-  input.forEach(h=>{ const p = maPanOf(h.client_id); if(p && maTidy(h.client_name) && !inFile.has(p)) inFile.set(p, maTidy(h.client_name)); });
+  input.forEach(h=>{ const p = maPanOf(h.pan || h.client_id); if(p && maTidy(h.client_name) && !inFile.has(p)) inFile.set(p, maTidy(h.client_name)); });
   const known = new Map();
   state.all.forEach(r=>{ const p = maPanOf(r.pan || r.client_id); if(p && !known.has(p) && r._c.name !== MA_UNASSIGNED) known.set(p, r._c.name); });
-  const whoIs = h => { const p = maPanOf(h.client_id); return maTidy(h.client_name) || (p && (inFile.get(p) || known.get(p))) || ''; };
+  const whoIs = h => { const p = maPanOf(h.pan || h.client_id); return maTidy(h.client_name) || (p && (inFile.get(p) || known.get(p))) || ''; };
 
   let source = input;
   if(uploadType === 'client'){
@@ -785,15 +807,18 @@ async function maCreateUpload(body){
     if(people.size > 1){
       const client = body.clientId ? (DB.clients || []).find(c=>c.id === body.clientId) : null;
       const pan = client ? maPanOf(client.pan) : null;
-      source = source.filter(h=>maKey(whoIs(h)) === maKey(clientName) || (pan && maPanOf(h.client_id) === pan));
+      source = source.filter(h=>maKey(whoIs(h)) === maKey(clientName) || (pan && maPanOf(h.pan || h.client_id) === pan));
       if(!source.length) throw new Error('This file holds ' + people.size + ' clients and none of them is ' + clientName
         + '. Upload it Platform Wise instead.');
     }
   }
   let rows = source.map(h=>{
     const name = uploadType === 'client' ? clientName : (whoIs(h) || MA_UNASSIGNED);
-    const r = Object.assign({client_name: name, pan: maPanOf(h.client_id), cid: uploadType === 'client' ? (body.clientId || '') : '',
+    const r = Object.assign({client_name: name, pan: maPanOf(h.pan || h.client_id), cid: uploadType === 'client' ? (body.clientId || h.cid || '') : (h.cid || ''),
       platform, platform_key: maKey(platform), product: prod}, maCleanRow(h, fields));
+    /* A known platform report carries more than the common fields: its
+       sleeves, the rest of its columns, and the source row verbatim. */
+    MA_KEEP_OBJECTS.forEach(k=>{ if(h[k] && typeof h[k] === 'object') r[k] = h[k]; });
     if(!r.asset_class || r.asset_class === 'Unclassified' || (prod !== 'MF' && r.asset_class === 'Mutual Fund') || prod === MA_LOANS)
       r.asset_class = MA_DEFAULT_ASSET[prod];
     return r;
@@ -804,7 +829,8 @@ async function maCreateUpload(body){
   const who = maResolver(state.all.concat(rows));
   rows.forEach(r=>Object.defineProperty(r, '_c', {value: who(r), enumerable: false, writable: true, configurable: true}));
   const sig = list => list.map(r=>JSON.stringify(fields.filter(f=>f !== 'as_of')
-    .map(f=>typeof r[f] === 'number' ? Math.round(r[f] * 100) / 100 : (r[f] === undefined ? null : r[f])))).sort().join('\n');
+    .map(f=>typeof r[f] === 'number' ? Math.round(r[f] * 100) / 100 : (r[f] === undefined ? null : r[f]))
+    .concat([r.sleeves || null, r.extra || null]))).sort().join('\n');
   const curList = kind === 'sip' ? state.sips : state.holdings;
   const byClient = (list) => { const m = new Map(); list.forEach(r=>{ const k = r._c.ck; if(!m.has(k)) m.set(k, []); m.get(k).push(r); }); return m; };
   const before = byClient(curList.filter(r=>r.platform_key === maKey(platform) && r.product === prod));
@@ -974,13 +1000,18 @@ async function maSyncCrm(opts){
       xirr: sl.w ? maRound(sl.x / sl.w, 2) : ''}; });
     const newestU = rows.reduce((a, r)=>(!a || (r._u.seq || 0) > (a.seq || 0)) ? r._u : a, null);
     const was = oldH.get(key);
-    freshH.push({id: was ? was.id : uid('PHD'), key, clientId: rows[0]._c.clientId, platform: rows[0].platform,
+    /* A known platform report (Finowise, Anand Rathi, NJ) has one total
+       row per client with its own sleeves and columns: those are written
+       as the report gave them, exactly as the old import wrote them. */
+    const one = rows.length === 1 && rows[0].level === 'summary' ? rows[0] : null;
+    const own = one && one.sleeves && Object.keys(one.sleeves).length ? one.sleeves : null;
+    freshH.push(Object.assign({}, one && one.extra || {}, one && one.src ? {src: one.src} : {}, {id: was ? was.id : uid('PHD'), key, clientId: rows[0]._c.clientId, platform: rows[0].platform,
       product: rows[0].product, report: 'AUM', format: 'multiasset', source: 'multiasset',
       invested: maRound(t.invested, 2), current: maRound(t.current_value, 2), xirr: t.xirr === null ? '' : maRound(t.xirr, 2),
-      sleeves, schemes: rows.filter(r=>r.level !== 'summary').length,
+      sleeves: own || sleeves, schemes: rows.filter(r=>r.level !== 'summary').length,
       reportAsOn: t.as_of || newestU.snapshotDate || '', asOf: newestU.at, file: newestU.file, batchId: newestU.id,
       importedBy: newestU.by, firstSeenAt: was ? was.firstSeenAt : now,
-      prev: was && (was.current !== maRound(t.current_value, 2)) ? {invested: was.invested, current: was.current, xirr: was.xirr, asOf: was.asOf} : (was ? was.prev : undefined)});
+      prev: was && (was.current !== maRound(t.current_value, 2)) ? {invested: was.invested, current: was.current, xirr: was.xirr, asOf: was.asOf} : (was ? was.prev : undefined)}));
   });
   /* ---- SIP lines (live ones only: an ended SIP is not part of the SIP book) ---- */
   const oldS = new Map((DB.platformSips || []).filter(x=>x && x.source === 'multiasset').map(x=>[x.key, x]));
@@ -992,12 +1023,12 @@ async function maSyncCrm(opts){
       + '|' + (String(r.isin || '').toUpperCase() || String(r.security_name || '').toLowerCase());
     if(freshS.some(x=>x.key === key)) return;
     const was = oldS.get(key);
-    freshS.push({id: was ? was.id : uid('PSP'), key, clientId: r._c.clientId, platform: r.platform, product: r.product,
+    freshS.push(Object.assign({}, r.extra || {}, r.src ? {src: r.src} : {}, {id: was ? was.id : uid('PSP'), key, clientId: r._c.clientId, platform: r.platform, product: r.product,
       report: 'SIP', format: 'multiasset', source: 'multiasset', schemeName: r.security_name || '', folio: r.identifier || '',
       isin: r.isin || '', amount: r.sip_amount, monthlyAmount: r.monthly_amount, frequency: r.frequency || '',
       sipDate: r.sip_day, startDate: r.start_date || '', endDate: r.end_date || '', status: r.status || '',
       reportAsOn: r._u.snapshotDate || '', asOf: r._u.at, file: r._u.file, batchId: r._u.id, importedBy: r._u.by,
-      firstSeenAt: was ? was.firstSeenAt : now});
+      firstSeenAt: was ? was.firstSeenAt : now}));
   });
   /* ---- the wizard's lines for the same client and platform ---- */
   let shadowChanged = false;
@@ -1382,7 +1413,7 @@ function viewAssetUpload(){
           <input type="text" id="maClientName" list="maClientList" value="${esc(MA.clientName)}" placeholder="A BOSS client, or a name" autocomplete="off"
             onchange="MA.clientName=this.value; render()">
           <datalist id="maClientList">${clientNames.slice(0, 3000).map(n=>`<option value="${esc(n)}">`).join('')}</datalist>
-          <div class="small-note" style="margin:4px 0 0">${maClientFromName(MA.clientName) ? 'Matched to the BOSS client of that name.' : (MA.clientName ? 'No BOSS client has this name; the data stays on the Multi Assets screens.' : '')}</div></div>` : ''}
+          <div class="small-note" style="margin:4px 0 0">${maClientFromName(MA.clientName) ? 'Matched to the BOSS client of that name.' : (MA.clientName ? (MA.createClients ? 'No BOSS client has this name yet; one is added when you upload.' : 'No BOSS client has this name; the data stays on the upload screens until one is added.') : '')}</div></div>` : ''}
         <div class="field"><label>Data as of <span class="small-note">(optional)</span></label>
           <input type="date" id="maSnapDate" value="${esc(MA.snapDate)}" onchange="MA.snapDate=this.value">
           <div class="small-note" style="margin:4px 0 0">Leave blank to use the date in each file, or today.</div></div>
@@ -1390,6 +1421,14 @@ function viewAssetUpload(){
           <input type="password" id="maPdfPassword" autocomplete="off" placeholder="Optional">
           <div class="small-note" style="margin:4px 0 0">Used to open the file in this browser, never stored.</div></div>
       </div>
+      <div class="ma-opts" style="margin-top:10px;display:flex;gap:18px;flex-wrap:wrap">
+        <label class="row" style="gap:6px"><input type="checkbox" id="maCreateClients" ${MA.createClients ? 'checked' : ''} onchange="MA.createClients=this.checked; render()">
+          Add clients that aren't in BOSS yet</label>
+        <label class="row" style="gap:6px"><input type="checkbox" id="maOverwrite" ${MA.overwrite ? 'checked' : ''} onchange="MA.overwrite=this.checked">
+          Overwrite client details already filled in (PAN, mobile, email, date of birth, branch, RM, associate)</label>
+      </div>
+      <div class="small-note" style="margin:6px 0 0">Everything uploaded goes into BOSS itself: the client record, the client's Portfolio tab,
+        the Main Dashboard's Live AUM and Live SIP, Portfolio Review and the reports. Blank client details are always filled in from the file.</div>
     </div>
     <div class="card">
       <div class="between"><div class="section-title" style="margin:0">2. Choose files <span class="small-note">AUM and SIP file for each platform</span></div>
@@ -1414,6 +1453,7 @@ function viewAssetUpload(){
           <button class="btn primary" id="maUploadAll" onclick="maUploadAll()" ${MA.busy || !nPicked ? 'disabled' : ''}>${MA.busy ? 'Uploading…' : 'Upload All'}</button></div>
       </div>
     </div>
+    ${maColumnNamesHtml()}
     <div class="card">
       <div class="between"><div class="section-title" style="margin:0">Update history</div>
         <span class="small-note" style="margin:0">Every upload is kept. The screens use the latest version of each platform + category.</span></div>
@@ -1454,6 +1494,252 @@ async function maAddPlatform(){
   MA.addOpen = false;
   render();
 }
+/* =====================================================================
+   THE PLATFORM REPORTS BOSS KNOWS COLUMN BY COLUMN
+
+   Finowise, Anand Rathi and NJ send AUM and SIP reports whose every
+   column has a place in BOSS (IMPORT_FORMATS): the client's PAN, mobile
+   and RM, each sleeve of the AUM, the SIP's folio and dates. When an
+   uploaded Excel file is one of them it is read that way — the same
+   reading, checks and client matching the old import ran — and turned
+   into rows here, so there is one door for every file.
+   ===================================================================== */
+function maLooseHead(h){ return String(h == null ? '' : h).toLowerCase().replace(/[^a-z0-9]/g, ''); }
+async function maKnownLayout(file, kind){
+  if(typeof IMPORT_FORMATS === 'undefined' || typeof impReadFile !== 'function') return null;
+  let read;
+  try { read = await impReadFile(file); } catch(e){ return null; }
+  const heads = new Set(read.headers.filter(Boolean).map(maLooseHead));
+  let best = null;
+  IMPORT_FORMATS.filter(f=>f.report === (kind === 'sip' ? 'SIP' : 'AUM')).forEach(fmt=>{
+    const map = impMapFor(fmt.id);
+    const named = Object.keys(map).filter(src=>map[src]);
+    const hit = named.filter(src=>heads.has(maLooseHead(src))).length;
+    const ratio = named.length ? hit / named.length : 0;
+    if(hit >= 3 && ratio >= 0.6 && (!best || ratio > best.ratio)) best = {fmt, map, ratio};
+  });
+  if(!best) return null;
+  const was = typeof impWiz === 'undefined' ? null : impWiz;
+  const w = Object.assign(impBlank(), {format: best.fmt.id, platform: best.fmt.platform, file: file.name, sheet: read.sheet,
+    headers: read.headers, rows: read.rows, asOn: read.asOn || '', map: Object.assign({}, best.map)});
+  impSuggestColumns(w);
+  let a;
+  try { impWiz = w; a = impAnalyse(); } finally { impWiz = was; }
+  if(!a) return null;
+  const SUMMARY = 'All schemes (investor total)';
+  const out = [];
+  a.rows.forEach(r=>{
+    if(!r.ok) return;
+    const name = r.clientName || impNormName(r.ident.name || r.client.cmsName || '');
+    const pan = r.client.pan || (IMP_PAN_RE.test(impNormPan(r.ident.pan || '')) ? impNormPan(r.ident.pan) : '');
+    const base = {client_name: name, pan: pan || null, client_id: r.aum.platformClientCode || r.sip.platformClientId || pan || null,
+      cid: r.clientId || '', cd: r.client, src: r.src};
+    if(best.fmt.report === 'AUM'){
+      const aum = Object.assign({}, r.aum), sleeves = aum.s || {};
+      delete aum.s;
+      const num = v => (v === '' || v === undefined) ? null : v;
+      const rec = Object.assign(base, {level: 'summary', security_name: SUMMARY, invested: num(aum.invested),
+        current_value: num(aum.current), xirr: num(aum.xirr), as_of: read.asOn || null, sleeves});
+      if(rec.current_value === null){
+        const sum = Object.values(sleeves).reduce((n, x)=>n + (Number(x && x.current) || 0), 0);
+        if(sum) rec.current_value = sum;
+      }
+      if(rec.invested !== null && rec.current_value !== null) rec.gain_loss = maRound(rec.current_value - rec.invested, 2);
+      delete aum.invested; delete aum.current; delete aum.xirr;
+      rec.extra = Object.assign(aum, {format: best.fmt.id});
+      out.push(rec);
+    } else {
+      const sip = Object.assign({}, r.sip);
+      const rec = Object.assign(base, {security_name: sip.schemeName || '', identifier: sip.folio || sip.sipNo || null,
+        isin: sip.isin || null, sip_amount: sip.amount === '' || sip.amount === undefined ? null : sip.amount,
+        frequency: sip.frequency || '', sip_day: sip.sipDate || null, start_date: sip.startDate || null,
+        end_date: sip.endDate || null, status: sip.status || '', as_of: read.asOn || null});
+      MaExtract.completeSip(rec);
+      if(sip.monthlyAmount !== '' && sip.monthlyAmount !== undefined) rec.monthly_amount = sip.monthlyAmount;
+      ['schemeName', 'folio', 'isin', 'amount', 'monthlyAmount', 'frequency', 'sipDate', 'startDate', 'endDate', 'status'].forEach(k=>{ delete sip[k]; });
+      rec.extra = Object.assign(sip, {format: best.fmt.id});
+      out.push(rec);
+    }
+  });
+  const bad = a.rows.filter(r=>!r.ok);
+  const notes = ['Read as the ' + best.fmt.label];
+  if(read.asOn) notes.push('as on ' + fmtDate(read.asOn));
+  (w.guessed || []).forEach(g=>notes.push('the column "' + g.header + '" was read as ' + g.forCol));
+  if(bad.length) notes.push(bad.length + ' row' + (bad.length === 1 ? '' : 's') + ' not imported: '
+    + bad.slice(0, 5).map(r=>'row ' + r.n + ' (' + r.errs.join('; ') + ')').join(', ') + (bad.length > 5 ? ' and more' : ''));
+  return {fmt: best.fmt, rows: out, notes, failed: bad.length};
+}
+
+/* =====================================================================
+   THE CLIENT RECORD
+
+   What a file says about the client themselves — PAN, mobile, email,
+   date of birth, branch, RM, associate — goes onto the BOSS client. A
+   blank is filled; something already there is changed only when
+   "Overwrite client details" is ticked. A client the file names and BOSS
+   does not have is added (unless that box is unticked), so their money
+   counts on every screen rather than sitting only in the upload.
+   ===================================================================== */
+const MA_DETAIL_TO_CLIENT = {pan: ['pan', 'pan'], mobile: ['mobile', 'mobile'], email: ['email', 'email'], dob: ['dob', 'date'],
+  branch: ['branch', 'text'], rm_name: ['rmName', 'team'], associate: ['associateName', 'text']};
+function maClientDetails(h){
+  if(h.cd && typeof h.cd === 'object') return Object.assign({}, h.cd);
+  const out = {};
+  Object.keys(MA_DETAIL_TO_CLIENT).forEach(f=>{
+    const v = f === 'pan' ? (maPanOf(h.pan) || maPanOf(h.client_id)) : h[f];
+    if(v === null || v === undefined || String(v).trim() === '') return;
+    const [to, type] = MA_DETAIL_TO_CLIENT[f];
+    const cell = impCell(type, v);
+    if(!cell.err && cell.v !== '' && cell.v !== null && cell.v !== undefined) out[to] = cell.v;
+  });
+  return out;
+}
+async function maApplyClients(rows, ctx){
+  const res = {created: [], updated: 0};
+  if(!rows.length) return res;
+  const live = (DB.clients || []).filter(c=>c && !c.deletedAt);
+  const idx = impClientIndex(live);
+  const byId = new Map(live.map(c=>[c.id, c]));
+  const now = new Date().toISOString();
+  let touched = false;
+  const groups = new Map();
+  rows.forEach(h=>{
+    const name = maTidy(h.client_name);
+    const pan = maPanOf(h.pan) || maPanOf(h.client_id);
+    const k = ctx.clientId ? 'c:' + ctx.clientId : ctx.clientName ? 'cw' : (pan ? 'p:' + pan : 'n:' + maKey(name));
+    if(!groups.has(k)) groups.set(k, {name, pan, rows: [], details: {}, cid: h.cid || ''});
+    const g = groups.get(k);
+    g.rows.push(h);
+    if(!g.name) g.name = name;
+    if(!g.cid && h.cid) g.cid = h.cid;
+    const d = maClientDetails(h);
+    Object.keys(d).forEach(f=>{ if(g.details[f] === undefined) g.details[f] = d[f]; });
+  });
+  /* A Client Wise file that turns out to hold several people: only its
+     rows are kept later, so nobody else's mobile or PAN is copied over. */
+  if(ctx.clientName && new Set(rows.map(h=>maPanOf(h.pan) || maPanOf(h.client_id) || maKey(h.client_name)).filter(Boolean)).size > 1)
+    groups.forEach(g=>{ g.details = {}; });
+  if(typeof autoSuspend === 'function') autoSuspend();
+  if(typeof auditSuspend === 'function') auditSuspend();
+  try {
+    for(const g of groups.values()){
+      let client = null;
+      if(ctx.clientId) client = byId.get(ctx.clientId) || null;
+      else if(g.cid && byId.has(g.cid)) client = byId.get(g.cid);
+      else {
+        const m = impMatchClient({pan: g.pan || '', name: ctx.clientName || g.name}, live, idx);
+        if(m.clientId) client = byId.get(m.clientId) || null;
+        else if(m.how !== 'new') continue;              // two clients share it: left for a person
+      }
+      const fresh = !client;
+      if(!client){
+        const name = ctx.clientName || g.name;
+        if(!ctx.create || !name || maKey(name) === maKey(MA_UNASSIGNED)) continue;
+        client = {id: uid('CMS'), cmsName: name, createdAt: now, createdBy: currentUser,
+          createdVia: 'Platform upload · ' + ctx.platform};
+        initState('CMS', client);
+        DB.clients.push(client);
+        live.push(client); byId.set(client.id, client);
+        const p = maPanOf(g.pan);
+        if(p){ if(!idx.byPan.has(p)) idx.byPan.set(p, []); idx.byPan.get(p).push(client); }
+        const nk = impNormKey(name);
+        if(!idx.byName.has(nk)) idx.byName.set(nk, []);
+        idx.byName.get(nk).push(client);
+        if(p && !g.details.pan) g.details.pan = p;
+        res.created.push(name);
+        touched = true;
+        await logAudit('CMS', client.id, 'Created by platform upload', [{field: 'Source', oldValue: '', newValue: ctx.platform + ' · ' + ctx.file}]);
+      }
+      const changes = [];
+      Object.keys(g.details).forEach(k=>{
+        if(k === 'cmsName' && fresh) return;
+        const was = client[k];
+        const blank = was === undefined || was === null || String(was).trim() === '';
+        if(!blank && !ctx.overwrite) return;
+        if(String(was == null ? '' : was) === String(g.details[k])) return;
+        changes.push({field: k, oldValue: String(was == null ? '' : was), newValue: String(g.details[k])});
+        client[k] = g.details[k];
+      });
+      if(changes.length){
+        touched = true;
+        if(!fresh){ res.updated++; await logAudit('CMS', client.id, 'Updated by platform upload', changes); }
+      }
+      g.rows.forEach(h=>{ h.cid = client.id; });
+    }
+    if(touched) await save('clients');
+  } finally {
+    if(typeof autoResume === 'function') autoResume();
+    if(typeof auditResume === 'function') await auditResume();
+  }
+  return res;
+}
+
+/* =====================================================================
+   COLUMN NAMES
+
+   The reader knows the usual names of every column. A platform that
+   calls one something else is taught it here, once: the heading as the
+   file spells it and the field it is. Saved in config.assetColumnNames.
+   ===================================================================== */
+const MA_FIELD_LABEL = {client_name: 'Client name', client_id: 'Client code / ID', pan: 'PAN', mobile: 'Mobile', email: 'Email',
+  dob: 'Date of birth', branch: 'Branch', rm_name: 'RM name', associate: 'Associate name', category: 'Category / asset type',
+  security_name: 'Scheme / security name', isin: 'ISIN', identifier: 'Folio / symbol / SIP no', quantity: 'Units / quantity',
+  avg_cost: 'Average cost', invested: 'Invested amount', current_price: 'Current price / NAV', current_value: 'Current value',
+  gain_loss: 'Gain / loss', return_pct: 'Return %', xirr: 'XIRR', as_of: 'Valuation date', start_date: 'Start date',
+  end_date: 'End / maturity date', level: '', asset_class: '', sip_amount: 'SIP amount', frequency: 'SIP frequency',
+  sip_day: 'SIP day', status: 'SIP status'};
+function maColumnNames(){
+  const v = typeof DB !== 'undefined' && DB.config && DB.config.assetColumnNames;
+  return Array.isArray(v) ? v.filter(c=>c && c.heading && c.field) : [];
+}
+function maColumnFieldOptions(){
+  const seen = new Set(), out = [];
+  ['aum', 'sip'].forEach(k=>MaExtract.fields[k].forEach(f=>{ if(MA_FIELD_LABEL[f] && !seen.has(f)){ seen.add(f); out.push(f); } }));
+  return out;
+}
+async function maAddColumnName(){
+  const heading = maTidy((document.getElementById('maColHeading') || {}).value).slice(0, 80);
+  const field = (document.getElementById('maColField') || {}).value;
+  const kind = (document.getElementById('maColKind') || {}).value || 'both';
+  if(!heading){ alert('Type the column heading as it appears in the file.'); return; }
+  if(!MA_FIELD_LABEL[field]){ alert('Choose what the column holds.'); return; }
+  if(kind !== 'both' && MaExtract.fields[kind].indexOf(field) < 0){ alert(MA_FIELD_LABEL[field] + ' is not read from ' + kind.toUpperCase() + ' files.'); return; }
+  const n = MaExtract.norm(heading);
+  const list = maColumnNames().filter(c=>!(MaExtract.norm(c.heading) === n && (c.kind === kind || kind === 'both' || c.kind === 'both')));
+  list.push({heading, field, kind, at: new Date().toISOString(), by: currentUser});
+  DB.config.assetColumnNames = list;
+  await save('config');
+  await logAudit('Settings', 'assetColumnNames', 'Upload column name added', [{field: heading, oldValue: '', newValue: MA_FIELD_LABEL[field] + ' (' + kind + ')'}]);
+  render();
+}
+async function maRemoveColumnName(i){
+  const list = maColumnNames();
+  const c = list[i]; if(!c) return;
+  list.splice(i, 1);
+  DB.config.assetColumnNames = list;
+  await save('config');
+  await logAudit('Settings', 'assetColumnNames', 'Upload column name removed', [{field: c.heading, oldValue: MA_FIELD_LABEL[c.field] || c.field, newValue: ''}]);
+  render();
+}
+function maColumnNamesHtml(){
+  const list = maColumnNames();
+  const kinds = {both: 'AUM and SIP files', aum: 'AUM files', sip: 'SIP files'};
+  return `<div class="card" id="maColumnNames">
+    <div class="section-title" style="margin-top:0">Column names</div>
+    <div class="small-note" style="margin-top:0">Every file is read by its column headings: the usual names for each field are known already,
+      and the Finowise, Anand Rathi and NJ reports are read column by column. If a platform calls a column something else, add the heading
+      here exactly as the file spells it and say what it holds. Every later upload reads it that way.</div>
+    ${list.length ? `<div class="table-wrap" style="margin-top:8px"><table><thead><tr><th>Heading in the file</th><th>Read as</th><th>In</th><th></th></tr></thead>
+      <tbody>${list.map((c, i)=>`<tr><td><b>${esc(c.heading)}</b></td><td>${esc(MA_FIELD_LABEL[c.field] || c.field)}</td><td>${esc(kinds[c.kind] || kinds.both)}</td>
+        <td><button class="btn sm ghost" onclick="maRemoveColumnName(${i})">Remove</button></td></tr>`).join('')}</tbody></table></div>` : ''}
+    <div class="row" style="gap:8px;margin-top:10px;flex-wrap:wrap">
+      <input type="text" id="maColHeading" placeholder="Heading, e.g. Mkt Val (Rs)" maxlength="80">
+      <select id="maColField">${maColumnFieldOptions().map(f=>`<option value="${f}">${esc(MA_FIELD_LABEL[f])}</option>`).join('')}</select>
+      <select id="maColKind">${Object.keys(kinds).map(k=>`<option value="${k}">${esc(kinds[k])}</option>`).join('')}</select>
+      <button class="btn sm primary" onclick="maAddColumnName()">Add column name</button>
+    </div>
+  </div>`;
+}
 const MA_FORMATS = {'.xlsx': 'xlsx', '.xls': 'xls', '.csv': 'xlsx', '.pdf': 'pdf'};
 async function maReadFile(file, kind, password, strict){
   const ext = (String(file.name).match(/\.[^.]+$/) || [''])[0].toLowerCase();
@@ -1467,6 +1753,10 @@ async function maReadFile(file, kind, password, strict){
     if(!(h[0] === 0x25 && h[1] === 0x50 && h[2] === 0x44 && h[3] === 0x46)) throw new Error('This does not look like a real .pdf file.');
   }
   let rows = [], notes = [], status;
+  if(format !== 'pdf' && !strict){
+    const known = await maKnownLayout(file, kind);
+    if(known) return {buffer, format, rows: known.rows, notes: known.notes, status: known.rows.length ? 'Processed' : 'Nothing found', layout: known.fmt.id};
+  }
   try {
     const out = await MaExtract.extract(file, buffer.slice(0), format, password, kind, strict);
     rows = out.holdings; notes = out.notes;
@@ -1509,12 +1799,18 @@ async function maUploadAll(){
       try {
         const r = await maReadFile(job.file, job.kind, password, !!job.auto);
         if(job.auto && !r.rows.length){ continue; }
+        /* The client record first: details filled in, new clients added,
+           so every row lands on a BOSS client before it is saved. */
+        const cl = await maApplyClients(r.rows, {clientId: client ? client.id : '', clientName: MA.uploadType === 'client' ? clientName : '',
+          create: MA.createClients, overwrite: MA.overwrite, platform: job.platform.name, file: job.file.name});
+        if(cl.created.length) r.notes.push(cl.created.length + ' new client' + (cl.created.length === 1 ? '' : 's') + ' added to BOSS');
+        if(cl.updated) r.notes.push(cl.updated + ' client record' + (cl.updated === 1 ? '' : 's') + ' updated');
         const created = await maCreateUpload({uploadType: MA.uploadType, clientName, clientId: client ? client.id : '',
           platform: job.platform.name, product: job.platform.product, kind: job.kind, batchId, snapshotDate: MA.snapDate || null,
           file: job.file.name, fileType: job.file.type || '', format: r.format, size: job.file.size, sha256: await maSha256(r.buffer),
           status: r.status, notes: r.notes.join('; '), rows: r.rows, buffer: r.buffer});
-        if(created.skipped) results.push({job, skipped: true, unchanged: created.unchanged, error: created.message});
-        else results.push({job, ok: true, created});
+        if(created.skipped) results.push({job, skipped: true, unchanged: created.unchanged, error: created.message, clients: cl});
+        else results.push({job, ok: true, created, clients: cl});
       } catch(e){ results.push({job, error: (e && e.message) || String(e)}); }
     }
     const saved = results.filter(r=>r.ok);
@@ -1552,7 +1848,10 @@ function maShowResults(){
       const head = c.isNew ? '<span class="badge ok">Added</span>' : `<span class="badge info">Version ${c.version}</span>`;
       const detail = c.isNew ? 'New data, as of ' + fmtDate(c.snapshotDate) : 'Added as version ' + c.version + ' for ' + fmtDate(c.snapshotDate) + '; earlier versions kept';
       const same = c.unchangedClients ? '; ' + c.unchangedClients + ' client' + (c.unchangedClients === 1 ? '' : 's') + ' unchanged, kept as before' : '';
-      const boss = c.clientsCount ? ' · ' + c.matchedClients + ' matched to BOSS clients' + (c.unmatched.length ? ', ' + c.unmatched.length + ' not in BOSS' : '') : '';
+      const boss = (c.clientsCount ? ' · ' + c.matchedClients + ' matched to BOSS clients' + (c.unmatched.length ? ', ' + c.unmatched.length + ' not in BOSS' : '') : '')
+        + (r.clients && r.clients.created.length ? ' · ' + r.clients.created.length + ' new client' + (r.clients.created.length === 1 ? '' : 's') + ' added' : '')
+        + (r.clients && r.clients.updated ? ' · ' + r.clients.updated + ' client record' + (r.clients.updated === 1 ? '' : 's') + ' updated' : '')
+        + (c.upload && /^Read as the /.test(c.upload.notes || '') ? ' · ' + c.upload.notes.split(';')[0].replace(/^Read as the /, 'read as the ') : '');
       res = `${head} <span class="small-note">${esc(detail)} · ${c.rowsCount} ${what}${R.uploadType === 'platform' ? ', ' + c.clientsCount + ' clients' : ''}${esc(same)}${esc(boss)}</span>`
         + (c.rowsCount ? '' : `<div class="small-note">No ${what} could be read from this file.</div>`);
     } else if(r.skipped) res = `<span class="badge muted">${r.unchanged ? 'No change' : 'Skipped'}</span> <span class="small-note">${esc(r.error)}</span>`;
@@ -1667,7 +1966,7 @@ function maClientBlockHtml(clientId){
 }
 
 /* ---- the four sections of Setup › Platform Import Mapping ----------- */
-const MA_SECTIONS = [['upload', 'Upload files'], ['data', 'Uploaded data'], ['sips', 'SIPs'], ['mapping', 'Column mapping']];
+const MA_SECTIONS = [['upload', 'Upload files'], ['data', 'Uploaded data'], ['sips', 'SIPs']];
 function maSectionBar(cur){
   maStyle();
   return `<div class="tabs" style="margin:0 0 14px">${MA_SECTIONS.map(([id, label])=>`<div class="tab ${cur === id ? 'active' : ''}"
