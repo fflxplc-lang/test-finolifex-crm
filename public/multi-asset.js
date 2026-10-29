@@ -911,6 +911,15 @@ async function maResetAll(){
    money is never counted twice. Set aside, not deleted: when the newer
    one goes, the older comes back.
    ===================================================================== */
+/* The Main Dashboard cuts AUM by Equity, Debt, Hybrid and Others; a line's
+   sleeves are named that way so its Product cut reads as it always has. */
+function maBucket(r){
+  const a = String(r.asset_class || '');
+  if(a === 'Equity' || a === 'Debt') return a;
+  if(a === 'Mutual Fund' && typeof mdProductBucket === 'function')
+    return mdProductBucket({productCategory: (r.category || '') + ' ' + (r.security_name || '')});
+  return 'Others';
+}
 function maLegacyPlatformId(name){
   const p = (typeof IMPORT_PLATFORMS !== 'undefined' ? IMPORT_PLATFORMS : []).find(x=>maKey(x.label) === maKey(name));
   return p ? p.id : null;
@@ -956,7 +965,7 @@ async function maSyncCrm(opts){
     const t = maSums(rows, []);
     const sleeves = {};
     rows.forEach(r=>{
-      const n = r.asset_class || 'Other';
+      const n = maBucket(r);
       const sl = sleeves[n] = sleeves[n] || {invested: 0, current: 0, w: 0, x: 0};
       sl.invested += r.invested || 0; sl.current += r.current_value || 0;
       if(r.xirr !== null && r.xirr !== undefined){ sl.x += r.xirr * (r.current_value || 0); sl.w += r.current_value || 0; }
@@ -1042,7 +1051,10 @@ function maStyle(){
 const maPct = n => (n === null || n === undefined || n === '' || !isFinite(Number(n))) ? '—' : (Math.round(Number(n) * 100) / 100) + '%';
 const maMoney = n => (n === null || n === undefined) ? '—' : money(n);
 const maDate = d => d ? fmtDate(d) : '—';
-function maGo(route){ window._maRoute = route || {page: 'home'}; window._maKeepRoute = true; navigate('assets'); }
+/* Everything here lives inside Setup › Platform Import Mapping, as its
+   sections: Upload files, Uploaded data, SIPs and Column mapping. */
+function maNav(section){ window._impMapSection = section; navigate('settings', 'importmaps'); }
+function maGo(route){ window._maRoute = route || {page: 'home'}; maNav('data'); }
 function maOpenClient(ck){ maGo({page: 'client', ck}); }
 function maCrumbs(parts){
   return `<div class="ma-crumbs">${parts.map(([label, onclick])=>onclick ? `<a onclick="${onclick}">${esc(label)}</a>` : `<b>${esc(label)}</b>`).join(' › ')}</div>`;
@@ -1055,7 +1067,7 @@ function maKpis(t){
       + (t.return_pct === null ? '' : ` <small>${maPct(t.return_pct)}</small>`)},
     {label: 'XIRR', value: maPct(t.xirr)},
     {label: 'Monthly SIP', value: money(t.sip_monthly) + (t.live_sips ? ' · ' + t.live_sips + ' live' : ''),
-      onclick: "navigate('assetsips')"},
+      onclick: "maNav('sips')"},
     {label: 'Loans (LAS, not in AUM)', value: money(t.loans)},
   ]);
 }
@@ -1093,7 +1105,7 @@ function bossMaskSafe(p){ return typeof bossMask === 'function' ? bossMask(p, 4)
 function maEmptyHtml(){
   return `<div class="card"><div class="section-title" style="margin-top:0">No investment data yet</div>
     <div class="small-note">Upload AUM and SIP files for any platform and category from
-      <a class="cell-link" href="javascript:void(0)" onclick="navigate('assetupload')">Multi Assets › Upload</a>. What is read is matched to BOSS's
+      <a class="cell-link" href="javascript:void(0)" onclick="maNav('upload')">Platform Import Mapping › Upload files</a>. What is read is matched to BOSS's
       clients by PAN, then by name, and shows on their Portfolio tab, in Portfolio Review and in the book AUM.</div></div>`;
 }
 
@@ -1115,8 +1127,8 @@ function maHomePage(){
   const plats = maGroup(v.holdings, v.sips, r=>r.platform_key, r=>r.platform);
   const recent = maUploads().slice().sort((a, b)=>(b.seq || 0) - (a.seq || 0)).slice(0, 8);
   return `
-    ${moduleHeader({title: '💹 Multi Assets', subtitle: t.clients + ' clients · ' + t.platforms + ' platforms · ' + t.files + ' files in use · as at ' + maDate(t.as_of),
-      actions: [maCanUpload() ? {label: 'Upload files', icon: '⬆', onclick: "navigate('assetupload')"} : null,
+    ${moduleHeader({title: 'All platforms', subtitle: t.clients + ' clients · ' + t.platforms + ' platforms · ' + t.files + ' files in use · as at ' + maDate(t.as_of),
+      actions: [maCanUpload() ? {label: 'Upload files', icon: '⬆', onclick: "maNav('upload')"} : null,
         {label: 'Download Excel', icon: '⤓', onclick: "maExportXlsx({}, 'All clients')"}]})}
     ${maKpis(t)}
     <div class="section-title">Categories</div>
@@ -1142,7 +1154,7 @@ function maScopePage(r){
   const inScope = x => (!pk || x.platform_key === pk) && (!r.product || x.product === r.product);
   const h = v.holdings.filter(inScope), s = v.sips.filter(inScope);
   const title = r.platform && r.product ? r.platform + ' · ' + r.product : (r.platform || (MA_PRODUCT_LABEL[r.product] || r.product));
-  const crumbs = maCrumbs([['Multi Assets', "maGo({page:'home'})"]].concat(
+  const crumbs = maCrumbs([['All platforms', "maGo({page:'home'})"]].concat(
     r.platform && r.product ? [[r.platform, `maGo({page:'scope', platform:'${esc(r.platform)}'})`], [r.product]] : [[title]]));
   if(!h.length && !s.length) return crumbs + `<div class="card"><div class="small-note">No data uploaded here yet.</div></div>`;
   const t = maSums(h, s);
@@ -1171,7 +1183,7 @@ function maClientPage(ck){
   const h = v.holdings.filter(r=>r._c.ck === ck), s = v.sips.filter(r=>r._c.ck === ck);
   const allMine = v.all.filter(r=>r._c.ck === ck);
   const one = (h[0] || s[0] || allMine[0] || {})._c;
-  const crumbs = maCrumbs([['Multi Assets', "maGo({page:'home'})"], [one ? one.name : 'Client']]);
+  const crumbs = maCrumbs([['All platforms', "maGo({page:'home'})"], [one ? one.name : 'Client']]);
   if(!one) return crumbs + `<div class="card"><div class="small-note">No data for this client yet.</div></div>`;
   const t = maSums(h, s);
   const pp = maGroup(h, s, r=>r.platform_key + '|' + r.product, r=>r.platform);
@@ -1358,7 +1370,7 @@ function viewAssetUpload(){
   const hist = maUploads().slice().sort((a, b)=>(b.seq || 0) - (a.seq || 0))
     .filter(u=>!hq || maKey([u.platform, u.product, u.file, u.clientName].join(' ')).indexOf(hq) >= 0);
   return `
-    ${moduleHeader({title: '⬆ Multi Assets · Upload', subtitle: 'AUM and SIP files for every platform and category, Excel or PDF'})}
+    ${moduleHeader({title: 'Upload platform files', subtitle: 'AUM and SIP files for every platform and category (MF, Stocks, PMS, AIF, Bonds, LAS, Other), Excel or PDF'})}
     <div class="card">
       <div class="section-title" style="margin-top:0">1. Upload type</div>
       <div class="ma-seg" role="tablist">
@@ -1509,7 +1521,7 @@ async function maUploadAll(){
     if(saved.length){
       await logAudit('Import', batchId, 'Multi-asset files uploaded', saved.map(r=>({field: r.job.platform.name + ' · ' + r.job.platform.product
         + ' · ' + MA_KIND_LABEL[r.job.kind], oldValue: '', newValue: r.job.file.name + ' (v' + r.created.version + ', ' + r.created.rowsCount + ' rows)'})));
-      DB.importHistory.push({id: uid('IMH'), module: 'Multi Assets · ' + (MA.uploadType === 'client' ? 'Client Wise' : 'Platform Wise'),
+      DB.importHistory.push({id: uid('IMH'), module: 'Platform files · ' + (MA.uploadType === 'client' ? 'Client Wise' : 'Platform Wise'),
         file: saved.map(r=>r.job.file.name).filter((v, i, a)=>a.indexOf(v) === i).join(', '),
         total: saved.reduce((n, r)=>n + r.created.rowsCount, 0), imported: saved.reduce((n, r)=>n + r.created.rowsCount, 0),
         skipped: 0, date: new Date().toISOString(), by: currentUser, batchId});
@@ -1583,7 +1595,7 @@ function maExportXlsx(scope, label){
   const n2 = x => (x === null || x === undefined || x === '') ? '' : maRound(Number(x), 2);
   const t = maSums(h, s);
   const multi = new Set(h.concat(s).map(r=>r._c.ck)).size > 1;
-  const sumRows = [['Report', label || 'Multi Assets'], ['Generated', new Date().toLocaleString(numberLocale())], ['Data as of', t.as_of || ''],
+  const sumRows = [['Report', label || 'Platform data'], ['Generated', new Date().toLocaleString(numberLocale())], ['Data as of', t.as_of || ''],
     [], ['Totals'], ['Current value (AUM)', n2(t.current_value)], ['Invested', n2(t.invested)], ['Gain', n2(t.gain_loss)],
     ['Return %', n2(t.return_pct)], ['XIRR %', n2(t.xirr)], ['Monthly SIP (live)', n2(t.sip_monthly)], ['Loans (LAS, not in AUM)', n2(t.loans)],
     ['Clients', t.clients], ['Holdings', t.holdings], ['SIPs', t.sips]];
@@ -1640,9 +1652,9 @@ function maClientBlockHtml(clientId){
     .sort((a, b)=>MA_PRODUCTS.indexOf(a.product) - MA_PRODUCTS.indexOf(b.product) || (b.current_value || 0) - (a.current_value || 0));
   const loans = h.filter(r=>r.product === MA_LOANS);
   return `
-    <div class="between" style="margin-top:14px"><div class="section-title" style="margin:0">Multi-asset holdings</div>
-      <button class="btn sm ghost" onclick="maOpenClient('${esc(ck)}')">Open the multi-asset dashboard</button></div>
-    <div class="small-note" style="margin-top:4px">Read from the AUM and SIP files uploaded in Multi Assets — the newest version of each platform and category.
+    <div class="between" style="margin-top:14px"><div class="section-title" style="margin:0">Holdings by scheme, from the uploaded files</div>
+      <button class="btn sm ghost" onclick="maOpenClient('${esc(ck)}')">Open in Uploaded data</button></div>
+    <div class="small-note" style="margin-top:4px">Read from the AUM and SIP files uploaded in Platform Import Mapping — the newest version of each platform and category.
       ${t.loans ? 'Loans against securities are shown on their own and are not part of the AUM.' : ''}</div>
     ${repKpis([{label: 'Current value', html: money(t.current_value)}, {label: 'Invested', html: money(t.invested)},
       {label: 'Gain', html: money(t.gain_loss), tone: t.gain_loss >= 0 ? 'ok' : 'danger', note: t.return_pct === null ? '' : maPct(t.return_pct)},
@@ -1652,4 +1664,18 @@ function maClientBlockHtml(clientId){
     ${s.length ? `<div class="section-title" style="font-size:12px">SIPs</div>${maSipTable(s, {noClient: true})}` : ''}
     ${loans.length ? `<div class="section-title" style="font-size:12px">Loans against securities</div>
       ${repTable([{t: 'Platform'}, {t: 'Loan / facility'}, {t: 'Outstanding', r: 1}], loans.map(l=>`<tr><td>${esc(l.platform)}</td><td>${esc(l.security_name || '—')}</td><td class="se-r">${money(l.current_value)}</td></tr>`))}` : ''}`;
+}
+
+/* ---- the four sections of Setup › Platform Import Mapping ----------- */
+const MA_SECTIONS = [['upload', 'Upload files'], ['data', 'Uploaded data'], ['sips', 'SIPs'], ['mapping', 'Column mapping']];
+function maSectionBar(cur){
+  maStyle();
+  return `<div class="tabs" style="margin:0 0 14px">${MA_SECTIONS.map(([id, label])=>`<div class="tab ${cur === id ? 'active' : ''}"
+    onclick="window._impMapSection='${id}'; ${id === 'data' ? "window._maRoute={page:'home'}; " : ''}render()">${esc(label)}</div>`).join('')}</div>`;
+}
+function maSectionHtml(cur){
+  if(cur === 'upload') return viewAssetUpload();
+  if(cur === 'data') return viewAssets();
+  if(cur === 'sips') return viewAssetSips();
+  return '';
 }

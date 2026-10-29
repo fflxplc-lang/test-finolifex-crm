@@ -654,7 +654,7 @@ suite(async t => {
 
   await t.step('Setup carries a screen for every column of every report', async () => {
     const r = await t.eval(()=>{
-      navigate('settings','importmaps');
+      window._impMapSection = 'mapping'; navigate('settings','importmaps');
       const c = document.getElementById('content');
       return {title: c.textContent.indexOf('Platform Import Mapping') >= 0,
               selects: c.querySelectorAll('select').length,

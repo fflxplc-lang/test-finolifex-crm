@@ -133,7 +133,7 @@ suite(async t => {
   const upload = async (files, opts) => {
     opts = opts || {};
     await t.eval(o => { MA.picked = {}; MA.result = null; MA.uploadType = o.type || 'platform'; MA.clientName = o.client || '';
-      MA.snapDate = o.snap || ''; navigate('assetupload'); }, opts);
+      MA.snapDate = o.snap || ''; maNav('upload'); }, opts);
     await t.wait(300);
     for(const [slot, file] of files){
       await t.page.setInputFiles(`input[data-ma="${slot}"]`, file);
@@ -157,9 +157,11 @@ suite(async t => {
   await t.step('seed two clients with PANs, and an older Finowise MF line for one of them', async () => {
     ids = await t.eval(SEED);
     await t.wait(300);
-    const m = await t.eval(()=>({nav: NAV_GROUPS.some(g=>g.id === 'assets'), plats: maPlatforms().length}));
-    if(!m.nav) throw new Error('Multi Assets is not in the rail');
-    return 'Mehta and Rao; Multi Assets in the rail with ' + m.plats + ' platforms on the matrix';
+    const m = await t.eval(()=>{ maNav('upload'); return {rail: NAV_GROUPS.some(g=>g.id === 'assets'),
+      tab: currentView === 'settings' && settingsTab === 'importmaps', matrix: !!document.querySelector('input[data-ma]'), plats: maPlatforms().length}; });
+    if(m.rail) throw new Error('a separate module is in the rail; the upload belongs in Platform Import Mapping');
+    if(!m.tab || !m.matrix) throw new Error(JSON.stringify(m));
+    return 'Mehta and Rao; the upload matrix is in Setup › Platform Import Mapping with ' + m.plats + ' platforms';
   });
 
   t.section('Platform Wise, Excel');
@@ -267,11 +269,11 @@ suite(async t => {
     const out = await t.eval(async id => {
       const txt = () => document.getElementById('content').innerText;
       const seen = {};
-      navigate('assets'); seen.home = txt();
+      maGo({page: 'home'}); seen.home = txt();
       maGo({page: 'scope', product: 'Stocks'}); seen.cat = txt();
       maGo({page: 'scope', platform: 'Motilal Oswal'}); seen.plat = txt();
       maOpenClient('c:' + id); seen.client = txt();
-      navigate('assetsips'); seen.sips = txt();
+      maNav('sips'); seen.sips = txt();
       return seen;
     }, ids.mehta);
     if(!/Categories/i.test(out.home) || !/Stocks/.test(out.home) || !/LAS/.test(out.home)) throw new Error('home: ' + out.home.slice(0, 300));
@@ -295,8 +297,20 @@ suite(async t => {
 
   await t.step('the client\'s Portfolio tab carries the schemes, the SIPs and the platform lines', async () => {
     const txt = await t.eval(id => { const d = document.createElement('div'); d.innerHTML = cpPortfolio(DB.clients.find(c=>c.id === id)); return d.innerText; }, ids.mehta);
-    if(!/Multi-asset holdings/i.test(txt) || !/ZZ Infra Ltd/.test(txt) || !/Motilal Oswal/.test(txt)) throw new Error(txt.slice(0, 500));
+    if(!/Holdings by scheme/i.test(txt) || !/ZZ Infra Ltd/.test(txt) || !/Motilal Oswal/.test(txt)) throw new Error(txt.slice(0, 500));
     return 'Platform-reported holdings + Multi-asset holdings on the profile';
+  });
+
+  await t.step('the Main Dashboard\'s Live AUM and Live SIP cards carry the uploads, cut by platform', async () => {
+    const r = await t.eval(()=>{ const rows = mdBookRows();
+      const aum = rows.reduce((n, x)=>n + x.aum, 0), sip = rows.reduce((n, x)=>n + x.sip, 0);
+      navigate('dashboard'); const txt = document.getElementById('content').innerText;
+      return {aum, sip, plats: Array.from(new Set(rows.filter(x=>x.aum).map(x=>x.platform))), txt: txt.slice(0, 2000)}; });
+    /* Mehta: Stocks 69,000 + MF 1,84,000; Rao: Stocks 18,000 + AIF 11,50,000. LAS is not AUM. */
+    if(Math.round(r.aum) !== 69000 + 184000 + 18000 + 1150000) throw new Error('Live AUM ' + r.aum + ' from ' + r.plats);
+    if(Math.round(r.sip) !== 10000) throw new Error('Live SIP ' + r.sip);
+    if(!/14,21,000/.test(r.txt)) throw new Error('the card does not show it: ' + r.txt.slice(0, 600));
+    return 'Live AUM 14,21,000 (' + r.plats.join(', ') + ') · Live SIP 10,000';
   });
 
   await t.step('every dashboard downloads an Excel report with the original system\'s sheets', async () => {

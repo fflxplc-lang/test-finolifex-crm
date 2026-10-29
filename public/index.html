@@ -34563,9 +34563,6 @@ function navigate(view, arg){
   if(SETTINGS_ROUTE_ALIAS[view]){ settingsTab = SETTINGS_ROUTE_ALIAS[view]; view = 'settings'; }
   else if(view==='settings' && arg!==undefined) settingsTab = SETTINGS_TAB_MERGED[arg] || arg;
   if(view==='calendar'){ window._meetView = 'agenda'; view = 'meetings'; }   // the old Calendar route is now a Meetings view
-  /* The Multi Assets dashboard opens on the whole book from the rail; a
-     click inside it (a category, a platform, a client) says where to go. */
-  if(view==='assets'){ if(!window._maKeepRoute) window._maRoute = {page:'home'}; window._maKeepRoute = false; }
   // Risk Profiles was a second module over the ISEQ score. It is gone; what it
   // showed is a section of ISEQ Forms, and anything still asking for the old
   // name lands there rather than falling through to the Dashboard.
@@ -35238,16 +35235,12 @@ function render(){
     hrdashboard:['HR','Attendance, incentives and appraisals — HR’s own records, read from the accounts the firm already has'],
     hrattendance:['Attendance Management','Punch in and out, your own history, and — for HR — everybody’s'],
     hrincentive:['Incentive Management','The existing records a future incentive rule will be read from'],
-    hrappraisal:['Appraisal Management','Ratings, company growth and the increment, year by year'],
-    assets:['Multi Assets','MF, Stocks, PMS, AIF, Bonds, LAS and Other — the newest version of every platform and category'],
-    assetsips:['SIPs','Every SIP on record across platforms and categories'],
-    assetupload:['Multi Assets · Upload','AUM and SIP files for every platform and category, Excel or PDF']};
+    hrappraisal:['Appraisal Management','Ratings, company growth and the increment, year by year']};
   // Modules that draw their own header (and every profile) own the page title, so the
   // topbar one would just repeat it.
   const ownsHeader = (blueprintModuleFor(currentView) && window['_bpRec_'+blueprintModuleFor(currentView).type]
                       && planRecordOf(window['_bpRec_'+blueprintModuleFor(currentView).type]))
-    || ['lms','cms','rms','dst','queries','business','djt','campaigns','projects','calls','mis','analytics',
-        'assets','assetsips','assetupload'].includes(currentView)
+    || ['lms','cms','rms','dst','queries','business','djt','campaigns','projects','calls','mis','analytics'].includes(currentView)
     || (currentView==='settings' && !settingsTab)
     || (currentView==='lms' && leadDetailId) || (currentView==='cms' && clientDetailId)
     || (currentView==='rms' && reviewDetailId);
@@ -35304,9 +35297,6 @@ function render(){
   else if(currentView==='mis') c.innerHTML = viewMIS();
   else if(currentView==='analytics') c.innerHTML = viewAnalytics();
   else if(currentView==='import') c.innerHTML = viewImport();
-  else if(currentView==='assets') c.innerHTML = viewAssets();
-  else if(currentView==='assetsips') c.innerHTML = viewAssetSips();
-  else if(currentView==='assetupload') c.innerHTML = viewAssetUpload();
   else if(currentView==='teammembers') c.innerHTML = viewTeamMembers();
   else if(currentView==='settings') c.innerHTML = isSettingsVisible() ? viewSettings()
     : `<div class="card" style="margin:0;padding:12px;border-left:3px solid var(--danger)">
@@ -35464,7 +35454,6 @@ const NAV_ICONS = {
   fqtests:'🧮', iseqforms:'🛡️', cifforms:'🗂️', planforms:'📐', ctforms:'🤝', mailbox:'✉️', portfolio:'📈',
   systemarchitecture:'🏛️', settings:'⚙️', profile:'👤', teammembers:'🧑‍💼', dwt:'🗓️', arc:'🔁', djt:'📔',
   hrdashboard:'🧭', hrattendance:'⏱️', hrincentive:'💰', hrappraisal:'📈',
-  assets:'💹', assetsips:'🔁', assetupload:'⬆️',
 };
 const NAV_LABELS = {
   dashboard:'Dashboard', lms:'Lead Management System', lng:'LNG · Lead Nurture Group', cms:'Client Management System', rms:'Review Management System',
@@ -35478,7 +35467,6 @@ const NAV_LABELS = {
   queries:'QMS · Query Management', mailbox:'Mail', portfolio:'Portfolio Review',
   fqtests:'FQ Assessments', iseqforms:'ISEQ Forms', cifforms:'CIF Forms',
   planforms:'Plan Input Forms', ctforms:'C&T Forms',
-  assets:'Multi-Asset Dashboard', assetsips:'SIPs', assetupload:'Upload Files',
 };
 /* What the rail calls a module, where the firm already has a name for it
    that is shorter than the one in NAV_LABELS. Only the rail reads this:
@@ -35548,12 +35536,6 @@ const NAV_GROUPS = [
   {id:'business', icon:'💼', label:'Business',
    items:['business','recommendations','transactions'],
    about:'Business logged, the plans being executed, and the orders it turns into.'},
-  /* Multi Assets: every platform and category the firm's clients hold —
-     MF, Stocks, PMS, AIF, Bonds, LAS and Other — uploaded as the platforms'
-     own AUM and SIP files, versioned, and written through to the client
-     records (multi-asset.js). */
-  {id:'assets', icon:'💹', label:'Multi Assets', items:['assets','assetsips','assetupload'],
-   about:'AUM and SIP files from every platform and category, their dashboards and the SIPs on record.'},
   {id:'growth', icon:'🌱', label:'Growth', items:['campaigns','partners'], defaultOff:true,
    about:'Outbound marketing and the partners who refer. Off until the firm turns it on.'},
   /* Team Members is administration of people, and people are administered
@@ -42128,7 +42110,7 @@ function cpPortfolio(c){
       : `<div class="card prof-card"><div class="section-title" style="margin-top:0">◔ Platform-reported holdings</div>
           <div class="small-note" style="margin:0">No AUM or SIP file has been uploaded for this client. Files for any
           platform and category (MF, Stocks, PMS, AIF, Bonds, LAS, Other) are uploaded from
-          <a href="javascript:void(0)" class="cell-link" onclick="navigate('assetupload')">Multi Assets › Upload</a>, and matched on
+          <a href="javascript:void(0)" class="cell-link" onclick="maNav('upload')">Setup › Platform Import Mapping</a>, and matched on
           this client's PAN${c.pan? ' (' + esc(impNormPan(c.pan)) + ')' : ' — which is not recorded, so the match would fall back to the name'}.</div>
         </div>`}`;
 }
@@ -65267,7 +65249,7 @@ function viewImport(){
     <div class="card" style="margin-top:14px">
       <div class="between" style="margin-bottom:6px">
         <div class="section-title" style="margin:0">Multi-asset files — every platform and category</div>
-        <button class="btn primary" onclick="navigate('assetupload')">Open Multi Assets › Upload</button>
+        <button class="btn primary" onclick="maNav('upload')">Upload platform files</button>
       </div>
       <div class="small-note" style="margin-top:0">MF, Stocks, PMS, AIF, Bonds, LAS and Other, from any platform, as Excel or
         PDF, Client Wise or Platform Wise. Each upload is kept as a version; the newest one of each platform and category
@@ -67217,7 +67199,12 @@ function renderSettingsImportMaps(){
   const shipped = impDefaultMap(fmt);
   const targets = impTargets(fmt);
   const edited = Object.keys(map).filter(k=>map[k] !== shipped[k]);
-  return `
+  /* Uploading is part of this screen: every platform and category, their
+     versions, what they hold and the SIPs on them (multi-asset.js). The
+     column mapping of the five named reports is the last section. */
+  const section = ['upload','data','sips','mapping'].indexOf(window._impMapSection) >= 0 ? window._impMapSection : 'upload';
+  if(section !== 'mapping') return maSectionBar(section) + maSectionHtml(section);
+  return maSectionBar(section) + `
     <div class="section-title" style="margin-top:0">Platform Import Mapping</div>
     <div class="small-note" style="margin-top:0">Each column of each platform report, and the BOSS field it lands in.
       Change one here and every future import of that report follows it. Every change is written to
@@ -73743,7 +73730,7 @@ const SETTINGS_CATEGORIES = [
     ['export','Export','manageModuleSettings','tab','Take data out \u2014 one module, several, or everything at once.'],
     ['importback','Import','manageModuleSettings','tab','Put an exported file back \u2014 the same modules Export covers.'],
     ['import','Bulk Import','manageModuleSettings','route','A spreadsheet that is not a BOSS export \u2014 mapped column by column.'],
-    ['importmaps','Platform Import Mapping','manageModuleSettings','tab','Every column of the Finowise, Anand Rathi and NJ reports, and the field it lands in.'],
+    ['importmaps','Platform Import Mapping','manageModuleSettings','tab','Upload AUM and SIP files for every platform and category, see what they hold, and map the columns of the Finowise, Anand Rathi and NJ reports.'],
     ['datarecovery','Data Backup','manageModuleSettings','tab','Copies of the database, and getting one back.'],
     ['storage','Storage','manageModuleSettings','tab','What is being kept, and how much room it takes.'],
     ['recyclebin','Recycle Bin','manageModuleSettings','route','Anything deleted, until it is purged.'],
