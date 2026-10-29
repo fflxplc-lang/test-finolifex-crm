@@ -211,20 +211,31 @@ suite(async t => {
 
   t.section('and it reaches the record');
 
-  await t.step('pressing a line opens the client it came from', async () => {
+  await t.step('pressing a client shows their SIPs and holdings, with Open in CMS and a report', async () => {
     const r = await t.eval(async ()=>{
-      mdDrill('aum', '', '');
-      const row = document.querySelector('.modal .row-clickable');
+      mdDrill('sip', '', '');
+      let row = document.querySelector('.modal .row-clickable');
+      if(!row){ mdDrill('aum', '', ''); row = document.querySelector('.modal .row-clickable'); }
       const name = row ? row.querySelector('td b').textContent : '';
       if(row) row.click();
       await new Promise(res=>setTimeout(res, 250));
-      return {name, open: document.getElementById('overlay').classList.contains('show'),
-              where: currentView, id: window._clientId || ''};
+      const foot = Array.from(document.querySelectorAll('.modal button')).map(b=>b.textContent.trim());
+      const book = !!document.getElementById('mdClientBook');
+      let got = null; const real = downloadXlsx;
+      window.downloadXlsx = (sh, fname) => { got = {names: sh.map(x=>x.name), fname}; };
+      try { Array.from(document.querySelectorAll('.modal button')).find(b=>/Generate report/.test(b.textContent)).click(); }
+      finally { window.downloadXlsx = real; }
+      Array.from(document.querySelectorAll('.modal button')).find(b=>/Open in CMS/.test(b.textContent)).click();
+      await new Promise(res=>setTimeout(res, 250));
+      return {name, book, foot, got, open: document.getElementById('overlay').classList.contains('show'), where: currentView};
     });
     if(!r.name) throw new Error('the drill-down showed no rows to press');
+    if(!r.book) throw new Error('pressing a client did not show their SIPs and holdings');
+    if(!r.foot.some(x=>/Back to list/.test(x))) throw new Error('no way back to the list: ' + r.foot.join(', '));
+    if(!r.got || ['Summary', 'SIPs', 'Holdings'].some(n=>r.got.names.indexOf(n) < 0)) throw new Error('report: ' + JSON.stringify(r.got));
     if(r.open) throw new Error('the paper stayed up over the record it opened');
-    if(r.where !== 'cms') throw new Error('it landed on "' + r.where + '" rather than the client');
-    return 'pressing “' + r.name + '” closed the paper and opened them in CMS';
+    if(r.where !== 'cms') throw new Error('Open in CMS landed on "' + r.where + '"');
+    return '“' + r.name + '”: SIPs and holdings, a report (' + r.got.names.join(', ') + '), then Open in CMS';
   });
 
   await t.step('nothing was alerted', async () => {

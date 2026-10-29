@@ -285,23 +285,31 @@ suite(async t => {
 
   t.section('the screens');
 
-  await t.step('Dashboard, a category, a platform, a client and the SIPs page all draw', async () => {
-    const out = await t.eval(async id => {
-      const txt = () => document.getElementById('content').innerText;
-      const seen = {};
-      maGo({page: 'home'}); seen.home = txt();
-      maGo({page: 'scope', product: 'Stocks'}); seen.cat = txt();
-      maGo({page: 'scope', platform: 'Motilal Oswal'}); seen.plat = txt();
-      maOpenClient('c:' + id); seen.client = txt();
-      maNav('sips'); seen.sips = txt();
-      return seen;
+  await t.step('Platform Import Mapping is the upload alone: no Uploaded data or SIPs tabs', async () => {
+    const r = await t.eval(()=>{ maNav('data'); const c = document.getElementById('content');
+      return {tabs: Array.from(c.querySelectorAll('.tab')).map(x=>x.textContent.trim()), upload: !!document.getElementById('maUploadAll'),
+        imported: !!document.getElementById('maImported')}; });
+    if(r.tabs.some(x=>/Uploaded data|^SIPs$/.test(x))) throw new Error('tabs: ' + r.tabs.join(', '));
+    if(!r.upload || !r.imported) throw new Error(JSON.stringify(r));
+    return 'the upload page, with its Imported data card';
+  });
+
+  await t.step('pressing Mehta under Live SIP shows every SIP, Open in CMS and Generate report', async () => {
+    const r = await t.eval(async id => {
+      navigate('dashboard'); mdDrill('sip', '', '');
+      const foot = Array.from(document.querySelectorAll('.modal button')).map(b=>b.textContent.trim());
+      mdClientBook(id, 'sip');
+      const txt = document.getElementById('modalBody').innerText;
+      const btns = Array.from(document.querySelectorAll('.modal button')).map(b=>b.textContent.trim());
+      closeModal();
+      return {foot, txt, btns};
     }, ids.mehta);
-    if(!/Categories/i.test(out.home) || !/Stocks/.test(out.home) || !/LAS/.test(out.home)) throw new Error('home: ' + out.home.slice(0, 300));
-    if(!/By platform/i.test(out.cat)) throw new Error('category page');
-    if(!/By category/i.test(out.plat)) throw new Error('platform page');
-    if(!/Scheme-wise investment details/i.test(out.client) || !/ZZ Bluechip Fund/.test(out.client) || !/v2|v1/.test(out.client)) throw new Error('client page: ' + out.client.slice(0, 400));
-    if(!/ZZ Bluechip Fund/.test(out.sips)) throw new Error('SIPs page');
-    return 'home · Stocks · Motilal Oswal · ZZ Mehta Rajesh · SIPs';
+    if(!/ZZ Bluechip Fund/.test(r.txt) || !/10,000/.test(r.txt)) throw new Error(r.txt.slice(0, 400));
+    if(!r.btns.some(x=>/Open in CMS/.test(x)) || !r.btns.some(x=>/Generate report/.test(x))) throw new Error(r.btns.join(', '));
+    if(!r.foot.some(x=>/Manage imported data/.test(x))) throw new Error('no way to the imported data from the card: ' + r.foot.join(', '));
+    const kpi = await t.eval(id => { navigate('cms', id); return document.querySelector('.cp-kpis').innerText; }, ids.mehta);
+    if(!/SIP\s*₹?\s*10,000/i.test(kpi)) throw new Error('the profile\'s SIP figure: ' + kpi);
+    return 'ZZ Bluechip Fund 10,000/mo; the profile\'s SIP reads 10,000 too';
   });
 
   await t.step('a SIP opens its details: schedule, current holding, other SIPs', async () => {
@@ -434,5 +442,40 @@ suite(async t => {
     const mob = await t.eval(id=>DB.clients.find(c=>c.id === id).mobile, ids.rao);
     if(mob !== '9876500003') throw new Error('Rao\'s mobile: ' + mob);
     return '"Holding Worth" read as Current value: Rao 25,000 at Philip Capital; Mobile No filled his record';
+  });
+
+  t.section('deleting imported data');
+
+  await t.step('an old platform-import batch is listed and can be deleted', async () => {
+    const r = await t.eval(async id => {
+      const b = {id: uid('IMB'), platform: 'ar', report: 'AUM', format: 'ar_aum', file: 'AR_old.xlsx', at: new Date().toISOString(), by: currentUser};
+      DB.importBatches.push(b); await save('importBatches');
+      DB.platformHoldings.push({id: uid('PFH'), key: 'ar|' + id, clientId: id, platform: 'ar', report: 'AUM', format: 'ar_aum',
+        current: 777000, batchId: b.id, asOf: new Date().toISOString()});
+      await save('platformHoldings');
+      maNav('upload');
+      const listed = document.getElementById('maImported').innerText;
+      const before = clientBookAum(DB.clients.find(c=>c.id === id));
+      window.confirm = () => true;
+      await maRemoveLegacyBatch(b.id);
+      return {listed, before, after: clientBookAum(DB.clients.find(c=>c.id === id)),
+        left: DB.platformHoldings.filter(h=>h.batchId === b.id).length};
+    }, ids.rao);
+    if(!/AR_old\.xlsx/.test(r.listed)) throw new Error('not listed: ' + r.listed.slice(0, 300));
+    if(r.left || r.after !== r.before - 777000) throw new Error(JSON.stringify(r));
+    return 'AR_old.xlsx listed, deleted: Rao ' + r.before + ' → ' + r.after;
+  });
+
+  await t.step('Delete all imported data empties the uploads and the imported book, and keeps the clients', async () => {
+    const r = await t.eval(async ()=>{
+      const n = DB.clients.filter(c=>!c.deletedAt).length;
+      window.prompt = () => 'DELETE';
+      await maResetAll();
+      return {ups: DB.assetUploads.length, h: DB.platformHoldings.length, s: DB.platformSips.length,
+        clients: DB.clients.filter(c=>!c.deletedAt).length, n, aum: mdBookRows().filter(x=>x.source !== 'BOSS ledger').length};
+    });
+    if(r.ups || r.h || r.s || r.aum) throw new Error(JSON.stringify(r));
+    if(r.clients !== r.n) throw new Error('clients went too: ' + r.n + ' → ' + r.clients);
+    return 'no uploads, no imported lines; ' + r.clients + ' clients kept';
   });
 });

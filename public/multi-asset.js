@@ -904,15 +904,23 @@ async function maDownloadOriginal(id){
 }
 async function maResetAll(){
   if(!isAdmin()){ alert('Only an ' + ADMIN_ROLE + ' can reset the multi-asset data.'); return; }
-  const typed = prompt('This deletes every multi-asset upload, holding and SIP for all clients. The platform list is kept. '
-    + 'It cannot be undone.\n\nType RESET to confirm.');
-  if(typed !== 'RESET') return;
+  const typed = prompt('This deletes every uploaded file and every imported holding and SIP for all clients, '
+    + 'including those from the old platform import. Clients and the platform list are kept. '
+    + 'It cannot be undone.\n\nType DELETE to confirm.');
+  if(typed !== 'DELETE' && typed !== 'RESET') return;
   const ups = (DB.assetUploads || []).slice();
+  const nH = (DB.platformHoldings || []).length, nS = (DB.platformSips || []).length;
   DB.assetUploads = [];
   await save('assetUploads');
   for(const u of ups){ delete DB[maRowsKey(u.id)]; await sdel(maRowsKey(u.id)); if(u.hasFile) await sdel(maFileKey(u.id)); }
+  DB.platformHoldings = []; DB.platformSips = [];
+  await save('platformHoldings'); await save('platformSips');
+  const at = new Date().toISOString();
+  (DB.importBatches || []).forEach(b=>{ if(!b.removedAt){ b.removedAt = at; b.removedBy = currentUser; } });
+  await save('importBatches');
   maInvalidate();
-  await logAudit('Import', 'multiasset', 'Multi-asset data reset', [{field:'Uploads deleted', oldValue: String(ups.length), newValue: '0'}]);
+  await logAudit('Import', 'multiasset', 'All imported data deleted', [{field:'Uploads deleted', oldValue: String(ups.length), newValue: '0'},
+    {field:'Imported holding lines', oldValue: String(nH), newValue: '0'}, {field:'Imported SIP lines', oldValue: String(nS), newValue: '0'}]);
   await maSyncCrm();
   render();
 }
@@ -1454,6 +1462,11 @@ function viewAssetUpload(){
       </div>
     </div>
     ${maColumnNamesHtml()}
+    <div class="card" id="maImported">
+      <div class="between"><div class="section-title" style="margin:0">Imported data</div>
+        <span class="small-note" style="margin:0">Remove one upload below, an old import here, or everything at once.</span></div>
+      ${maLegacyImportsHtml()}
+    </div>
     <div class="card">
       <div class="between"><div class="section-title" style="margin:0">Update history</div>
         <span class="small-note" style="margin:0">Every upload is kept. The screens use the latest version of each platform + category.</span></div>
@@ -1461,9 +1474,49 @@ function viewAssetUpload(){
       ${maHistoryTable(hist.slice(0, 300))}
     </div>
     ${isAdmin() ? `<div class="card" style="border-left:3px solid var(--danger)">
-      <div class="between"><div><div class="section-title" style="margin:0">Reset all data</div>
-        <div class="small-note" style="margin:4px 0 0">Deletes every multi-asset upload, holding and SIP for all clients. The platform list is kept. This can't be undone.</div></div>
-        <button class="btn danger" onclick="maResetAll()">Reset all data</button></div></div>` : ''}`;
+      <div class="between"><div><div class="section-title" style="margin:0">Delete all imported data</div>
+        <div class="small-note" style="margin:4px 0 0">Deletes every uploaded file and every imported holding and SIP, including those from the old platform import,
+          so the Main Dashboard and the client pages go back to the BOSS ledger. Clients, their details and the platform list are kept. This can't be undone.</div></div>
+        <button class="btn danger" onclick="maResetAll()">Delete all imported data</button></div></div>` : ''}`;
+}
+/* The old platform import (before uploads were the one door) left
+   holdings and SIPs of its own, one batch per file. Each batch can be
+   taken out here: the lines it wrote go, and BOSS reads the ledger, or a
+   newer upload, for those clients again. */
+function maLegacyLines(batchId){
+  const mine = x => x && x.source !== 'multiasset' && x.batchId === batchId;
+  return {h: (DB.platformHoldings || []).filter(mine), s: (DB.platformSips || []).filter(mine)};
+}
+function maLegacyImportsHtml(){
+  const batches = (DB.importBatches || []).filter(b=>!b.removedAt).map(b=>Object.assign({b}, maLegacyLines(b.id)))
+    .filter(x=>x.h.length || x.s.length).sort((a, b)=>String(b.b.at).localeCompare(String(a.b.at)));
+  if(!batches.length) return '<div class="small-note">No data from the old platform import is left. Uploaded files are listed under Update history, each with Remove.</div>';
+  const may = maCanUpload();
+  return `<div class="small-note" style="margin-top:4px">From the old platform import (Finowise, Anand Rathi, NJ reports):</div>
+    <div class="table-wrap"><table><thead><tr><th>Imported</th><th>Report</th><th>File</th><th class="se-r">Holdings</th><th class="se-r">SIPs</th><th class="se-r">Value</th>${may ? '<th></th>' : ''}</tr></thead>
+    <tbody>${batches.map(x=>`<tr><td>${esc(fmtDate(String(x.b.at).slice(0, 10)))}<div class="small-note" style="margin:2px 0 0">${esc(teamName(x.b.by))}</div></td>
+      <td>${esc(typeof impPlatformLabel === 'function' ? impPlatformLabel(x.b.platform) : x.b.platform)} · ${esc(x.b.report || '')}</td><td class="small-note">${esc(x.b.file || '')}</td>
+      <td class="se-r">${x.h.length}</td><td class="se-r">${x.s.length}</td>
+      <td class="se-r">${money(x.h.filter(h=>!h.deletedAt).reduce((n, h)=>n + (Number(h.current) || 0), 0) + x.s.filter(v=>!v.deletedAt).reduce((n, v)=>n + (Number(v.monthlyAmount || v.amount) || 0), 0))}</td>
+      ${may ? `<td><button class="btn sm ghost" onclick="maRemoveLegacyBatch('${esc(x.b.id)}')">Delete</button></td>` : ''}</tr>`).join('')}</tbody></table></div>`;
+}
+async function maRemoveLegacyBatch(id){
+  if(!maCanUpload()){ alert('You do not have permission to delete imported data.'); return; }
+  const b = (DB.importBatches || []).find(x=>x.id === id);
+  if(!b) return;
+  const l = maLegacyLines(id);
+  if(!confirm('Delete what "' + (b.file || id) + '" imported: ' + l.h.length + ' holding line' + (l.h.length === 1 ? '' : 's') + ' and '
+    + l.s.length + ' SIP line' + (l.s.length === 1 ? '' : 's') + '?\n\nThe clients stay. This cannot be undone.')) return;
+  const gone = new Set(l.h.concat(l.s));
+  DB.platformHoldings = (DB.platformHoldings || []).filter(x=>!gone.has(x));
+  DB.platformSips = (DB.platformSips || []).filter(x=>!gone.has(x));
+  if(l.h.length) await save('platformHoldings');
+  if(l.s.length) await save('platformSips');
+  b.removedAt = new Date().toISOString(); b.removedBy = currentUser;
+  await save('importBatches');
+  await logAudit('Import', id, 'Imported data deleted', [{field: 'Batch', oldValue: (b.file || id) + ' · ' + l.h.length + ' holdings, ' + l.s.length + ' SIPs', newValue: ''}]);
+  await maSyncCrm();
+  render();
 }
 function maClientFromName(name){
   const n = maKey(name);
@@ -1859,7 +1912,7 @@ function maShowResults(){
     return `<tr><td>${esc(r.job.platform.name)}</td><td>${esc(r.job.platform.product)}</td>
       <td>${MA_KIND_LABEL[r.job.kind]}${r.job.auto ? ' (read from the AUM file)' : ''}: ${esc(r.job.file.name)}</td><td>${res}</td></tr>`;
   }).join('');
-  const dash = R.uploadType === 'client' && R.clientId ? `maOpenClient('c:${esc(R.clientId)}')` : "maGo({page:'home'})";
+  const dash = "navigate('dashboard')";
   openModal(title, `<div class="small-note" style="margin-top:0">${esc(sub)}</div>
     <div class="table-wrap" id="maResultTable"><table><thead><tr><th>Platform</th><th>Category</th><th>File</th><th>Result</th></tr></thead>
     <tbody>${rowsHtml || '<tr><td colspan="4" class="empty">No file was read.</td></tr>'}</tbody></table></div>`,
@@ -1952,7 +2005,7 @@ function maClientBlockHtml(clientId){
   const loans = h.filter(r=>r.product === MA_LOANS);
   return `
     <div class="between" style="margin-top:14px"><div class="section-title" style="margin:0">Holdings by scheme, from the uploaded files</div>
-      <button class="btn sm ghost" onclick="maOpenClient('${esc(ck)}')">Open in Uploaded data</button></div>
+      <button class="btn sm ghost" onclick="mdClientReport('${esc(clientId)}')">Generate report</button></div>
     <div class="small-note" style="margin-top:4px">Read from the AUM and SIP files uploaded in Platform Import Mapping — the newest version of each platform and category.
       ${t.loans ? 'Loans against securities are shown on their own and are not part of the AUM.' : ''}</div>
     ${repKpis([{label: 'Current value', html: money(t.current_value)}, {label: 'Invested', html: money(t.invested)},
@@ -1966,9 +2019,12 @@ function maClientBlockHtml(clientId){
 }
 
 /* ---- the four sections of Setup › Platform Import Mapping ----------- */
-const MA_SECTIONS = [['upload', 'Upload files'], ['data', 'Uploaded data'], ['sips', 'SIPs']];
+const MA_SECTIONS = [['upload', 'Upload files']];
 function maSectionBar(cur){
   maStyle();
+  /* One section: what the files hold is read on the Main Dashboard and the
+     client's own pages, not on a second screen here. */
+  if(MA_SECTIONS.length < 2) return '';
   return `<div class="tabs" style="margin:0 0 14px">${MA_SECTIONS.map(([id, label])=>`<div class="tab ${cur === id ? 'active' : ''}"
     onclick="window._impMapSection='${id}'; ${id === 'data' ? "window._maRoute={page:'home'}; " : ''}render()">${esc(label)}</div>`).join('')}</div>`;
 }

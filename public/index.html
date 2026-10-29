@@ -37160,7 +37160,8 @@ const MD_DRILLS = {
     return {figure: money(by.reduce((s,e)=>s + e.value, 0)),
       note: by.length + ' client' + (by.length === 1 ? ' holds' : 's hold') + ' it.',
       cols: [{l:'Client'}, {l:'Branch'}, {l:'RM'}, {l:'Where it is reported from'}, {l:'Live AUM', r:1}],
-      rows: by.map(e=>({go: "navigate('cms','" + e.id + "')", cells:[
+      book: true,
+      rows: by.map(e=>({go: "mdClientBook('" + e.id + "','aum')", cells:[
         '<b>' + esc(clientName(e.id)) + '</b>', esc(e.branch || '—'), esc(e.rm || '—'),
         esc(e.where.join(', ') || '—'), money(e.value)]}))};
   },
@@ -37169,7 +37170,8 @@ const MD_DRILLS = {
     return {figure: money(by.reduce((s,e)=>s + e.value, 0)),
       note: by.length + ' client' + (by.length === 1 ? '' : 's') + ' with an instalment running.',
       cols: [{l:'Client'}, {l:'Branch'}, {l:'RM'}, {l:'Where it is reported from'}, {l:'Monthly SIP', r:1}],
-      rows: by.map(e=>({go: "navigate('cms','" + e.id + "')", cells:[
+      book: true,
+      rows: by.map(e=>({go: "mdClientBook('" + e.id + "','sip')", cells:[
         '<b>' + esc(clientName(e.id)) + '</b>', esc(e.branch || '—'), esc(e.rm || '—'),
         esc(e.where.join(', ') || '—'), money(e.value)]}))};
   },
@@ -37269,6 +37271,7 @@ function mdDrill(key, cut, label){
    made of, and the records under it. */
 function mdDrillOpen(title, o){
   const rows = o.rows || [];
+  window._mdLastDrill = {title, o};
   openModal(esc(title), `
     <div class="drill-head">
       <div class="drill-fig">${esc(String(o.figure))}</div>
@@ -37280,9 +37283,92 @@ function mdDrillOpen(title, o){
         ${r.cells.map((cell, i)=>`<td${o.cols[i] && o.cols[i].r?' class="se-r"':''}>${cell}</td>`).join('')}
       </tr>`).join('')}</tbody></table></div>
       ${rows.length > 500 ? `<div class="small-note">Showing the largest 500 of ${rows.length}.</div>` : ''}
-      <div class="small-note">Press a line to open the record it came from.</div>`
+      <div class="small-note">${o.book ? 'Press a client to see every SIP and holding behind the figure, open them in CMS, or download a report.'
+        : 'Press a line to open the record it came from.'}</div>`
     : `<div class="empty" style="padding:22px">Nothing sits behind this figure yet.</div>`}
-  `, `<button class="btn" onclick="closeModal()">Close</button>`, {wide:true});
+  `, `${o.book && typeof maCanUpload === 'function' && maCanUpload() && bookHasImports()
+        ? `<button class="btn" onclick="closeModal(); maNav('upload'); setTimeout(()=>{ const x = document.getElementById('maImported'); if(x) x.scrollIntoView(); }, 50)">Manage imported data</button>` : ''}
+     <button class="btn" onclick="closeModal()">Close</button>`, {wide:true});
+}
+/* ONE CLIENT'S BOOK, FROM A DASHBOARD FIGURE OR THE PROFILE.
+
+   Pressing a client under Live SIP or Live AUM shows what makes up their
+   figure — every SIP and every holding, whichever platform reported it,
+   or the ledger where none has — with the way into their CMS record and
+   a report to download. */
+function mdClientBookData(c){
+  const lines = DB.platformHoldings.filter(h=>!h.deletedAt && h.clientId === c.id);
+  const sipLines = DB.platformSips.filter(x=>!x.deletedAt && x.clientId === c.id);
+  const txns = (typeof mdTxns === 'function' ? mdTxns() : []).filter(t=>t.clientId === c.id);
+  const sips = sipLines.length ? sipLines.map(x=>({scheme: x.schemeName || '—', platform: impPlatformLabel(x.platform), folio: x.folio || x.sipNo || '',
+      frequency: x.frequency || '', day: x.sipDate || '', start: x.startDate || '', end: x.endDate || '', amount: numVal(x.amount),
+      monthly: numVal(x.monthlyAmount || x.amount), from: impPlatformLabel(x.platform) + ' (imported)'}))
+    : txns.filter(t=>/sip/i.test(t.transactionType || '')).map(t=>({scheme: t.schemeName || t.productCategory || '—', platform: t.platform || '—',
+      folio: t.folio || '', frequency: 'Monthly', day: '', start: t.transactionDate || '', end: '', amount: numVal(t.amount),
+      monthly: numVal(t.amount), from: 'BOSS ledger'}));
+  const st = typeof maState === 'function' && typeof maUploads === 'function' && maUploads().length ? maState() : null;
+  const schemes = st ? st.holdings.filter(r=>r._c.clientId === c.id && r.product !== 'LAS').map(r=>({scheme: r.security_name || '—',
+      platform: r.platform, product: r.product, units: r.quantity, invested: r.invested, current: r.current_value, xirr: r.xirr,
+      asOf: r.as_of || (r._u && r._u.snapshotDate) || ''})) : [];
+  const holdings = lines.map(h=>({platform: impPlatformLabel(h.platform), product: h.product || h.report || '', invested: numVal(h.invested),
+    current: numVal(h.current), xirr: h.xirr, asOf: h.reportAsOn || String(h.asOf || '').slice(0, 10)}));
+  return {aum: clientBookAum(c), sip: clientBookSip(c), sips, schemes, holdings, ledger: !lines.length};
+}
+function mdClientBook(id, first){
+  const c = DB.clients.find(x=>x.id === id);
+  if(!c) return;
+  if(!recordOpenToMe('CMS', c)){ alert('You do not have access to this client.'); return; }
+  const d = mdClientBookData(c);
+  const pct = v => (v === '' || v === null || v === undefined || !isFinite(Number(v))) ? '—' : (Math.round(Number(v) * 100) / 100) + '%';
+  const sipTable = d.sips.length ? `<div class="table-wrap" style="max-height:40vh;overflow:auto"><table><thead><tr><th>Scheme</th><th>Platform</th><th>Folio</th>
+      <th>Frequency</th><th>Day</th><th>Start</th><th>End</th><th class="se-r">Monthly SIP</th></tr></thead><tbody>
+      ${d.sips.sort((a, b)=>b.monthly - a.monthly).map(x=>`<tr><td><b>${esc(x.scheme)}</b></td><td>${esc(x.platform)}</td><td>${esc(x.folio || '—')}</td>
+        <td>${esc(x.frequency || '—')}</td><td>${esc(String(x.day || '—'))}</td><td>${x.start ? fmtDate(x.start) : '—'}</td><td>${x.end ? fmtDate(x.end) : '—'}</td>
+        <td class="se-r">${money(x.monthly)}</td></tr>`).join('')}</tbody></table></div>`
+    : `<div class="empty" style="padding:14px">No SIP is running for this client.</div>`;
+  const holdTable = d.schemes.length ? `<div class="table-wrap" style="max-height:40vh;overflow:auto"><table><thead><tr><th>Scheme / security</th><th>Platform</th><th>Category</th>
+      <th class="se-r">Units</th><th class="se-r">Invested</th><th class="se-r">Current value</th><th class="se-r">XIRR</th></tr></thead><tbody>
+      ${d.schemes.sort((a, b)=>(b.current || 0) - (a.current || 0)).map(x=>`<tr><td><b>${esc(x.scheme)}</b></td><td>${esc(x.platform)}</td><td>${esc(x.product)}</td>
+        <td class="se-r">${x.units === null || x.units === undefined ? '—' : esc(String(x.units))}</td><td class="se-r">${x.invested === null || x.invested === undefined ? '—' : money(x.invested)}</td>
+        <td class="se-r">${money(x.current || 0)}</td><td class="se-r">${pct(x.xirr)}</td></tr>`).join('')}</tbody></table></div>`
+    : d.holdings.length ? `<div class="table-wrap"><table><thead><tr><th>Platform</th><th>Category</th><th>As on</th><th class="se-r">Invested</th>
+      <th class="se-r">Current value</th><th class="se-r">XIRR</th></tr></thead><tbody>
+      ${d.holdings.map(x=>`<tr><td><b>${esc(x.platform)}</b></td><td>${esc(x.product || '—')}</td><td>${x.asOf ? fmtDate(x.asOf) : '—'}</td>
+        <td class="se-r">${x.invested ? money(x.invested) : '—'}</td><td class="se-r">${money(x.current)}</td><td class="se-r">${pct(x.xirr)}</td></tr>`).join('')}</tbody></table></div>`
+    : `<div class="empty" style="padding:14px">${d.aum ? 'This figure is the BOSS ledger: the client\'s transactions, on their CMS record.' : 'Nothing is held yet.'}</div>`;
+  const sipSec = `<div class="section-title">SIPs <span class="small-note">${d.sips.length} · ${money(d.sip)} a month</span></div>${sipTable}`;
+  const holdSec = `<div class="section-title">Holdings <span class="small-note">${money(d.aum)}</span></div>${holdTable}`;
+  const last = window._mdLastDrill;
+  openModal(esc(clientDisplayName(c)), `
+    <div class="small-note" style="margin-top:0">${esc(clientCode(c))} · ${esc(c.branch || '—')} · RM ${esc(teamName(c.rmName) || '—')}</div>
+    <div class="drill-head" style="display:flex;gap:28px;flex-wrap:wrap">
+      <div><div class="small-note" style="margin:0">Live AUM</div><div class="drill-fig">${money(d.aum)}</div></div>
+      <div><div class="small-note" style="margin:0">Live SIP</div><div class="drill-fig">${money(d.sip)}</div></div>
+    </div>
+    <div id="mdClientBook">${first === 'aum' ? holdSec + sipSec : sipSec + holdSec}</div>`,
+    `${last ? `<button class="btn" onclick="mdDrillOpen(window._mdLastDrill.title, window._mdLastDrill.o)">← Back to list</button>` : ''}
+     <button class="btn" onclick="mdClientReport('${esc(c.id)}')">Generate report</button>
+     <button class="btn primary" onclick="closeModal(); navigate('cms','${esc(c.id)}')">Open in CMS</button>`, {wide:true});
+}
+/* The same, as an Excel file: a summary, the SIPs and the holdings. */
+function mdClientReport(id){
+  const c = DB.clients.find(x=>x.id === id);
+  if(!c) return;
+  const d = mdClientBookData(c);
+  const name = clientDisplayName(c);
+  const sheets = [
+    {name: 'Summary', rows: [['Client', name], ['Client code', clientCode(c)], ['PAN', c.pan || ''], ['Branch', c.branch || ''],
+      ['RM', teamName(c.rmName) || ''], ['Live AUM', d.aum], ['Live SIP (monthly)', d.sip], ['SIPs', d.sips.length],
+      ['Source', d.ledger ? 'BOSS ledger' : 'Platform reports'], ['Generated', fmtDate(new Date().toISOString().slice(0, 10))]]},
+    {name: 'SIPs', rows: [['Scheme', 'Platform', 'Folio', 'Frequency', 'SIP day', 'Start', 'End', 'Instalment', 'Monthly SIP', 'From']]
+      .concat(d.sips.map(x=>[x.scheme, x.platform, x.folio, x.frequency, x.day, x.start, x.end, x.amount, x.monthly, x.from]))},
+    {name: 'Holdings', rows: d.schemes.length
+      ? [['Scheme / security', 'Platform', 'Category', 'Units', 'Invested', 'Current value', 'XIRR %', 'As on']]
+        .concat(d.schemes.map(x=>[x.scheme, x.platform, x.product, x.units, x.invested, x.current, x.xirr, x.asOf]))
+      : [['Platform', 'Category', 'As on', 'Invested', 'Current value', 'XIRR %']]
+        .concat(d.holdings.map(x=>[x.platform, x.product, x.asOf, x.invested, x.current, x.xirr]))},
+  ];
+  downloadXlsx(sheets, (name.replace(/[^A-Za-z0-9 ]+/g, '').trim() || 'Client') + ' - SIP and holdings.xlsx');
 }
 function mdCutState(key, def){
   window._mdCut = window._mdCut || {};
@@ -41945,8 +42031,11 @@ function viewClientDetail(id){
   // nominee and the bank mandate are still a click away on the Overview tab,
   // where the rest of the compliance picture is.
   const kpis = [
-    ['AUM', inr(clientBookAum(c))],
-    ['SIP', inr(clientActiveSip(c))],
+    /* The book figures, the same ones the Main Dashboard shows: a platform's
+       report where there is one, the ledger where not. Pressed, they open
+       every SIP and holding behind them. */
+    ['AUM', `<a href="javascript:void(0)" class="cell-link" onclick="window._mdLastDrill=null; mdClientBook('${id}','aum')">${inr(clientBookAum(c))}</a>`],
+    ['SIP', `<a href="javascript:void(0)" class="cell-link" onclick="window._mdLastDrill=null; mdClientBook('${id}','sip')">${inr(clientBookSip(c))}</a>`],
     ['Category', esc(c.clientCategory||'—')],
     ['Risk Profile', risk? esc(risk.category||'—') : 'Not profiled'],
     ['KYC Status', esc(c.kycStatus||'—')],
@@ -67179,8 +67268,7 @@ function renderSettingsImportMaps(){
      Finowise, Anand Rathi and NJ reports are read column by column inside
      the upload (maKnownLayout), so there is no separate mapping screen;
      a column a platform names differently is taught under Column names. */
-  const section = ['upload','data','sips'].indexOf(window._impMapSection) >= 0 ? window._impMapSection : 'upload';
-  return maSectionBar(section) + maSectionHtml(section);
+  return maSectionBar('upload') + maSectionHtml('upload');
 }
 
 /* ---- what the imported figures look like once they are in ---------- */
