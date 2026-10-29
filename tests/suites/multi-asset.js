@@ -294,7 +294,7 @@ suite(async t => {
     return 'the upload page, with its Imported data card';
   });
 
-  await t.step('pressing Mehta under Live SIP shows every SIP, Open in CMS and Generate report', async () => {
+  await t.step('pressing Mehta under Live SIP shows every SIP, Open in CMS and Review report', async () => {
     const r = await t.eval(async id => {
       navigate('dashboard'); mdDrill('sip', '', '');
       const foot = Array.from(document.querySelectorAll('.modal button')).map(b=>b.textContent.trim());
@@ -305,11 +305,63 @@ suite(async t => {
       return {foot, txt, btns};
     }, ids.mehta);
     if(!/ZZ Bluechip Fund/.test(r.txt) || !/10,000/.test(r.txt)) throw new Error(r.txt.slice(0, 400));
-    if(!r.btns.some(x=>/Open in CMS/.test(x)) || !r.btns.some(x=>/Generate report/.test(x))) throw new Error(r.btns.join(', '));
+    if(!r.btns.some(x=>/Open in CMS/.test(x)) || !r.btns.some(x=>/Review report/.test(x))) throw new Error(r.btns.join(', '));
     if(!r.foot.some(x=>/Manage imported data/.test(x))) throw new Error('no way to the imported data from the card: ' + r.foot.join(', '));
     const kpi = await t.eval(id => { navigate('cms', id); return document.querySelector('.cp-kpis').innerText; }, ids.mehta);
     if(!/SIP\s*₹?\s*10,000/i.test(kpi)) throw new Error('the profile\'s SIP figure: ' + kpi);
     return 'ZZ Bluechip Fund 10,000/mo; the profile\'s SIP reads 10,000 too';
+  });
+
+  await t.step('Review report: the review workbook opens for Mehta, as the asset management system draws it', async () => {
+    await t.eval(id => { ReviewReport.open(id); }, ids.mehta);
+    let r = null;
+    for(let i = 0; i < 60; i++){
+      await t.wait(250);
+      r = await t.eval(()=>({tabs: Array.from(document.querySelectorAll('#xlTabs .xl-tab')).map(x=>x.textContent.trim()),
+        title: (document.querySelector('.xl-title b') || {}).textContent || '', err: (document.querySelector('#rrOverlay .empty-state, #rrOverlay .card') || {}).textContent || ''}));
+      if(r.tabs.length || r.err) break;
+    }
+    if(r.err) throw new Error(r.err.slice(0, 300));
+    if(!r.tabs.length || !/ZZ Mehta Rajesh/.test(r.title)) throw new Error(JSON.stringify(r));
+    if(!r.tabs.some(x=>/Detailed Portfolio/i.test(x)) || !r.tabs.some(x=>/Summary/i.test(x))) throw new Error('tabs: ' + r.tabs.join(', '));
+    /* The detailed sheet carries the uploaded schemes. */
+    const det = await t.eval(async ()=>{
+      const b = Array.from(document.querySelectorAll('#xlTabs .xl-tab')).find(x=>/Detailed Portfolio/i.test(x.textContent)); b.click();
+      await new Promise(res=>setTimeout(res, 300));
+      document.querySelector('[data-fold="open"]').click();
+      await new Promise(res=>setTimeout(res, 300));
+      return document.getElementById('xlHost').innerText; });
+    if(!/ZZ Bluechip Fund/.test(det)) throw new Error('Detailed Portfolio: ' + det.slice(0, 400));
+    return r.tabs.length + ' sheets (' + r.tabs.slice(0, 4).join(', ') + '…), the schemes on Detailed Portfolio';
+  });
+
+  await t.step('the reviewer\'s change is kept, and each export is kept under Previous reviews', async () => {
+    const r = await t.eval(async id => {
+      const d = document.getElementById('xlDate'); d.value = '2026-04-15'; d.dispatchEvent(new Event('change'));
+      await new Promise(res=>setTimeout(res, 1500));
+      const saved = (DB.reviewEdits.find(x=>x.clientId === id) || {}).edits || {};
+      let got = null; const realCreate = URL.createObjectURL;
+      const realClick = HTMLAnchorElement.prototype.click;
+      HTMLAnchorElement.prototype.click = function(){ got = this.download; };
+      try {
+        document.getElementById('xlExport').click();
+        for(let i = 0; i < 60 && !DB.reviewReports.some(x=>x.clientId === id); i++) await new Promise(res=>setTimeout(res, 250));
+      } finally { HTMLAnchorElement.prototype.click = realClick; }
+      const rep = DB.reviewReports.find(x=>x.clientId === id);
+      const file = rep ? await sget('reviewFile.' + rep.id, null) : null;
+      ReviewReport.close();
+      mdClientBook(id, 'sip');
+      const modal = document.getElementById('modalBody').innerText;
+      const btns = Array.from(document.querySelectorAll('.modal button')).map(b=>b.textContent.trim());
+      closeModal();
+      return {date: saved.reviewDate, got, rep: rep && {date: rep.reviewDate, file: rep.file}, size: file && file.b64 ? file.b64.length : 0, modal, btns};
+    }, ids.mehta);
+    if(r.date !== '2026-04-15') throw new Error('the review date was not kept: ' + JSON.stringify(r.date));
+    if(!r.got || !/Review Sheet of ZZ Mehta Rajesh as on 15-04-2026\.xlsx/.test(r.got)) throw new Error('download: ' + r.got);
+    if(!r.rep || r.rep.date !== '2026-04-15' || r.size < 1000) throw new Error('kept: ' + JSON.stringify(r.rep) + ' ' + r.size);
+    if(!/Previous review reports/i.test(r.modal) || !/15 Apr 2026/.test(r.modal)) throw new Error('modal: ' + r.modal.slice(-700));
+    if(!r.btns.some(x=>x === 'Review report') || r.btns.some(x=>/Generate report/.test(x))) throw new Error('buttons: ' + r.btns.join(', '));
+    return r.got + ' downloaded and kept (' + Math.round(r.size / 1024) + ' KB); listed on the client view';
   });
 
   await t.step('a SIP opens its details: schedule, current holding, other SIPs', async () => {

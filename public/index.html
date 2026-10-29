@@ -15,6 +15,7 @@
      their dashboards and the SIPs page. Its own file because it is a
      module of its own; it only defines functions, and BOSS calls them. -->
 <script src="/multi-asset.js"></script>
+<script src="/review/review-report.js"></script>
 <title>BOSS</title>
 <!-- THE TAB SHOULD SAY WHOSE SYSTEM THIS IS.
      The browser drew its own globe because nothing here named an icon.
@@ -33281,6 +33282,9 @@ let DB = { settings:{}, settingsAudit:[], workActivities:[], djtEntries:[], camp
            platformHoldings:[], platformSips:[], importBatches:[], exportHistory:[], aumMonthly:[],
            /* Multi Assets: one line per upload. Each upload's rows are a key of their own, assetRows.<id>. */
            assetUploads:[],
+           /* Review Report: the reviewer's changes per client, and every review exported
+              (the file itself is a key of its own, reviewFile.<id>). */
+           reviewEdits:[], reviewReports:[],
            /* What each import did, record by record, so it can be undone. */
            importUndo:[],
            /* HR's own stores. Nothing else in BOSS reads or writes them,
@@ -33393,6 +33397,8 @@ async function loadAll(){
   DB.platformSips = await sget('platformSips', []);
   DB.assetUploads = await sget('assetUploads', []);
   await maLoadRows();
+  DB.reviewEdits = await sget('reviewEdits', []);
+  DB.reviewReports = await sget('reviewReports', []);
   DB.importBatches = await sget('importBatches', []);
   DB.exportHistory = await sget('exportHistory', []);
   DB.hrAttendance = await sget('hrAttendance', []);
@@ -34809,7 +34815,7 @@ const LIVE_KEY_TO_DB = {
   queries:'queries', queryReplies:'queryReplies', supportQueries:'supportQueries',
   importHistory:'importHistory', importUndo:'importUndo', backupHistory:'backupHistory', errorLog:'errorLog',
   platformHoldings:'platformHoldings', platformSips:'platformSips', importBatches:'importBatches',
-  aumMonthly:'aumMonthly', assetUploads:'assetUploads',
+  aumMonthly:'aumMonthly', assetUploads:'assetUploads', reviewEdits:'reviewEdits', reviewReports:'reviewReports',
   exportHistory:'exportHistory',
   hrAttendance:'hrAttendance', hrLeave:'hrLeave', hrSourceMaps:'hrSourceMaps', hrRegularizations:'hrRegularizations',
   hrIncentives:'hrIncentives', hrAppraisals:'hrAppraisals', hrConfig:'hrConfig',
@@ -37283,7 +37289,7 @@ function mdDrillOpen(title, o){
         ${r.cells.map((cell, i)=>`<td${o.cols[i] && o.cols[i].r?' class="se-r"':''}>${cell}</td>`).join('')}
       </tr>`).join('')}</tbody></table></div>
       ${rows.length > 500 ? `<div class="small-note">Showing the largest 500 of ${rows.length}.</div>` : ''}
-      <div class="small-note">${o.book ? 'Press a client to see every SIP and holding behind the figure, open them in CMS, or download a report.'
+      <div class="small-note">${o.book ? 'Press a client to see every SIP and holding behind the figure, open them in CMS, or open their review report.'
         : 'Press a line to open the record it came from.'}</div>`
     : `<div class="empty" style="padding:22px">Nothing sits behind this figure yet.</div>`}
   `, `${o.book && typeof maCanUpload === 'function' && maCanUpload() && bookHasImports()
@@ -37345,30 +37351,11 @@ function mdClientBook(id, first){
       <div><div class="small-note" style="margin:0">Live AUM</div><div class="drill-fig">${money(d.aum)}</div></div>
       <div><div class="small-note" style="margin:0">Live SIP</div><div class="drill-fig">${money(d.sip)}</div></div>
     </div>
-    <div id="mdClientBook">${first === 'aum' ? holdSec + sipSec : sipSec + holdSec}</div>`,
+    <div id="mdClientBook">${first === 'aum' ? holdSec + sipSec : sipSec + holdSec}</div>
+    ${ReviewReport.previousHtml(c.id)}`,
     `${last ? `<button class="btn" onclick="mdDrillOpen(window._mdLastDrill.title, window._mdLastDrill.o)">← Back to list</button>` : ''}
-     <button class="btn" onclick="mdClientReport('${esc(c.id)}')">Generate report</button>
+     <button class="btn" onclick="ReviewReport.open('${esc(c.id)}')">Review report</button>
      <button class="btn primary" onclick="closeModal(); navigate('cms','${esc(c.id)}')">Open in CMS</button>`, {wide:true});
-}
-/* The same, as an Excel file: a summary, the SIPs and the holdings. */
-function mdClientReport(id){
-  const c = DB.clients.find(x=>x.id === id);
-  if(!c) return;
-  const d = mdClientBookData(c);
-  const name = clientDisplayName(c);
-  const sheets = [
-    {name: 'Summary', rows: [['Client', name], ['Client code', clientCode(c)], ['PAN', c.pan || ''], ['Branch', c.branch || ''],
-      ['RM', teamName(c.rmName) || ''], ['Live AUM', d.aum], ['Live SIP (monthly)', d.sip], ['SIPs', d.sips.length],
-      ['Source', d.ledger ? 'BOSS ledger' : 'Platform reports'], ['Generated', fmtDate(new Date().toISOString().slice(0, 10))]]},
-    {name: 'SIPs', rows: [['Scheme', 'Platform', 'Folio', 'Frequency', 'SIP day', 'Start', 'End', 'Instalment', 'Monthly SIP', 'From']]
-      .concat(d.sips.map(x=>[x.scheme, x.platform, x.folio, x.frequency, x.day, x.start, x.end, x.amount, x.monthly, x.from]))},
-    {name: 'Holdings', rows: d.schemes.length
-      ? [['Scheme / security', 'Platform', 'Category', 'Units', 'Invested', 'Current value', 'XIRR %', 'As on']]
-        .concat(d.schemes.map(x=>[x.scheme, x.platform, x.product, x.units, x.invested, x.current, x.xirr, x.asOf]))
-      : [['Platform', 'Category', 'As on', 'Invested', 'Current value', 'XIRR %']]
-        .concat(d.holdings.map(x=>[x.platform, x.product, x.asOf, x.invested, x.current, x.xirr]))},
-  ];
-  downloadXlsx(sheets, (name.replace(/[^A-Za-z0-9 ]+/g, '').trim() || 'Client') + ' - SIP and holdings.xlsx');
 }
 function mdCutState(key, def){
   window._mdCut = window._mdCut || {};
@@ -53816,7 +53803,7 @@ const RESET_RECORD_STORES = [
   'docLinks','docSubmissions','supportQueries','campaigns','campaignRecipients',
   'projects','projectTasks','projectClients','workActivities','djtEntries','complianceItems',
   'importHistory','importUndo','importBatches','exportHistory','platformHoldings','platformSips','aumMonthly',
-  'assetUploads',
+  'assetUploads','reviewEdits','reviewReports',
   'auditLog','settingsAudit','backupHistory','automationExecutionLog','errorLog',
   'apiSyncRuns','apiReqLog','apiInbox',
 ];
@@ -53840,6 +53827,7 @@ const RESET_LABELS = {
   platformHoldings:'Platform AUM snapshots', platformSips:'Platform SIP registrations',
   aumMonthly:'Monthly AUM and SIP totals',
   assetUploads:'Multi-asset uploads (with their holdings and SIPs)',
+  reviewEdits:'Review report changes', reviewReports:'Review reports exported',
   auditLog:'Audit trail', settingsAudit:'Settings change history',
   backupHistory:'Backup history', automationExecutionLog:'Automation history', errorLog:'Error centre',
   amcs:'AMCs', schemes:'Schemes', commissionRates:'Commission rates', partners:'Partners',
@@ -54163,6 +54151,9 @@ async function confirmSystemReset(){
     if(stores.indexOf('assetUploads') >= 0){
       for(const u of (DB.assetUploads || [])){ await sdel(maRowsKey(u.id)); if(u.hasFile) await sdel(maFileKey(u.id)); }
       Object.keys(DB).filter(maIsRowsKey).forEach(k=>{ delete DB[k]; });
+    }
+    if(stores.indexOf('reviewReports') >= 0){
+      for(const x of (DB.reviewReports || [])) await sdel('reviewFile.' + x.id);
     }
     // Arrays are emptied; the two object stores are dropped so the defaults are
     // rebuilt from scratch on the next load rather than merged into leftovers.

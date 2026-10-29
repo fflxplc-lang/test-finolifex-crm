@@ -211,7 +211,7 @@ suite(async t => {
 
   t.section('and it reaches the record');
 
-  await t.step('pressing a client shows their SIPs and holdings, with Open in CMS and a report', async () => {
+  await t.step('pressing a client shows their SIPs and holdings, with Open in CMS and Review report', async () => {
     const r = await t.eval(async ()=>{
       mdDrill('sip', '', '');
       let row = document.querySelector('.modal .row-clickable');
@@ -221,10 +221,7 @@ suite(async t => {
       await new Promise(res=>setTimeout(res, 250));
       const foot = Array.from(document.querySelectorAll('.modal button')).map(b=>b.textContent.trim());
       const book = !!document.getElementById('mdClientBook');
-      let got = null; const real = downloadXlsx;
-      window.downloadXlsx = (sh, fname) => { got = {names: sh.map(x=>x.name), fname}; };
-      try { Array.from(document.querySelectorAll('.modal button')).find(b=>/Generate report/.test(b.textContent)).click(); }
-      finally { window.downloadXlsx = real; }
+      const got = foot.some(x=>x === 'Review report') && !foot.some(x=>/Generate report/.test(x));
       Array.from(document.querySelectorAll('.modal button')).find(b=>/Open in CMS/.test(b.textContent)).click();
       await new Promise(res=>setTimeout(res, 250));
       return {name, book, foot, got, open: document.getElementById('overlay').classList.contains('show'), where: currentView};
@@ -232,10 +229,10 @@ suite(async t => {
     if(!r.name) throw new Error('the drill-down showed no rows to press');
     if(!r.book) throw new Error('pressing a client did not show their SIPs and holdings');
     if(!r.foot.some(x=>/Back to list/.test(x))) throw new Error('no way back to the list: ' + r.foot.join(', '));
-    if(!r.got || ['Summary', 'SIPs', 'Holdings'].some(n=>r.got.names.indexOf(n) < 0)) throw new Error('report: ' + JSON.stringify(r.got));
+    if(!r.got) throw new Error('no Review report button: ' + r.foot.join(', '));
     if(r.open) throw new Error('the paper stayed up over the record it opened');
     if(r.where !== 'cms') throw new Error('Open in CMS landed on "' + r.where + '"');
-    return '“' + r.name + '”: SIPs and holdings, a report (' + r.got.names.join(', ') + '), then Open in CMS';
+    return '“' + r.name + '”: SIPs and holdings, Review report, then Open in CMS';
   });
 
   await t.step('nothing was alerted', async () => {

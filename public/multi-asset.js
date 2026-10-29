@@ -2005,7 +2005,7 @@ function maClientBlockHtml(clientId){
   const loans = h.filter(r=>r.product === MA_LOANS);
   return `
     <div class="between" style="margin-top:14px"><div class="section-title" style="margin:0">Holdings by scheme, from the uploaded files</div>
-      <button class="btn sm ghost" onclick="mdClientReport('${esc(clientId)}')">Generate report</button></div>
+      <button class="btn sm ghost" onclick="ReviewReport.open('${esc(clientId)}')">Review report</button></div>
     <div class="small-note" style="margin-top:4px">Read from the AUM and SIP files uploaded in Platform Import Mapping — the newest version of each platform and category.
       ${t.loans ? 'Loans against securities are shown on their own and are not part of the AUM.' : ''}</div>
     ${repKpis([{label: 'Current value', html: money(t.current_value)}, {label: 'Invested', html: money(t.invested)},
