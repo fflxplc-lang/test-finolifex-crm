@@ -16,7 +16,7 @@ const {suite} = require('../lib/harness');
 const WANT = {
   lms: ['New', 'Qualification', 'Investment Approach', 'Convert'],
   cms: ['Total Clients', 'KYC Completed', 'KYC Pending', 'Categories',
-        'Onboarding', 'Mandate', 'Activation', 'Insurance Hold'],
+        'Onboarding', 'Mandate', 'Activation', 'Insurance', 'Policies In Force'],
   rms: ['Open Review', 'Meeting Due', 'Meeting Over Due', 'Meeting Closed', 'Reference'],
 };
 /* Tiles each screen used to carry and should not any more. */

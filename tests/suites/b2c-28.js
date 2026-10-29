@@ -204,15 +204,20 @@ suite(async t => {
     t.expectConsole(/422/);
     const r = await t.eval(async () => {
       openDSTCreateForm();
-      await new Promise(r => setTimeout(r, 120));
+      /* Earlier steps' saves can still redraw the page; let them land
+         before typing, as a person would. */
+      await new Promise(r => setTimeout(r, 600));
       const a = document.getElementById('f_assignedDate');
       a.dispatchEvent(new Event('change', {bubbles: true}));
       await new Promise(r => setTimeout(r, 20));
       const min = a.min, today = dstToday();
       const d = new Date(); d.setDate(d.getDate() - 2); const past = hrDateKey(d);
       a.value = past; a.dispatchEvent(new Event('change', {bubbles: true}));
-      await new Promise(r => setTimeout(r, 20));
-      const note = ((a.closest('.field') || document).querySelector('.field-error') || {}).textContent || '';
+      let note = '';
+      for(let i = 0; i < 25 && !note; i++){
+        await new Promise(r => setTimeout(r, 20));
+        note = ((a.closest('.field') || document).querySelector('.field-error') || {}).textContent || '';
+      }
       ssetFormHeader = 'dst';
       const res = await fetch('/api/storage/tasks', {method: 'PUT', headers: Object.assign({'Content-Type': 'application/json', 'X-CRM-Form': 'dst'}, apiHeaders()),
         body: JSON.stringify({value: JSON.stringify((DB.tasks || []).concat([{id: 'DST-ZZPAST', taskType: 'ZZ', assignedDate: past, dueDate: past, overallStatus: 'Not Started'}]))})});
