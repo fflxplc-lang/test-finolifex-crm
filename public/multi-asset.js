@@ -67,7 +67,7 @@ const MA_KIND_LABEL = {aum:'AUM', sip:'SIP'};
 const MA_PAN = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
 
 /* What the module is holding while it runs. */
-const MA = {cache:null, picked:{}, uploadType:'platform', clientName:'', snapDate:'', busy:false, createClients:true, overwrite:false,
+const MA = {cache:null, picked:{}, uploadType:'platform', clientName:'', snapDate:'', busy:false, createClients:true, overwrite:false, rm:'', noRmRm:'',
   msg:'', result:null, addOpen:false, sipLive:true, sipQ:'', sipProduct:'', sipPlatform:'', clientQ:'',
   histQ:''};
 
@@ -1435,6 +1435,10 @@ function viewAssetUpload(){
         <label class="row" style="gap:6px"><input type="checkbox" id="maOverwrite" ${MA.overwrite ? 'checked' : ''} onchange="MA.overwrite=this.checked">
           Overwrite client details already filled in (PAN, mobile, email, date of birth, branch, RM, associate)</label>
       </div>
+      <div class="field" style="margin:10px 0 0;max-width:420px"><label>RM for clients without one</label>
+        <select id="maRm" onchange="MA.rm=this.value">${maRmOptionsHtml(MA.rm, 'None \u2014 use the RM named in the file')}</select>
+        <div class="small-note" style="margin:4px 0 0">Clients added or matched by the upload who have no RM yet are mapped to this person,
+          who is told in BOSS and finds them in their CMS list. An RM named in the file is used first.</div></div>
       <div class="small-note" style="margin:6px 0 0">Everything uploaded goes into BOSS itself: the client record, the client's Portfolio tab,
         the Main Dashboard's Live AUM and Live SIP, Portfolio Review and the reports. Blank client details are always filled in from the file.</div>
     </div>
@@ -1462,6 +1466,7 @@ function viewAssetUpload(){
       </div>
     </div>
     ${maColumnNamesHtml()}
+    ${maNoRmHtml()}
     <div class="card" id="maImported">
       <div class="between"><div class="section-title" style="margin:0">Imported data</div>
         <span class="small-note" style="margin:0">Remove one upload below, an old import here, or everything at once.</span></div>
@@ -1478,6 +1483,55 @@ function viewAssetUpload(){
         <div class="small-note" style="margin:4px 0 0">Deletes every uploaded file and every imported holding and SIP, including those from the old platform import,
           so the Main Dashboard and the client pages go back to the BOSS ledger. Clients, their details and the platform list are kept. This can't be undone.</div></div>
         <button class="btn danger" onclick="maResetAll()">Delete all imported data</button></div></div>` : ''}`;
+}
+/* WHO WORKS THE IMPORTED CLIENTS.
+
+   A client an upload added is a CMS client like any other, and is worked
+   by its RM. Those still without one are listed here and mapped to an RM
+   in one go; the RM is told and finds them in their own CMS list. */
+function maRmChoices(){ return typeof activeTeam === 'function' ? activeTeam() : (DB.team || []); }
+function maRmOptionsHtml(sel, none){
+  return `<option value="">${esc(none)}</option>` + maRmChoices().map(t=>
+    `<option value="${esc(t.id)}" ${t.id === sel ? 'selected' : ''}>${esc(t.name)}${t.role ? ' \u00b7 ' + esc(roleOf(t)) : ''}</option>`).join('');
+}
+function maClientsWithoutRm(){
+  const imported = new Set((DB.platformHoldings || []).concat(DB.platformSips || []).filter(x=>x && !x.deletedAt && x.clientId).map(x=>x.clientId));
+  return (DB.clients || []).filter(c=>c && !c.deletedAt && !c.rmName
+    && (imported.has(c.id) || /^Platform upload/.test(c.createdVia || '')));
+}
+function maNoRmHtml(){
+  if(!can('CMS', 'assign')) return '';
+  const list = maClientsWithoutRm();
+  if(!list.length) return '';
+  return `<div class="card" id="maNoRm" style="border-left:3px solid var(--warn)">
+    <div class="between"><div><div class="section-title" style="margin:0">Imported clients without an RM <span class="small-note">${list.length}</span></div>
+      <div class="small-note" style="margin:4px 0 0">${esc(list.slice(0, 8).map(c=>c.cmsName || clientCode(c)).join(', '))}${list.length > 8 ? ' and ' + (list.length - 8) + ' more' : ''}.
+        Nobody is working them until they have an RM.</div></div>
+      <div class="row" style="gap:8px"><select id="maNoRmRm" onchange="MA.noRmRm=this.value">${maRmOptionsHtml(MA.noRmRm, 'Choose an RM')}</select>
+        <button class="btn primary" onclick="maAssignRm()">Map to RM</button></div></div>
+  </div>`;
+}
+async function maAssignRm(ids, rm){
+  if(!can('CMS', 'assign')){ alert('You do not have Assign permission on CMS.'); return; }
+  rm = rm || MA.noRmRm || ((document.getElementById('maNoRmRm') || {}).value || '');
+  if(!rm || !maRmChoices().some(t=>t.id === rm)){ alert('Choose the RM first.'); return; }
+  const list = ids ? (DB.clients || []).filter(c=>ids.indexOf(c.id) >= 0 && !c.deletedAt) : maClientsWithoutRm();
+  if(!list.length) return;
+  list.forEach(c=>{ c.rmName = rm; c.modifiedBy = currentUser; c.modifiedAt = new Date().toISOString(); });
+  await save('clients');
+  for(const c of list) await logAudit('CMS', c.id, 'RM mapped', [{field: 'rmName', oldValue: '', newValue: teamName(rm)}]);
+  await maTellRms({[rm]: list.map(c=>c.cmsName || '')}, 'imported data');
+  MA.noRmRm = '';
+  render();
+  return list.length;
+}
+async function maTellRms(assigned, from){
+  for(const rm of Object.keys(assigned || {})){
+    const names = assigned[rm];
+    if(!rm || rm === currentUser || !names.length || typeof notifyUser !== 'function') continue;
+    await notifyUser(rm, {kind: 'cms-rm-mapped', view: 'cms', title: names.length === 1 ? 'Client mapped to you: ' + names[0] : names.length + ' clients mapped to you',
+      body: 'From ' + from + ' by ' + teamName(currentUser) + '. ' + names.slice(0, 6).join(', ') + (names.length > 6 ? ' and ' + (names.length - 6) + ' more' : '') + '. They are in your CMS list.'});
+  }
 }
 /* The old platform import (before uploads were the one door) left
    holdings and SIPs of its own, one batch per file. Each batch can be
@@ -1648,7 +1702,7 @@ function maClientDetails(h){
   return out;
 }
 async function maApplyClients(rows, ctx){
-  const res = {created: [], updated: 0};
+  const res = {created: [], updated: 0, assigned: {}};
   if(!rows.length) return res;
   const live = (DB.clients || []).filter(c=>c && !c.deletedAt);
   const idx = impClientIndex(live);
@@ -1713,6 +1767,14 @@ async function maApplyClients(rows, ctx){
         changes.push({field: k, oldValue: String(was == null ? '' : was), newValue: String(g.details[k])});
         client[k] = g.details[k];
       });
+      /* Somebody has to work the client: the RM the file names, or else the
+         one picked on the upload page for clients that have none. */
+      if(!client.rmName && ctx.rm && maRmChoices().some(t=>t.id === ctx.rm)){
+        client.rmName = ctx.rm;
+        changes.push({field: 'rmName', oldValue: '', newValue: teamName(ctx.rm)});
+      }
+      if(client.rmName && changes.some(x=>x.field === 'rmName'))
+        (res.assigned[client.rmName] = res.assigned[client.rmName] || []).push(client.cmsName || '');
       if(changes.length){
         touched = true;
         if(!fresh){ res.updated++; await logAudit('CMS', client.id, 'Updated by platform upload', changes); }
@@ -1855,8 +1917,10 @@ async function maUploadAll(){
         /* The client record first: details filled in, new clients added,
            so every row lands on a BOSS client before it is saved. */
         const cl = await maApplyClients(r.rows, {clientId: client ? client.id : '', clientName: MA.uploadType === 'client' ? clientName : '',
-          create: MA.createClients, overwrite: MA.overwrite, platform: job.platform.name, file: job.file.name});
+          create: MA.createClients, overwrite: MA.overwrite, rm: MA.rm, platform: job.platform.name, file: job.file.name});
         if(cl.created.length) r.notes.push(cl.created.length + ' new client' + (cl.created.length === 1 ? '' : 's') + ' added to BOSS');
+        const nAssigned = Object.values(cl.assigned).reduce((n, l)=>n + l.length, 0);
+        if(nAssigned){ r.notes.push(nAssigned + ' client' + (nAssigned === 1 ? '' : 's') + ' given an RM'); await maTellRms(cl.assigned, job.platform.name + ' upload'); }
         if(cl.updated) r.notes.push(cl.updated + ' client record' + (cl.updated === 1 ? '' : 's') + ' updated');
         const created = await maCreateUpload({uploadType: MA.uploadType, clientName, clientId: client ? client.id : '',
           platform: job.platform.name, product: job.platform.product, kind: job.kind, batchId, snapshotDate: MA.snapDate || null,

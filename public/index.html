@@ -37370,7 +37370,10 @@ function mdClientBook(id, first){
   const holdSec = `<div class="section-title">Holdings <span class="small-note">${money(d.aum)}</span></div>${holdTable}`;
   const last = window._mdLastDrill;
   openModal(esc(clientDisplayName(c)), `
-    <div class="small-note" style="margin-top:0">${esc(clientCode(c))} · ${esc(c.branch || '—')} · RM ${esc(teamName(c.rmName) || '—')}</div>
+    <div class="small-note" style="margin-top:0">${esc(clientCode(c))} · ${esc(c.branch || '—')} · RM ${c.rmName ? esc(teamName(c.rmName))
+      : can('CMS', 'assign') && typeof maRmOptionsHtml === 'function'
+        ? `<select id="mdBookRm" style="width:auto;padding:3px 6px;font-size:12px">${maRmOptionsHtml('', 'Not mapped \u2014 choose an RM')}</select>
+           <button class="btn sm" onclick="mdBookMapRm('${esc(c.id)}')">Map RM</button>` : '—'}</div>
     <div class="drill-head" style="display:flex;gap:28px;flex-wrap:wrap">
       <div><div class="small-note" style="margin:0">Live AUM</div><div class="drill-fig">${money(d.aum)}</div></div>
       <div><div class="small-note" style="margin:0">Live SIP</div><div class="drill-fig">${money(d.sip)}</div></div>
@@ -37380,6 +37383,12 @@ function mdClientBook(id, first){
     `${last ? `<button class="btn" onclick="mdDrillOpen(window._mdLastDrill.title, window._mdLastDrill.o)">← Back to list</button>` : ''}
      <button class="btn" onclick="ReviewReport.open('${esc(c.id)}')">Review report</button>
      <button class="btn primary" onclick="closeModal(); navigate('cms','${esc(c.id)}')">Open in CMS</button>`, {wide:true});
+}
+async function mdBookMapRm(id){
+  const rm = (document.getElementById('mdBookRm') || {}).value || '';
+  if(!rm){ alert('Choose the RM first.'); return; }
+  await maAssignRm([id], rm);
+  mdClientBook(id);
 }
 function mdCutState(key, def){
   window._mdCut = window._mdCut || {};

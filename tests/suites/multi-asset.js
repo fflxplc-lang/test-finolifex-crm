@@ -549,4 +549,33 @@ suite(async t => {
     if(r.clients !== r.n) throw new Error('clients went too: ' + r.n + ' → ' + r.clients);
     return 'no uploads, no imported lines; ' + r.clients + ' clients kept';
   });
+  await t.step('imported clients go to an RM: the upload\'s RM, the list of those without one, and the client card', async () => {
+    const r = await t.eval(async ()=>{
+      const rm = activeTeam().find(x=>x.id !== currentUser) || activeTeam()[0];
+      const before = DB.notifications.length;
+      const res = await maApplyClients([{client_name: 'ZZ Rm Upload', pan: 'ZZRMU1234A'}, {client_name: 'ZZ Rm Named'}],
+        {create: true, overwrite: false, rm: rm.id, platform: 'ZZ Platform', file: 'zz.xlsx'});
+      const up = DB.clients.find(c=>c.cmsName === 'ZZ Rm Upload') || {};
+      // One more with nobody, as an older upload would have left it.
+      const old = {id: uid('CMS'), cmsName: 'ZZ Rm Orphan', createdVia: 'Platform upload · ZZ', createdAt: new Date().toISOString()};
+      initState('CMS', old); DB.clients.push(old); await save('clients');
+      navigate('settings'); maNav('upload'); await new Promise(r=>setTimeout(r, 100));
+      const card = (document.getElementById('maNoRm') || {}).textContent || '';
+      // The client card maps it on the spot.
+      mdClientBook(old.id); await new Promise(r=>setTimeout(r, 50));
+      const picker = !!document.getElementById('mdBookRm');
+      document.getElementById('mdBookRm').value = rm.id;
+      await mdBookMapRm(old.id); await new Promise(r=>setTimeout(r, 50));
+      const head = document.querySelector('#modalBody .small-note').textContent;
+      closeModal();
+      const notes = DB.notifications.slice(before).filter(n=>n.userId === rm.id && n.kind === 'cms-rm-mapped').map(n=>n.title);
+      return {self: rm.id === currentUser, upRm: up.rmName === rm.id, assigned: Object.keys(res.assigned), card: /ZZ Rm Orphan/.test(card),
+        picker, oldRm: old.rmName === rm.id, head, rmName: rm.name, notes, left: maClientsWithoutRm().filter(c=>/^ZZ Rm/.test(c.cmsName)).length};
+    });
+    if(!r.upRm || !r.assigned.length) throw new Error('upload RM: ' + JSON.stringify(r));
+    if(!r.card || !r.picker || !r.oldRm || r.left) throw new Error('mapping: ' + JSON.stringify(r));
+    if(!r.head.includes(r.rmName)) throw new Error('card after mapping: ' + r.head);
+    if(!r.self && r.notes.length < 2) throw new Error('the RM was not told: ' + JSON.stringify(r.notes));
+    return 'new client mapped by the upload, the orphan listed and mapped from its card; RM told (' + r.notes.length + ')';
+  });
 });

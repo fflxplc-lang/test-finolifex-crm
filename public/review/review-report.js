@@ -2957,6 +2957,11 @@ const ReviewPage = (() => {
         const w = sheetEl ? sheetEl.scrollWidth : 0;
         if (sheetEl && w > 1040) sheetEl.style.zoom = String(Math.floor((1040 / w) * 1000) / 1000);
       }
+      // Pictures and the stylesheet have to be in before the print window
+      // takes its copy, or the logos print as empty boxes.
+      const settle = el => new Promise(res => { if (el.complete || el.sheet) return res(); el.onload = el.onerror = () => res(); });
+      await Promise.race([Promise.all([...doc.images, ...doc.querySelectorAll('link[rel="stylesheet"]')].map(settle)),
+        new Promise(res => setTimeout(res, 5000))]);
       frame.contentWindow.focus();
       frame.contentWindow.print();
       setStatus("Choose Save as PDF in the print window", "ok");
