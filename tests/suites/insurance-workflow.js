@@ -116,10 +116,36 @@ suite({mail: true}, async t => {
     if(!notOk.said || !/cannot be completed/.test(notOk.said[0])) throw new Error('a CIF with income not matching went through');
     await t.eval(() => closeModal());
     const ok = await step('insCifValidated', {insCifIncomeOk: 'Yes', insCifKycOk: 'Yes'});
-    if(ok.stage !== 'insProposalUpdate') throw new Error(ok.stage);
+    if(ok.stage !== 'insDocsCheck') throw new Error(ok.stage);
+    return 'gate held, CIF ' + (sent.forms ? 'emailed (' + (cif ? 'arrived' : 'not seen') + ')' : 'requested') + ', recorded, validated → Documents Verification';
+  });
+
+  await t.step('after the CIF: the documents checklist, then KYC Status, then the proposal update and premium', async () => {
+    const r = await t.eval(async () => {
+      const c = DB.clients.find(x => x.id === 'CMS-ZINW');
+      navigate('cms', c.id); await new Promise(r => setTimeout(r, 150));
+      const panel = !!document.querySelector('#insPanel') && /Name Verification|Documents Verification/.test(document.body.innerText);
+      const said = []; const al = window.alert; window.alert = m => said.push(String(m));
+      await doTransition('CMS', c.id, 'insDocsCheckedT');
+      const held = stateOf('CMS', c);
+      for(const i of docsVerifyItems()) await setDocsVerifyAnswer(c.id, i.id, 'v', 'Yes');
+      await submitDocsVerify(c.id);
+      await doTransition('CMS', c.id, 'insDocsCheckedT');
+      const atKyc = stateOf('CMS', c);
+      await doTransition('CMS', c.id, 'insKycRegistered');
+      const task = !!(DB.tasks || []).find(x => x.clientId === c.id && x.taskType === 'Validate KYC' && x.overallStatus !== 'Completed');
+      const kyc1 = c.kycStatus;
+      await doTransition('CMS', c.id, 'insKycValidated');
+      window.alert = al;
+      const closed = (DB.tasks || []).find(x => x.clientId === c.id && x.taskType === 'Validate KYC').overallStatus;
+      return {panel, held, said: said[0] || '', atKyc, task, kyc1, kyc: c.kycStatus, closed, stage: stateOf('CMS', c)};
+    });
+    if(!r.panel) throw new Error('the documents checklist is not on the stage');
+    if(r.held !== 'insDocsCheck' || !/not been verified|submit the verification/.test(r.said)) throw new Error('the checklist gate did not hold: ' + JSON.stringify(r));
+    if(r.atKyc !== 'insKyc' || !r.task || r.kyc1 !== 'Registered' || r.kyc !== 'Validated' || r.closed !== 'Completed' || r.stage !== 'insProposalUpdate') throw new Error(JSON.stringify(r));
     const paid = await step('insProposalDone', {insPaymentMode: 'UPI', insPaymentRef: 'UPI-9'});
     if(paid.stage !== 'insDocsVerification' || paid.r.insuranceStatus !== 'Applied') throw new Error(JSON.stringify(paid.r.insuranceStatus));
-    return 'gate held, CIF ' + (sent.forms ? 'emailed (' + (cif ? 'arrived' : 'not seen') + ')' : 'requested') + ', recorded, validated; premium paid, Applied';
+    return 'checklist held until submitted → KYC Registered (task) → Validated → proposal updated, premium paid, Applied';
   });
 
   await t.step('scrub, tele-medical, underwriting with a loading', async () => {
@@ -215,7 +241,7 @@ suite({mail: true}, async t => {
       DB.config.blueprints.CMS = keep;
       return out;
     });
-    if(r.terminal || r.states !== 12 || r.steps.indexOf('insCifValidated') < 0) throw new Error(JSON.stringify(r));
+    if(r.terminal || r.states !== 14 || r.steps.indexOf('insCifValidated') < 0) throw new Error(JSON.stringify(r));
     return r.label + ', ' + r.states + ' stages added';
   });
 

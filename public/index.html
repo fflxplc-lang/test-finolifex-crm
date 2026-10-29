@@ -10037,6 +10037,8 @@ const BLUEPRINT_CMS = {
     {id:'insIllustration', label:'Insurance — Illustration with Client'},
     {id:'insProposal', label:'Insurance — Proposal Form Submission'},
     {id:'insCif', label:'Insurance — Client Information Form (CIF)'},
+    {id:'insDocsCheck', label:'Insurance — Documents Verification'},
+    {id:'insKyc', label:'Insurance — KYC Status'},
     {id:'insProposalUpdate', label:'Insurance — Proposal Update & Premium Payment'},
     {id:'insDocsVerification', label:'Insurance — Pre-Underwriting Scrub'},
     {id:'insMedical', label:'Insurance — Medical Required?'},
@@ -10088,10 +10090,19 @@ const BLUEPRINT_CMS = {
     {id:'insProposalSubmitted', from:'insProposal', to:'insCif', label:'Proposal Form Submitted', kind:'forward'},
     {id:'insBackToIllustration', from:'insProposal', to:'insIllustration', label:'Back', kind:'back'},
     {id:'insCifSend', from:'insCif', to:'insCif', label:'Request CIF from Client', kind:'forward'},
-    {id:'insCifValidated', from:'insCif', to:'insProposalUpdate', label:'CIF Received & Validated', kind:'forward', color:'ok'},
+    {id:'insCifValidated', from:'insCif', to:'insDocsCheck', label:'CIF Received & Validated', kind:'forward', color:'ok'},
     {id:'insBackToProposalForm', from:'insCif', to:'insProposal', label:'Back', kind:'back'},
+    /* The same documents checklist and KYC check the investment route walks
+       after its CIF, before the proposal is updated and the premium taken. */
+    {id:'insDocsCheckedT', from:'insDocsCheck', to:'insKyc', label:'Verification Complete — Proceed to KYC', kind:'forward', color:'ok'},
+    {id:'insBackToCifFromDocs', from:'insDocsCheck', to:'insCif', label:'Back', kind:'back'},
+    {id:'insKycRegistered', from:'insKyc', to:'insKyc', label:'KYC Registered', kind:'forward'},
+    {id:'insKycNotRegistered', from:'insKyc', to:'insKyc', label:'KYC Not Registered', kind:'forward'},
+    {id:'insKycOnHold', from:'insKyc', to:'insKyc', label:'KYC On Hold', kind:'forward'},
+    {id:'insKycValidated', from:'insKyc', to:'insProposalUpdate', label:'KYC Validated — Proceed', kind:'forward', color:'ok'},
+    {id:'insBackToDocsCheck', from:'insKyc', to:'insDocsCheck', label:'Back', kind:'back'},
     {id:'insProposalDone', from:'insProposalUpdate', to:'insDocsVerification', label:'Proposal Updated & Premium Paid (Sales Completed)', kind:'forward', color:'ok'},
-    {id:'insBackToCif', from:'insProposalUpdate', to:'insCif', label:'Back', kind:'back'},
+    {id:'insBackToCif', from:'insProposalUpdate', to:'insKyc', label:'Back', kind:'back'},
     // Documents, then Phase 3 — Medical & Underwriting.
     {id:'insDocsVerified', from:'insDocsVerification', to:'insMedical', label:'Scrub Complete — Proceed', kind:'forward', color:'ok'},
     {id:'insDocsMissing', from:'insDocsVerification', to:'insDocsVerification', label:'Request Missing Documents or Corrections', kind:'forward', color:'warn'},
@@ -10998,6 +11009,7 @@ function stagePanelHtml(module, record, cur, editable){
   if(module==='CMS' && cur==='onboardingProcess') return platformActivationPanelHtml(record, editable);
   if(module==='CMS' && cur==='initiateTransaction') return placeOrderPanelHtml(record, editable);
   if(module==='CMS' && cur==='transactionPlaced') return transactionPlacedPanelHtml(record, editable);
+  if(module==='CMS' && cur==='insDocsCheck') return docsVerificationPanelHtml(record, editable) + insurancePanelHtml(record, cur, editable);
   if(module==='CMS' && insIsStage(cur)) return insurancePanelHtml(record, cur, editable);
   if(module==='RMS' && cur==='internalReview') return internalReviewPanelHtml(record, editable);
   if(module==='RMS' && cur==='reviewAgenda') return agendaSopPanelHtml(record);
@@ -12810,7 +12822,7 @@ async function doTransition(module, recordId, transitionId){
   // KYC is shut until the documents have actually been looked at. Enforced
   // here as well as on the button, so the profile's "Move to" link and a
   // stale page both obey it.
-  if(module==='CMS' && cur==='docsVerification' && t.id==='docsVerifiedT'){
+  if(module==='CMS' && ((cur==='docsVerification' && t.id==='docsVerifiedT') || (cur==='insDocsCheck' && t.id==='insDocsCheckedT'))){
     const outstanding = docsVerifyOutstanding(record);
     if(outstanding.length){
       alert('The documents have not been verified yet. Work through the checklist on the stage first.\n\nStill outstanding:\n\n• '
@@ -28652,6 +28664,17 @@ async function insuranceAfterStep(r, id){
   if(id==='insProposalSubmitted') line.note = 'Proposal ' + (r.insProposalNo || '') + ' signed ' + fmtDate(r.insProposalDate || today);
   if(id==='insCifSend'){ r.insCifRequestedAt = now; line.note = 'CIF requested' + (r.cifFormName ? ' (' + r.cifFormName + ')' : ''); }
   if(id==='insCifValidated') line.note = 'CIF received ' + (r.cifSubmittedAt ? fmtDate(r.cifSubmittedAt) : '') + ' and validated';
+  if(id==='insDocsCheckedT') line.note = 'Documents checklist submitted' + (r.docsVerify && r.docsVerify.submittedAt ? ' ' + fmtDate(r.docsVerify.submittedAt) : '');
+  /* KYC as the investment route records it: the status on the client, and
+     the task each answer calls for. */
+  if(id==='insKycRegistered'){ r.kycStatus = 'Registered'; await createClientDST(r, 'Validate KYC', 3, 'Validate the KYC for ' + r.cmsName); }
+  if(id==='insKycNotRegistered'){ r.kycStatus = 'Not Registered'; await createClientDST(r, 'Create KYC', 3, 'Create a KYC for ' + r.cmsName); }
+  if(id==='insKycOnHold'){ r.kycStatus = 'On Hold'; await createClientDST(r, 'Prepare Physical KYC Documents', 5, 'Prepare Physical Documents for doing KYC for ' + r.cmsName); }
+  if(id==='insKycValidated'){
+    r.kycStatus = 'Validated';
+    for(const k of ['Validate KYC', 'Create KYC', 'Prepare Physical KYC Documents']) await completeClientDST(r.id, k);
+  }
+  if(/^insKyc/.test(id)) line.note = 'KYC ' + r.kycStatus;
   if(id==='insProposalDone'){ r.insuranceStatus = 'Applied'; line.note = 'Premium ' + insMoney(r.insPremium) + ' paid ' + fmtDate(r.insPremiumPaidOn || today) + (r.insPaymentMode ? ' by ' + r.insPaymentMode : ''); }
   if(id==='insDocsMissing') await createClientDST(r, 'Collect Missing Insurance Documents', 2, note);
   if(id==='insDocsVerified') await completeClientDST(r.id, 'Collect Missing Insurance Documents');
@@ -28741,6 +28764,8 @@ const INS_STAGE_NOTE = {
   insIllustration: 'Waiting for the client’s answer. Accepted goes on to the proposal form; otherwise send a revised illustration, as often as it takes.',
   insProposal: 'Get the proposal form signed by the client and record it.',
   insCif: 'Request the Client Information Form: KYC, address and financial proofs (ITR, bank statements), medical and family history. No premium before it is in and validated.',
+  insDocsCheck: 'Work through the documents checklist above against what is on file and the CIF, and submit it; KYC opens once it is submitted.',
+  insKyc: 'Check the KYC on the KRA with the PAN. Registered, Not Registered and On Hold each raise their task; only Validated moves on to the proposal update.',
   insProposalUpdate: 'Update the proposal with the verified CIF details and collect the first premium. This closes the sale.',
   insDocsVerification: 'Pre-underwriting scrub: check the proposal’s medical answers against the CIF disclosures and the documents. Ask for anything missing.',
   insMedical: 'Does the carrier’s grid (age, sum assured, disclosures) call for a tele-medical or physical examination?',
@@ -39944,7 +39969,7 @@ const CMS_STAGE_GROUPS = [
   ['Ready for RMS',  ['readyForRMS'],                                            'ok'],
   ['In RMS',         ['convertedToRMS'],                                         'ok'],
   ['Insurance',      ['insurancePending','insIllustration','insProposal','insDocsVerification',
-                      'insCif','insProposalUpdate','insMedical','insMedicalCheckup','insUnderwriting','insPolicyIssuance','insPolicyDelivery'], 'warn'],
+                      'insCif','insDocsCheck','insKyc','insProposalUpdate','insMedical','insMedicalCheckup','insUnderwriting','insPolicyIssuance','insPolicyDelivery'], 'warn'],
   ['Policies In Force', ['insActive'],                                           'ok'],
   ['Insurance Closed', ['insClosed'],                                            'danger'],
 ];
