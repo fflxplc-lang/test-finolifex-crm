@@ -2040,6 +2040,7 @@ const ReviewPage = (() => {
         <button type="button" class="xl-btn" id="xlView" title="Switch between the dashboard look and a spreadsheet look">${excelView ? "Dashboard view" : "Excel view"}</button>
         <button type="button" class="xl-btn" id="xlReset">Reset changes</button>
         <button type="button" class="xl-btn" id="xlPrev" title="Review reports exported before, kept with the client">Previous reviews</button>
+        <button type="button" class="xl-btn" id="xlPdf" title="Every sheet of the review, one to a page, to save as a PDF from the print window">Export PDF</button>
         <button type="button" class="xl-btn xl-export" id="xlExport" title="Builds the review workbook, downloads it and keeps a copy under Previous reviews">Export Excel</button>
       </div>
       <div class="xl-fx"><span id="xlName" class="xl-name"></span><span class="xl-fxl">fx</span><input id="xlFx" autocomplete="off" spellcheck="false"></div>
@@ -2054,6 +2055,7 @@ const ReviewPage = (() => {
     </div>`;
     $("xlExport").addEventListener("click", exportNow);
     $("xlClose").addEventListener("click", () => ReviewReport.close());
+    $("xlPdf").addEventListener("click", exportPdf);
     $("xlPrev").addEventListener("click", (e) => openMenu(e, rrPreviousItems(data.clientKey)));
     $("xlView").addEventListener("click", () => {
       excelView = !excelView;
@@ -2907,6 +2909,62 @@ const ReviewPage = (() => {
     } finally {
       b.disabled = false;
       b.textContent = "Export Excel";
+    }
+  }
+
+  // BOSS: the review as a PDF. Every sheet, as the page draws it, one to an A4 landscape page
+  // (scaled down to fit when wider), in a print window whose Save as PDF writes the file.
+  async function exportPdf() {
+    const b = $("xlPdf");
+    if (!wb || b.disabled) return;
+    b.disabled = true;
+    b.textContent = "Preparing…";
+    try {
+      await flush();
+      if (building) await building;
+      const date = /^\d{4}-\d{2}-\d{2}$/.test(edits.reviewDate || "") ? edits.reviewDate : data.today;
+      const title = Review.fileName(data.clientName, date).replace(/\.xlsx$/, "");
+      const frame = document.createElement("iframe");
+      frame.id = "rrPdfFrame";
+      frame.style.cssText = "position:fixed;left:-12000px;top:0;width:1100px;height:800px;border:0";
+      document.getElementById("rrPdfFrame")?.remove();
+      document.body.appendChild(frame);
+      const doc = frame.contentDocument;
+      doc.open();
+      doc.write(`<!doctype html><html><head><meta charset="utf-8"><title>${esc(title)}</title>
+        <link rel="stylesheet" href="/review/review-report.css">
+        <style>@page { size: A4 landscape; margin: 8mm; }
+          html, body { margin: 0; background: #fff; }
+          #rrOverlay { position: static !important; overflow: visible !important; background: #fff !important; }
+          .rr-page { break-after: page; page-break-after: always; overflow: hidden; }
+          .rr-page:last-child { break-after: auto; page-break-after: auto; }
+          .rr-h { font: 600 12px system-ui, Arial, sans-serif; color: #1f3864; margin: 0 0 6px; }
+          * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }</style></head>
+        <body><div id="rrOverlay"></div></body></html>`);
+      doc.close();
+      await new Promise((ok) => { const l = doc.querySelector("link"); if (l.sheet) ok(); else { l.onload = ok; l.onerror = ok; setTimeout(ok, 1500); } });
+      const root = doc.getElementById("rrOverlay");
+      const sheets = wb.sheets.filter((x) => !x.hidden);
+      for (const s of sheets) {
+        const pg = doc.createElement("div");
+        pg.className = "rr-page";
+        pg.innerHTML = `<div class="rr-h">${esc(data.clientName)} · ${esc(TAB_NAMES[s.name] || s.name)}</div>`;
+        const host = doc.createElement("div");
+        pg.appendChild(host);
+        root.appendChild(pg);
+        SheetView.render(wb, s.name, host, { zoom: 1, modern: true, showHidden: SHOW_HIDDEN.has(s.name) });
+        const sheetEl = host.querySelector(".xl-sheet");
+        const w = sheetEl ? sheetEl.scrollWidth : 0;
+        if (sheetEl && w > 1040) sheetEl.style.zoom = String(Math.floor((1040 / w) * 1000) / 1000);
+      }
+      frame.contentWindow.focus();
+      frame.contentWindow.print();
+      setStatus("Choose Save as PDF in the print window", "ok");
+    } catch (err) {
+      alert(`Could not create the PDF: ${err.message}`);
+    } finally {
+      b.disabled = false;
+      b.textContent = "Export PDF";
     }
   }
 

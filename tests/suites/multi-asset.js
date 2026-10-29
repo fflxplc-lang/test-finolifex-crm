@@ -335,6 +335,25 @@ suite(async t => {
     return r.tabs.length + ' sheets (' + r.tabs.slice(0, 4).join(', ') + '…), the schemes on Detailed Portfolio';
   });
 
+  await t.step('Export PDF lays every sheet out one to a page, ready to save as a PDF', async () => {
+    const r = await t.eval(async ()=>{
+      window.__printed = 0;
+      const b = document.getElementById('xlPdf');
+      b.click();
+      for(let i = 0; i < 40 && !(document.getElementById('rrPdfFrame') && b.textContent === 'Export PDF'); i++) await new Promise(res=>setTimeout(res, 250));
+      const f = document.getElementById('rrPdfFrame');
+      const d = f && f.contentDocument;
+      return {pages: d ? d.querySelectorAll('.rr-page').length : 0, tabs: document.querySelectorAll('#xlTabs .xl-tab').length,
+        title: d ? d.title : '', text: d ? d.body.innerText.slice(0, 2000) : '',
+        imgs: d ? d.images.length : 0, broken: d ? [...d.images].filter(i=>!i.naturalWidth).length : 0,
+        charts: d ? d.querySelectorAll('svg, canvas').length : 0};
+    });
+    if(!r.pages || r.pages !== r.tabs) throw new Error(r.pages + ' pages for ' + r.tabs + ' sheets');
+    if(!/Review Sheet of ZZ Mehta Rajesh/.test(r.title) || !/ZZ Mehta Rajesh · Cover/.test(r.text)) throw new Error(r.title + ' | ' + r.text.slice(0, 300));
+    if(r.broken) throw new Error(r.broken + ' of ' + r.imgs + ' pictures did not load in the PDF');
+    return r.pages + ' pages, ' + r.imgs + ' pictures, ' + r.charts + ' charts, titled "' + r.title + '"';
+  });
+
   await t.step('the reviewer\'s change is kept, and each export is kept under Previous reviews', async () => {
     const r = await t.eval(async id => {
       const d = document.getElementById('xlDate'); d.value = '2026-04-15'; d.dispatchEvent(new Event('change'));
