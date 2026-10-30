@@ -66692,13 +66692,28 @@ function impMatchClient(ident, clients, index){
   if(pan && IMP_PAN_RE.test(pan)){
     const hit = idx.byPan.get(pan) || [];
     if(hit.length === 1) return {clientId: hit[0].id, how:'pan', client: hit[0]};
-    if(hit.length > 1)   return {how:'ambiguous', why:'two client records carry PAN ' + pan,
-                                 candidates: hit.map(c=>c.id)};
+    if(hit.length > 1){
+      /* The same PAN on two records is the same person entered twice. The
+         one that also carries the report's name is them; only when that
+         does not settle it is a person asked. */
+      const nm = impNormKey(ident.name || '');
+      const named = nm ? hit.filter(c=>impNormKey(c.cmsName || '') === nm) : [];
+      if(named.length === 1) return {clientId: named[0].id, how:'pan', client: named[0]};
+      return {how:'ambiguous', why:'two client records carry PAN ' + pan, candidates: hit.map(c=>c.id)};
+    }
     return {how:'new', by:'pan'};
   }
   const nm = impNormKey(ident.name || '');
   if(!nm) return {how:'invalid', why:'the row names nobody and carries no PAN'};
-  const hit = idx.byName.get(nm) || [];
+  let hit = idx.byName.get(nm) || [];
+  /* A name is shared by different people more often than a mobile is. A
+     record whose mobile differs from the report's is somebody else of the
+     same name, not this investor. */
+  const mob = String(ident.mobile || '').replace(/\D/g, '').slice(-10);
+  if(mob && hit.length){
+    hit = hit.filter(c=>{ const cm = String(c.mobile || '').replace(/\D/g, '').slice(-10); return !cm || cm === mob; });
+    if(!hit.length) return {how:'new', by:'name'};
+  }
   if(hit.length === 1) return {clientId: hit[0].id, how:'name', client: hit[0]};
   if(hit.length > 1)   return {how:'ambiguous',
     why: hit.length + ' clients are called "' + impNormName(ident.name) + '" and the report carries no PAN',
@@ -66820,7 +66835,7 @@ function impAnalyse(){
     fmt.cols.filter(c=>c.req && c.to && !covered.has(c.to))
       .forEach(c=>out.errs.push('nothing in this file is mapped to ' + c.src));
 
-    const m = out.errs.length ? {how:'invalid'} : impMatchClient(out.ident, clients, index);
+    const m = out.errs.length ? {how:'invalid'} : impMatchClient(Object.assign({}, out.ident, {mobile: out.client.mobile || ''}), clients, index);
     out.match = m;
     if(m.how === 'ambiguous'){ out.errs.push(m.why + ' — pick one by hand, or add the PAN to the report'); }
     if(m.how === 'invalid' && m.why) out.errs.push(m.why);
@@ -66831,7 +66846,7 @@ function impAnalyse(){
        second row would overwrite the first, which is never what was meant. */
     const dupKey = (fmt.report === 'SIP')
       ? [out.clientId || impNormKey(out.clientName)].concat((fmt.key||[]).map(k=>impNormKey(out.sip[k]||''))).join('|')
-      : (out.clientId || impNormKey(out.clientName));
+      : (out.clientId || (impNormKey(out.clientName) + (out.client.mobile ? '|' + String(out.client.mobile).replace(/\D/g, '').slice(-10) : '')));
     if(dupKey && seenKey[dupKey]) out.errs.push('the same ' + (fmt.report === 'SIP' ? 'SIP' : 'client')
       + ' is already on row ' + seenKey[dupKey] + ' of this file');
     else if(dupKey) seenKey[dupKey] = out.n;

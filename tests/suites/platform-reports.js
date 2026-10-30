@@ -58,6 +58,14 @@ const F = {
     ['ZZ SIP PERSON', 'ZZSIP1234S', '', '', '', '', '111/1', 'ZZ Flexi Fund - Growth', '16-04-2026', '20-04-2026', '15-04-2056', '15', 'Monthly', '3000', '3000', '', '', '', 'C1', 'INE0ZZ', ''],
     ['ZZ SIP PERSON', 'ZZSIP1234S', '', '', '', '', '111/1', 'ZZ Flexi Fund - Growth', '22-04-2026', '24-04-2026', '25-04-2056', '25', 'Monthly', '3000', '3000', '', '', '', 'C1', 'INE0ZZ', ''],
     ['ZZ SIP PERSON', 'ZZSIP1234S', '', '', '', '', '111/1', 'ZZ Flexi Fund - Growth', '22-04-2026', '24-04-2026', '25-04-2056', '25', 'Monthly', '3000', '3000', '', '', '', 'C1', 'INE0ZZ', '']])),
+  fwaum: b64(xlsx('AUM', [
+    ['ZZ Firm'], ['Investor Wise AUM Report'], ['Report Date: 30-10-2026'],
+    ['Name', 'PAN', 'Branch', 'RM Name', 'Associate Name', 'Inv.\nCost', 'Current\n Value', 'XIRR', 'Mobile'],
+    ['ZZ OWNER', 'ZZOWN1234O', '', '', '', '100', '1000', '1', '9000000001'],
+    ['ZZ OWNER TRADERS', 'ZZOWN1234O', '', '', '', '100', '500', '1', '9000000001'],
+    ['ZZ SAME NAME', '', '', '', '', '100', '200', '1', '9000000002'],
+    ['ZZ SAME NAME', '', '', '', '', '100', '300', '1', '9000000003'],
+    ['ZZ SAME NAME', '', '', '', '', '100', '50', '1', '9000000002']])),
   /* Two halves on the page, a holding whose name wraps under its figures,
      and the two figures under a single "Mkt Value %Assets" caption. */
   pdf: b64(pdfBytes([
@@ -130,5 +138,17 @@ suite(async t => {
     const sum = r.reduce((n, x) => n + x[1], 0);
     if(r.length !== 3 || sum !== 50000 || r[0][0] !== 'ZZ Coal Limited' || !r.some(x => /Life Insurance/.test(x[0]) && x[1] === 19138)) throw new Error(JSON.stringify(r));
     return r.map(x => x[0] + ' ' + x[1]).join(', ');
+  });
+  await t.step('every rupee in an investor-wise report is counted: same PAN added together, same-named people kept apart', async () => {
+    const r = await t.eval(async a => {
+      const bin = atob(a); const u = new Uint8Array(bin.length); for(let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i);
+      const out = await maReadFile(new File([u], 'finowise-Investor-Wise-AUM-Report.xlsx'), 'aum', '', false);
+      const res = await maApplyClients(out.rows, {create: true, overwrite: false, platform: 'Finowise', file: 'f.xlsx'});
+      const same = DB.clients.filter(c => !c.deletedAt && c.cmsName === 'ZZ SAME NAME').map(c => c.mobile).sort();
+      return {n: out.rows.length, sum: out.rows.reduce((n, h) => n + h.current_value, 0), notes: out.notes.join('; '), same, created: res.created.length};
+    }, F.fwaum);
+    if(r.sum !== 2050) throw new Error('read ' + r.sum + ' of 2,050: ' + r.notes);
+    if(r.n !== 3 || r.same.join(',') !== '9000000002,9000000003') throw new Error(JSON.stringify(r));
+    return '2,050 of 2,050; the owner\'s two lines added together; two ZZ SAME NAME clients told apart by mobile';
   });
 });

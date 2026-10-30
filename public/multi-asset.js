@@ -1733,6 +1733,7 @@ async function maKnownLayout(file, kind){
   const w = Object.assign(impBlank(), {format: best.fmt.id, platform: best.fmt.platform, file: file.name, sheet: read.sheet,
     headers: read.headers, rows: read.rows, asOn: read.asOn || '', map: Object.assign({}, best.map)});
   impSuggestColumns(w);
+  const merged = best.fmt.report === 'AUM' ? maMergeSameInvestor(w, best.fmt) : 0;
   let a;
   try { impWiz = w; a = impAnalyse(); } finally { impWiz = was; }
   if(!a) return null;
@@ -1777,11 +1778,63 @@ async function maKnownLayout(file, kind){
     && r.errs.every(e=>/is required and this row is blank|is already on row/.test(e));
   const bad = a.rows.filter(r=>!r.ok && !blankLine(r));
   const notes = ['Read as the ' + best.fmt.label];
+  if(merged) notes.push(merged + ' row' + (merged === 1 ? '' : 's') + ' of an investor already in the file (same PAN, or same name and mobile) added to their total');
   if(read.asOn) notes.push('as on ' + fmtDate(read.asOn));
   (w.guessed || []).forEach(g=>notes.push('the column "' + g.header + '" was read as ' + g.forCol));
   if(bad.length) notes.push(bad.length + ' row' + (bad.length === 1 ? '' : 's') + ' not imported: '
     + bad.slice(0, 5).map(r=>'row ' + r.n + ' (' + r.errs.join('; ') + ')').join(', ') + (bad.length > 5 ? ' and more' : ''));
+  /* What the file holds against what was taken in, so a gap is explained
+     rather than found later on the dashboard. */
+  if(best.fmt.report === 'AUM'){
+    const valueOf = r => { const v = Number(r.aum && r.aum.current); if(isFinite(v) && v) return v;
+      return Object.values((r.aum && r.aum.s) || {}).reduce((n, x)=>n + (Number(x && x.current) || 0), 0); };
+    const held = bad.map(r=>({n: r.n, name: r.clientName || impNormName((r.ident && r.ident.name) || ''), value: valueOf(r), why: r.errs.join('; ')}))
+      .filter(x=>x.value);
+    const heldSum = held.reduce((n, x)=>n + x.value, 0);
+    const took = out.reduce((n, x)=>n + (Number(x.current_value) || 0), 0);
+    if(heldSum) notes.push('Held back ' + money(heldSum) + ' of ' + money(took + heldSum) + ' in the file: '
+      + held.slice(0, 8).map(x=>x.name + ' ' + money(x.value) + ' (' + x.why.replace(/ — pick one by hand.*$/, '') + ')').join(', ') + (held.length > 8 ? ' and ' + (held.length - 8) + ' more' : ''));
+    return {fmt: best.fmt, rows: out, notes, failed: bad.length, held, fileTotal: took + heldSum};
+  }
   return {fmt: best.fmt, rows: out, notes, failed: bad.length};
+}
+/* The same investor on two lines of one AUM report — a proprietorship
+   filed under its owner's PAN, or a person listed twice — is one investor
+   with two amounts, not a duplicate to throw away. Lines with the same PAN,
+   or with no PAN and the same name and mobile (or no mobile), are added
+   together before the report is read. Two people who merely share a name
+   and have different mobiles are left apart, and held for a person. */
+function maMergeSameInvestor(w, fmt){
+  const col = target => { const src = Object.keys(w.map).find(k=>w.map[k] === target); if(!src) return -1;
+    return w.headers.findIndex(h=>maLooseHead(h) === maLooseHead(src)); };
+  const iName = col('client.cmsName'), iPan = col('client.pan'), iMob = col('client.mobile');
+  if(iName < 0) return 0;
+  const money = new Set();
+  Object.keys(w.map).forEach(src=>{
+    const spec = fmt.cols.find(c=>c.src === src) || {};
+    const t = w.map[src];
+    if(spec.t === 'money' && /^aum\./.test(t)){ const i = w.headers.findIndex(h=>maLooseHead(h) === maLooseHead(src)); if(i >= 0) money.add(i); }
+  });
+  const cell = (r, i) => i < 0 ? '' : String(r[i] == null ? '' : r[i]).trim();
+  const num = v => { const n = Number(String(v).replace(/[,₹\s]/g, '')); return isFinite(n) ? n : 0; };
+  const keep = [], seen = new Map();
+  let merged = 0;
+  w.rows.forEach(r=>{
+    const pan = cell(r, iPan).toUpperCase(), name = impNormKey(cell(r, iName)), mob = cell(r, iMob).replace(/\D/g, '').slice(-10);
+    const k = /^[A-Z]{5}\d{4}[A-Z]$/.test(pan) ? 'p:' + pan : (name ? 'n:' + name : '');
+    const first = k ? seen.get(k) : null;
+    if(first && (k.charAt(0) === 'p' || !mob || !first.mob || first.mob === mob)){
+      money.forEach(i=>{ first.row[i] = String(num(first.row[i]) + num(r[i])); });
+      if(!first.mob && mob) first.mob = mob;
+      merged++;
+      return;
+    }
+    const row = r.slice();
+    keep.push(row);
+    if(k && !first) seen.set(k, {row, mob});
+  });
+  if(merged) w.rows = keep;
+  return merged;
 }
 
 /* =====================================================================
@@ -1820,7 +1873,8 @@ async function maApplyClients(rows, ctx){
   rows.forEach(h=>{
     const name = maTidy(h.client_name);
     const pan = maPanOf(h.pan) || maPanOf(h.client_id);
-    const k = ctx.clientId ? 'c:' + ctx.clientId : ctx.clientName ? 'cw' : (pan ? 'p:' + pan : 'n:' + maKey(name));
+    const mob = String((h.cd && h.cd.mobile) || h.mobile || '').replace(/\D/g, '').slice(-10);
+    const k = ctx.clientId ? 'c:' + ctx.clientId : ctx.clientName ? 'cw' : h.cid ? 'c:' + h.cid : (pan ? 'p:' + pan : 'n:' + maKey(name) + (mob ? '|' + mob : ''));
     if(!groups.has(k)) groups.set(k, {name, pan, rows: [], details: {}, cid: h.cid || ''});
     const g = groups.get(k);
     g.rows.push(h);
@@ -1841,7 +1895,7 @@ async function maApplyClients(rows, ctx){
       if(ctx.clientId) client = byId.get(ctx.clientId) || null;
       else if(g.cid && byId.has(g.cid)) client = byId.get(g.cid);
       else {
-        const m = impMatchClient({pan: g.pan || '', name: ctx.clientName || g.name}, live, idx);
+        const m = impMatchClient({pan: g.pan || '', name: ctx.clientName || g.name, mobile: ctx.clientName ? '' : (g.details.mobile || '')}, live, idx);
         if(m.clientId) client = byId.get(m.clientId) || null;
         else if(m.how !== 'new') continue;              // two clients share it: left for a person
       }
