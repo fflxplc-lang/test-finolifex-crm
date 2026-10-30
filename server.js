@@ -4274,6 +4274,95 @@ async function insuranceRenewalReminders(now) {
   }
 }
 
+/* ---- DJT: the 9 o'clock email ----
+   Every morning each person is sent their own day from the Daily Job
+   Tracker: what was on their list yesterday and how much of it got done,
+   what they wrote as yesterday's learning, breakdown and breakthrough, and
+   what is on their list today. It is read the way the DJT page reads it —
+   service tasks due, meetings, reviews of their clients, business they
+   logged and their DWT blocks — and only ever their own. Sent once a day
+   from 09:00 in the firm's time zone, with a BOSS notification beside it.
+   Setup › General › "DJT: daily email at 9 AM" turns it off. */
+const DJT_DAILY_AT = 9 * 60;
+function djtDayWork(memberId, date, startsMonday) {
+  const out = [];
+  const clients = storeList('clients');
+  const clientOf = (id) => clients.find((c) => c && c.id === id) || null;
+  const who = (r) => (r.clientId ? nameOfClient(r.clientId) : (r.leadId ? nameOfLead(r.leadId) : (r.withName || '')));
+  storeList('tasks').forEach((t) => {
+    if (!t || t.deletedAt || t.parentTaskId || t.assignTo !== memberId || t.dueDate !== date) return;
+    out.push({ src: 'DST', title: t.description || t.taskType || t.id, detail: [t.taskType, who(t)].filter(Boolean).join(' · '),
+      status: t.overallStatus || 'Not Started', done: t.overallStatus === 'Completed', cancelled: t.overallStatus === 'Cancelled' });
+  });
+  storeList('meetings').forEach((m) => {
+    if (!m || m.deletedAt || (m.assignTo || m.createdBy) !== memberId || m.scheduledDate !== date) return;
+    const at = clockMins(m.scheduledTime);
+    out.push({ src: m.isArc ? 'ARC' : 'Meeting', title: m.subject || m.meetingType || 'Meeting', detail: [m.meetingType, who(m)].filter(Boolean).join(' · '),
+      time: at === null ? '' : clockText(at), status: m.status || 'Scheduled', done: m.status === 'Completed', cancelled: m.status === 'Cancelled' });
+  });
+  storeList('reviews').forEach((r) => {
+    if (!r || r.deletedAt || r.meetingDate !== date) return;
+    const c = clientOf(r.clientId);
+    if (!c || c.rmName !== memberId) return;
+    const closed = /^closed$/i.test(String(r.rmsStatus || ''));
+    out.push({ src: 'RMS', title: r.reviewType || 'Portfolio Review', detail: c.cmsName || '', status: closed ? 'Completed' : 'Open', done: closed, cancelled: false });
+  });
+  storeList('businessEntries').forEach((b) => {
+    if (!b || b.deletedAt || b.createdBy !== memberId || String(b.createdAt || '').slice(0, 10) !== date) return;
+    out.push({ src: 'DBT', title: (b.productCategory || 'Business') + (b.amount ? ' — ' + inr(b.amount) : ''), detail: [b.transactionType, who(b)].filter(Boolean).join(' · '),
+      status: b.status || 'Not Started', done: b.status === 'Completed', cancelled: false });
+  });
+  storeList('workActivities').forEach((a) => {
+    if (!a || a.deletedAt || a.userId !== memberId || !activityOccursOn(a, date, startsMonday)) return;
+    const at = clockMins(a.plannedStart);
+    const done = a.status === 'Completed' && (a.completedOn === date || !(a.days && a.days.length > 1) && !a.repeatWeekly);
+    out.push({ src: 'DWT', title: a.title || a.activityType || 'Activity', detail: [a.activityType, who(a)].filter(Boolean).join(' · '),
+      time: at === null ? '' : clockText(at), status: done ? 'Completed' : (a.status === 'Cancelled' ? 'Cancelled' : 'Planned'), done, cancelled: a.status === 'Cancelled' });
+  });
+  return out.sort((x, y) => String(x.time || 'zz').localeCompare(String(y.time || 'zz')));
+}
+function djtDailyLetter(m, today, startsMonday) {
+  const yday = addDays(today, -1);
+  const was = djtDayWork(m.id, yday, startsMonday), now = djtDayWork(m.id, today, startsMonday);
+  const entry = storeList('djtEntries').find((e) => e && e.userId === m.id && e.date === yday) || {};
+  if (!was.length && !now.length && !entry.learning && !entry.breakdown && !entry.breakthrough) return null;
+  const line = (w) => '  ' + (w.done ? '✓' : w.cancelled ? '✗' : '•') + ' ' + (w.time ? w.time + ' ' : '') + '[' + w.src + '] ' + w.title
+    + (w.detail ? ' — ' + w.detail : '') + (w.done || w.cancelled ? '' : ' (' + w.status + ')');
+  const doneY = was.filter((w) => w.done), openY = was.filter((w) => !w.done && !w.cancelled);
+  const firm = (storeObj('config').company || {}).name || 'BOSS';
+  const parts = ['Good morning ' + (String(m.name || '').split(' ')[0] || '') + ',', '',
+    'Here is your day from the Daily Job Tracker.', '',
+    'YESTERDAY — ' + fmtDay(yday) + ' (' + doneY.length + ' of ' + was.length + ' done)'];
+  if (doneY.length) parts.push('Completed:', ...doneY.map(line));
+  if (openY.length) parts.push('Still open — carry these forward in DJT:', ...openY.map(line));
+  if (!was.length) parts.push('  Nothing was on your list.');
+  const refl = [['Learning', entry.learning], ['Breakdown', entry.breakdown], ['Breakthrough', entry.breakthrough]].filter((x) => x[1]);
+  if (refl.length) parts.push('', 'What you wrote:', ...refl.map((x) => '  ' + x[0] + ': ' + String(x[1]).trim()));
+  parts.push('', 'TODAY — ' + fmtDay(today) + ' (' + now.length + ' job' + (now.length === 1 ? '' : 's') + ')');
+  if (now.length) parts.push(...now.map(line)); else parts.push('  Nothing is on your list yet.');
+  const site = process.env.CRM_PUBLIC_URL || '';
+  parts.push('', 'Open BOSS' + (site ? ' (' + site.replace(/\/$/, '') + ')' : '') + ' › Operations › DJT to tick off or carry forward.', '', '— ' + firm);
+  return { subject: 'Your day: ' + now.length + ' job' + (now.length === 1 ? '' : 's') + ' today · ' + doneY.length + ' of ' + was.length + ' done yesterday',
+    body: parts.join('\n'), today: now.length, doneY: doneY.length, totalY: was.length, openY: openY.length };
+}
+async function djtDailyEmails(now) {
+  if (now.mins < DJT_DAILY_AT) return;
+  const cfg = storeObj('config');
+  if ((cfg.general || {}).djtDailyEmail === false) return;
+  const held = cfg.mailOutflow === false ? 'Email outflow is switched off' : '';
+  const startsMonday = ((cfg.general || {}).weekStartsOn) !== 'Sunday';
+  for (const m of activeMembers()) {
+    const letter = djtDailyLetter(m, now.date, startsMonday);
+    if (!letter) continue;
+    if (!claim('djt-daily:' + m.id + ':' + now.date, now.date)) continue;
+    notifyInApp(m.id, { title: letter.subject, kind: 'djt-daily', view: 'djt', arg: now.date,
+      body: letter.today + ' on today\'s list; yesterday ' + letter.doneY + ' of ' + letter.totalY + ' done' + (letter.openY ? ', ' + letter.openY + ' still open' : '') + '.' });
+    const address = memberEmail(m);
+    const r = held ? { ok: false, message: held + ' — nothing was sent.' } : await mailTo(address, letter.subject, letter.body);
+    reminderLog({ kind: 'djt-daily', channel: 'email', userId: m.id, date: now.date, ok: r.ok, message: r.message || (address ? '' : 'no email address') });
+  }
+}
+
 let reminderRunning = false;
 async function reminderTick(at) {
   if (reminderRunning) return;           // one tick at a time: a slow mail server must not overlap the next
@@ -4283,6 +4372,7 @@ async function reminderTick(at) {
     await attendanceReminders(now);
     await dwtReminders(now);
     await insuranceRenewalReminders(now);
+    await djtDailyEmails(now);
   } catch (e) { console.error('reminders:', e && e.message || e); }
   finally { remindersWrite(); reminderRunning = false; }
 }
