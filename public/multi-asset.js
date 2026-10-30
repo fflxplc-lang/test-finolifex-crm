@@ -479,12 +479,54 @@ const MaExtract = (function(){
         } else cells.push({text: w.text, x0: w.x, x1: w.x + w.w});
       }
       cells.forEach(c=>{ c.text = c.text.trim(); });
+      cells.y = l.y; cells.h = Math.max(...l.words.map(w=>w.h));
       return cells;
     });
   }
+  /* A holding whose name wraps onto two or three lines prints its figures
+     on one of them and its name on another, a line above or below. Those
+     halves are put back together; a name-only line with no figures near it
+     is a wrapped tail and is dropped. */
+  function joinWrapped(rows, mapping){
+    const fieldCol = f => Object.keys(mapping).find(k=>mapping[k] === f);
+    const nameCol = fieldCol('security_name');
+    const valCols = ['current_value', 'invested', 'quantity'].map(fieldCol).filter(x=>x !== undefined);
+    if(nameCol === undefined || !valCols.length) return rows.map(r=>r.row);
+    const nameOf = r => String(r.row[nameCol] == null ? '' : r.row[nameCol]).replace(/^\d{1,3}\s+/, '').trim();
+    const hasName = r => /[A-Za-z]{2,}/.test(nameOf(r));
+    const hasVal = r => valCols.some(i=>parseNumber(r.row[i]) !== null);
+    const near = (a, b) => a && b && Math.abs(a.y - b.y) <= 3 * Math.max(a.h || 8, b.h || 8);
+    const out = [];
+    let pendVal = null, pendName = null;
+    rows.forEach(r=>{
+      // A Total line is never half of a holding.
+      if(r.row.some(c=>/^(grand\s+|sub\s*)?total\b/i.test(String(c == null ? '' : c).trim()))){ out.push(r.row); pendVal = pendName = null; return; }
+      const n = hasName(r), v = hasVal(r);
+      // "1 Coal India Limited": the serial number printed under "Sr." is not part of the name.
+      if(n && v){ const row = r.row.slice(); row[nameCol] = nameOf(r); out.push(row); pendVal = pendName = null; return; }
+      if(v){
+        if(near(pendName, r)){ const row = r.row.slice(); row[nameCol] = nameOf(pendName); out.push(row); pendName = null; }
+        else pendVal = r;
+        return;
+      }
+      if(n){
+        if(near(pendVal, r)){ const row = pendVal.row.slice(); row[nameCol] = nameOf(r); out.push(row); pendVal = null; }
+        else pendName = r;
+        return;
+      }
+      out.push(r.row);
+    });
+    return out;
+  }
   function alignToColumns(cells, columns){
     const row = new Array(columns.length).fill(null);
+    /* A page laid out in two halves (a sector table beside the holdings)
+       puts both on one line: text wholly outside the table's own width
+       belongs to the other half and is left out. */
+    const left = Math.min(...columns.map(c=>c.x0)), right = Math.max(...columns.map(c=>c.x1));
+    const pad = Math.max(24, (right - left) * 0.08);
     for(const c of cells){
+      if(c.x1 < left - pad || c.x0 > right + pad) continue;
       let bestCol = -1, bestScore = -Infinity;
       columns.forEach((col, i)=>{
         const overlap = Math.min(c.x1, col.x1) - Math.max(c.x0, col.x0);
@@ -492,6 +534,11 @@ const MaExtract = (function(){
         const score = overlap > 0 ? 1000 + overlap : -dist;
         if(score > bestScore){ bestScore = score; bestCol = i; }
       });
+      /* Two figures under one heading — "Mkt Value %Assets" printed as a
+         single caption — are two columns, not one number: 22,815 and
+         1.14% must not run together into 228151.14. The first is kept. */
+      const isFig = t => /^[(\-−]?[₹$]?\s*[\d,]+(\.\d+)?\s*%?\)?$/.test(String(t).trim());
+      if(row[bestCol] !== null && isFig(row[bestCol]) && isFig(c.text)) continue;
       row[bestCol] = row[bestCol] === null ? c.text : row[bestCol] + ' ' + c.text;
     }
     return row;
@@ -503,8 +550,12 @@ const MaExtract = (function(){
     const pdf = await lib.getDocument({data: new Uint8Array(buffer), password: password || undefined,
       isEvalSupported: false}).promise;
     const notes = [], texts = [];
-    let columns = null, mapping = null, holdings = [];
+    let columns = null, mapping = null, holdings = [], block = [];
     const ctx = {};
+    const flush = () => {
+      if(block.length && mapping) holdings = holdings.concat(rowsToHoldings(joinWrapped(block, mapping), mapping, 0, ctx));
+      block = [];
+    };
     for(let p = 1; p <= pdf.numPages; p++){
       const page = await pdf.getPage(p);
       const content = await page.getTextContent();
@@ -513,11 +564,10 @@ const MaExtract = (function(){
       for(const cells of lines){
         const raw = cells.map(c=>c.text);
         const header = findHeader([raw]);
-        if(header){ columns = cells; mapping = header.mapping; }
-        else if(!readHeading(raw, ctx) && columns){
-          holdings = holdings.concat(rowsToHoldings([alignToColumns(cells, columns)], mapping, 0, ctx));
-        }
+        if(header){ flush(); columns = cells; mapping = header.mapping; }
+        else if(!readHeading(raw, ctx) && columns) block.push({row: alignToColumns(cells, columns), y: cells.y, h: cells.h});
       }
+      flush();
     }
     if(!texts.some(t=>t.trim())) notes.push('PDF has no text layer (scanned image); holdings could not be read');
     applyReportDate(holdings, reportDate(texts.slice(0, 2)));
@@ -1027,8 +1077,11 @@ async function maSyncCrm(opts){
   s.sips.forEach(r=>{
     if(!r._c.clientId || !r.live) return;
     if(legacyWins(r._c.clientId, r.platform, r.product)) return;
-    const key = 'ma|' + r.platform_key + '|' + r.product + '|' + r._c.clientId + '|' + String(r.identifier || '').toLowerCase()
+    let key = 'ma|' + r.platform_key + '|' + r.product + '|' + r._c.clientId + '|' + String(r.identifier || '').toLowerCase()
       + '|' + (String(r.isin || '').toUpperCase() || String(r.security_name || '').toLowerCase());
+    /* A second SIP in the same scheme and folio is its own SIP, told apart
+       by when it started and the day it is debited. */
+    if(freshS.some(x=>x.key === key)) key += '|' + (r.start_date || '') + '|' + (r.sip_day || '') + '|' + (r.sip_amount || '');
     if(freshS.some(x=>x.key === key)) return;
     const was = oldS.get(key);
     freshS.push(Object.assign({}, r.extra || {}, r.src ? {src: r.src} : {}, {id: was ? was.id : uid('PSP'), key, clientId: r._c.clientId, platform: r.platform, product: r.product,
@@ -1612,11 +1665,61 @@ async function maAddPlatform(){
    into rows here, so there is one door for every file.
    ===================================================================== */
 function maLooseHead(h){ return String(h == null ? '' : h).toLowerCase().replace(/[^a-z0-9]/g, ''); }
+/* REPORTS THAT ARE NOT HOLDINGS.
+
+   Two kinds of platform file look like an AUM report and must not be read
+   as one. A summary — NJ's Group Wise AUM (the Investor Wise figures added
+   up by family) or Finowise's Branch Wise AUM (one line per branch) — is
+   the same money again, so adding it would count it twice; it is named
+   and left out. NJ's Folio Detail report carries no values at all, only
+   who each investor is, so it fills in the client records and nothing
+   else. */
+const MA_DETAILS_ONLY = 'Client details only';
+function maSpecialLayout(read, heads, kind){
+  const has = h => heads.has(maLooseHead(h));
+  if(kind === 'aum' && has('Group') && has('Partner/Employee') && !has('Investor') && (has('TOTAL') || has('EQUITY')))
+    return {fmt: {id: 'nj_group', label: 'NJ — Group Wise AUM Report'}, rows: [], failed: 0, notes: ['This is NJ\u2019s Group Wise AUM report: '
+      + 'the Investor Wise figures added up by family group. It is not added, so nothing is counted twice \u2014 upload the NJ Investor Wise AUM report for these clients']};
+  if(has('Branch Name') && read.headers.filter(h=>/^[A-Za-z]{3}-\d{4}$/.test(String(h).trim())).length >= 2)
+    return {fmt: {id: 'branch_summary', label: 'Branch Wise AUM Report'}, rows: [], failed: 0, notes: ['This is a Branch Wise AUM summary: '
+      + 'one total per branch per month, with no clients in it. It is not added, so nothing is counted twice \u2014 the client-wise AUM reports make up these totals']};
+  if(has('Folio No') && has('Investor Name') && has('First Holder PAN')){
+    const col = h => read.headers.findIndex(x=>maLooseHead(x) === maLooseHead(h));
+    const C = {name: col('Investor Name'), group: col('Group'), pan: col('First Holder PAN'), dob: col('First holder DOB'),
+      mobile: col('Mobile No'), email: col('Email'), street: col('Address'), city: col('City'), zip: col('Pin code'), state: col('State'),
+      accNo: col('Bank Ac No.'), bank: col('Bank_Name'), bbranch: col('Bank Branch'), ifsc: col('IFSC Code'), rm: col('Partner/ Employee')};
+    const val = (r, i) => { const v = i < 0 ? '' : String(r[i] == null ? '' : r[i]).trim(); return v === '-' ? '' : v; };
+    const TYPES = {pan: 'pan', dob: 'date', mobile: 'mobile', email: 'email', mailingStreet: 'text', mailingCity: 'text',
+      mailingZip: 'text', mailingState: 'text', accNo: 'text', bankName: 'text', branchName: 'text', ifsc: 'text'};
+    const rows = [];
+    read.rows.forEach(r=>{
+      const name = val(r, C.name);
+      if(!name) return;
+      const raw = {pan: val(r, C.pan).toUpperCase(), dob: val(r, C.dob), mobile: val(r, C.mobile), email: val(r, C.email),
+        mailingStreet: val(r, C.street), mailingCity: val(r, C.city), mailingZip: val(r, C.zip), mailingState: val(r, C.state),
+        accNo: val(r, C.accNo), bankName: val(r, C.bank), branchName: val(r, C.bbranch), ifsc: val(r, C.ifsc).toUpperCase()};
+      const cd = {};
+      Object.keys(raw).forEach(k=>{
+        if(!raw[k]) return;
+        const cell = typeof impCell === 'function' ? impCell(TYPES[k], raw[k]) : {v: raw[k]};
+        if(!cell.err && cell.v !== '' && cell.v !== null && cell.v !== undefined) cd[k] = cell.v;
+      });
+      rows.push({client_name: impNormName(name), pan: cd.pan || null, cd, level: 'details'});
+    });
+    const people = new Set(rows.map(h=>h.pan || maKey(h.client_name))).size;
+    return {fmt: {id: 'nj_folio', label: 'NJ — Folio Detail Report'}, rows, failed: 0, detailsOnly: true,
+      notes: ['Read as the NJ Folio Detail report: ' + rows.length + ' folios of ' + people + ' investors. It carries no values, so it fills in the '
+        + 'client records (PAN, date of birth, mobile, email, address, bank) and adds no holdings']};
+  }
+  return null;
+}
 async function maKnownLayout(file, kind){
   if(typeof IMPORT_FORMATS === 'undefined' || typeof impReadFile !== 'function') return null;
   let read;
   try { read = await impReadFile(file); } catch(e){ return null; }
   const heads = new Set(read.headers.filter(Boolean).map(maLooseHead));
+  const special = maSpecialLayout(read, heads, kind);
+  if(special) return special;
   let best = null;
   IMPORT_FORMATS.filter(f=>f.report === (kind === 'sip' ? 'SIP' : 'AUM')).forEach(fmt=>{
     const map = impMapFor(fmt.id);
@@ -1668,7 +1771,11 @@ async function maKnownLayout(file, kind){
       out.push(rec);
     }
   });
-  const bad = a.rows.filter(r=>!r.ok);
+  /* Blank lines, a second heading row and the Total / Count lines at the
+     foot are not rows anyone meant to import, and are not reported as such. */
+  const blankLine = r => r.errs.some(e=>/is required and this row is blank/.test(e))
+    && r.errs.every(e=>/is required and this row is blank|is already on row/.test(e));
+  const bad = a.rows.filter(r=>!r.ok && !blankLine(r));
   const notes = ['Read as the ' + best.fmt.label];
   if(read.asOn) notes.push('as on ' + fmtDate(read.asOn));
   (w.guessed || []).forEach(g=>notes.push('the column "' + g.header + '" was read as ' + g.forCol));
@@ -1870,7 +1977,8 @@ async function maReadFile(file, kind, password, strict){
   let rows = [], notes = [], status;
   if(format !== 'pdf' && !strict){
     const known = await maKnownLayout(file, kind);
-    if(known) return {buffer, format, rows: known.rows, notes: known.notes, status: known.rows.length ? 'Processed' : 'Nothing found', layout: known.fmt.id};
+    if(known) return {buffer, format, rows: known.rows, notes: known.notes, layout: known.fmt.id, detailsOnly: !!known.detailsOnly,
+      status: known.detailsOnly ? MA_DETAILS_ONLY : known.rows.length ? 'Processed' : 'Nothing found'};
   }
   try {
     const out = await MaExtract.extract(file, buffer.slice(0), format, password, kind, strict);
@@ -1914,6 +2022,7 @@ async function maUploadAll(){
       try {
         const r = await maReadFile(job.file, job.kind, password, !!job.auto);
         if(job.auto && !r.rows.length){ continue; }
+        if(r.layout === 'nj_group' || r.layout === 'branch_summary'){ results.push({job, refused: true, error: r.notes.join('; ')}); continue; }
         /* The client record first: details filled in, new clients added,
            so every row lands on a BOSS client before it is saved. */
         const cl = await maApplyClients(r.rows, {clientId: client ? client.id : '', clientName: MA.uploadType === 'client' ? clientName : '',
@@ -1922,6 +2031,7 @@ async function maUploadAll(){
         const nAssigned = Object.values(cl.assigned).reduce((n, l)=>n + l.length, 0);
         if(nAssigned){ r.notes.push(nAssigned + ' client' + (nAssigned === 1 ? '' : 's') + ' given an RM'); await maTellRms(cl.assigned, job.platform.name + ' upload'); }
         if(cl.updated) r.notes.push(cl.updated + ' client record' + (cl.updated === 1 ? '' : 's') + ' updated');
+        if(r.detailsOnly){ results.push({job, details: true, clients: cl, rowsCount: r.rows.length, note: r.notes[0] || ''}); continue; }
         const created = await maCreateUpload({uploadType: MA.uploadType, clientName, clientId: client ? client.id : '',
           platform: job.platform.name, product: job.platform.product, kind: job.kind, batchId, snapshotDate: MA.snapDate || null,
           file: job.file.name, fileType: job.file.type || '', format: r.format, size: job.file.size, sha256: await maSha256(r.buffer),
@@ -1945,7 +2055,7 @@ async function maUploadAll(){
   } finally {
     MA.busy = false;
   }
-  results.filter(r=>r.ok || r.skipped).forEach(r=>{ delete MA.picked[r.job.key]; });
+  results.filter(r=>r.ok || r.skipped || r.details || r.refused).forEach(r=>{ delete MA.picked[r.job.key]; });
   MA.msg = '';
   MA.result = {results, batchId, uploadType: MA.uploadType, clientName, clientId: client ? client.id : ''};
   render();
@@ -1953,9 +2063,11 @@ async function maUploadAll(){
 }
 function maShowResults(){
   const R = MA.result; if(!R) return;
-  const ok = R.results.filter(r=>r.ok), bad = R.results.filter(r=>r.error && !r.skipped), skipped = R.results.filter(r=>r.skipped);
-  const title = ok.length ? (bad.length ? 'Uploaded with some problems' : 'Uploaded successfully') : 'Nothing was uploaded';
+  const ok = R.results.filter(r=>r.ok), bad = R.results.filter(r=>r.error && !r.skipped && !r.refused), skipped = R.results.filter(r=>r.skipped);
+  const details = R.results.filter(r=>r.details), refused = R.results.filter(r=>r.refused);
+  const title = ok.length || details.length ? (bad.length ? 'Uploaded with some problems' : 'Uploaded successfully') : 'Nothing was uploaded';
   const sub = [ok.length ? ok.length + ' file' + (ok.length === 1 ? '' : 's') + ' saved' : '',
+    details.length ? details.length + ' read for client details' : '', refused.length ? refused.length + ' summary report' + (refused.length === 1 ? '' : 's') + ' not added' : '',
     skipped.length ? skipped.length + ' unchanged or already uploaded' : '', bad.length ? bad.length + ' failed' : '',
     R.uploadType === 'client' ? 'for ' + R.clientName : '(Platform Wise)'].filter(Boolean).join(' · ');
   const rowsHtml = R.results.map(r=>{
@@ -1971,7 +2083,12 @@ function maShowResults(){
         + (c.upload && /^Read as the /.test(c.upload.notes || '') ? ' · ' + c.upload.notes.split(';')[0].replace(/^Read as the /, 'read as the ') : '');
       res = `${head} <span class="small-note">${esc(detail)} · ${c.rowsCount} ${what}${R.uploadType === 'platform' ? ', ' + c.clientsCount + ' clients' : ''}${esc(same)}${esc(boss)}</span>`
         + (c.rowsCount ? '' : `<div class="small-note">No ${what} could be read from this file.</div>`);
-    } else if(r.skipped) res = `<span class="badge muted">${r.unchanged ? 'No change' : 'Skipped'}</span> <span class="small-note">${esc(r.error)}</span>`;
+    } else if(r.details){
+      const cl = r.clients || {created: [], updated: 0};
+      res = `<span class="badge info">Client details</span> <span class="small-note">${esc(r.note)}${cl.updated ? ' · ' + cl.updated + ' client record' + (cl.updated === 1 ? '' : 's') + ' updated' : ''}${
+        cl.created.length ? ' · ' + cl.created.length + ' new client' + (cl.created.length === 1 ? '' : 's') + ' added' : ''}</span>`;
+    } else if(r.refused) res = `<span class="badge warn">Not added</span> <span class="small-note">${esc(r.error)}</span>`;
+    else if(r.skipped) res = `<span class="badge muted">${r.unchanged ? 'No change' : 'Skipped'}</span> <span class="small-note">${esc(r.error)}</span>`;
     else res = `<span class="badge danger">Failed</span> <span class="small-note">${esc(r.error)}</span>`;
     return `<tr><td>${esc(r.job.platform.name)}</td><td>${esc(r.job.platform.product)}</td>
       <td>${MA_KIND_LABEL[r.job.kind]}${r.job.auto ? ' (read from the AUM file)' : ''}: ${esc(r.job.file.name)}</td><td>${res}</td></tr>`;

@@ -37014,7 +37014,9 @@ const MD_CUT_LABELS = {product:'Product', platform:'Platform', branch:'Branch', 
    --------------------------------------------------------------------- */
 const MD_SLEEVE_BUCKET = {Equity:'Equity', Debt:'Debt', Hybrid:'Hybrid', Physical:'Others',
   Structured:'Others', WealthPlus:'Others', Cash:'Others', Tax:'Others',
-  NonARequity:'Equity', Others:'Others'};
+  NonARequity:'Equity', Others:'Others',
+  Stocks:'Equity', IAP:'Equity', FD:'Debt', Bonds:'Debt', MutualFund:'Others', PMS:'Others',
+  AIF:'Others', PE:'Others', Ledger:'Others'};
 /* A report that gives one total and no breakdown is not guessed at. */
 const MD_NO_SPLIT = 'Not broken out';
 
@@ -66309,7 +66311,9 @@ const IMPORT_FORMATS = [
 {
   id:'finowise_sip', platform:'finowise', report:'SIP', label:'Finowise — SIP Report',
   note:'One row per SIP registration, with the folio and scheme it runs in.',
-  key:['folio','schemeName','platformClientId'],
+  /* One folio can run several SIPs in the same scheme — registered on
+     different dates, debited on different days. Each is its own SIP. */
+  key:['folio','schemeName','platformClientId','regDate','startDate','sipDate'],
   cols:[
     {src:'Investor Name',  to:'client.cmsName',  t:'text',  req:1, identity:'name'},
     {src:'PAN Number',     to:'client.pan',      t:'pan',          identity:'pan'},
@@ -66435,6 +66439,41 @@ const IMPORT_FORMATS = [
     {src:'Physical Assets',  to:'aum.s.Physical.current',  t:'money'},
     {src:'Others',           to:'aum.s.Others.current',    t:'money'},
     {src:'Total',            to:'aum.current',             t:'money'},
+  ],
+},
+{
+  id:'mo_aum', platform:'mo', report:'AUM', label:'Motilal Oswal — AUM Report',
+  note:'One row per client: the total and what it is made of — the cash (equity) segment, mutual funds, '
+     + 'FDs, bonds, PMS, real estate, AIF, PE, the advisory portfolio and the ledger balance.',
+  cols:[
+    {src:'Client Name',     to:'client.cmsName',         t:'text', req:1, identity:'name'},
+    {src:'Client Code',     to:'aum.platformClientCode', t:'text'},
+    {src:'Sub Broker Code', to:'aum.subBrokerCode',      t:'text'},
+    {src:'Total AUM',       to:'aum.current',            t:'money'},
+    {src:'Cash',            to:'aum.s.Stocks.current',   t:'money'},
+    {src:'Mutual Fund',     to:'aum.s.MutualFund.current', t:'money'},
+    {src:'FD',              to:'aum.s.FD.current',       t:'money'},
+    {src:'Bonds',           to:'aum.s.Bonds.current',    t:'money'},
+    {src:'PMS',             to:'aum.s.PMS.current',      t:'money'},
+    {src:'Real Estate',     to:'aum.s.Physical.current', t:'money'},
+    {src:'AIF',             to:'aum.s.AIF.current',      t:'money'},
+    {src:'PE',              to:'aum.s.PE.current',       t:'money'},
+    {src:'IAP',             to:'aum.s.IAP.current',      t:'money'},
+    {src:'ledger',          to:'aum.s.Ledger.current',   t:'money'},
+  ],
+},
+{
+  id:'omni_pms', platform:'omni', report:'AUM', label:'Omni Science — PMS Fund Activity Report',
+  note:'One row per client account: the strategy, when it started, and the closing value (AUM).',
+  cols:[
+    {src:'OFIN Code',          to:'aum.platformClientCode', t:'text'},
+    {src:'Client Name',        to:'client.cmsName',         t:'text', req:1, identity:'name'},
+    {src:'Scheme Name',        to:'aum.schemeName',         t:'text'},
+    {src:'Status',             to:'aum.status',             t:'text'},
+    {src:'Date of Investment', to:'aum.investmentDate',     t:'date'},
+    {src:'Distributor',        to:'aum.distributor',        t:'text'},
+    {src:'Opening NAV',        to:'aum.openingValue',       t:'money'},
+    {src:'Closing NAV',        to:'aum.current',            t:'money'},
   ],
 },
 ];
