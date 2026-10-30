@@ -1082,7 +1082,8 @@ async function maSyncCrm(opts){
     /* A second SIP in the same scheme and folio is its own SIP, told apart
        by when it started and the day it is debited. */
     if(freshS.some(x=>x.key === key)) key += '|' + (r.start_date || '') + '|' + (r.sip_day || '') + '|' + (r.sip_amount || '');
-    if(freshS.some(x=>x.key === key)) return;
+    // The same line twice in the file is still two lines: both are counted.
+    if(freshS.some(x=>x.key === key)){ let n = 2; while(freshS.some(x=>x.key === key + '#' + n)) n++; key += '#' + n; }
     const was = oldS.get(key);
     freshS.push(Object.assign({}, r.extra || {}, r.src ? {src: r.src} : {}, {id: was ? was.id : uid('PSP'), key, clientId: r._c.clientId, platform: r.platform, product: r.product,
       report: 'SIP', format: 'multiasset', source: 'multiasset', schemeName: r.security_name || '', folio: r.identifier || '',
@@ -1739,6 +1740,22 @@ async function maKnownLayout(file, kind){
   if(!a) return null;
   const SUMMARY = 'All schemes (investor total)';
   const out = [];
+  /* Nothing in the file is left out for being a duplicate (the firm asked
+     for its figures exactly as the platform gives them). A line repeating a
+     client already in the file is kept and added to them; a line whose name
+     fits two BOSS records goes to the older of the two, and says so. Only
+     blank lines and lines that cannot be read are left out. */
+  const SOFT = /is already on row|pick one by hand|two client records carry PAN|clients are called/;
+  const byIdAll = new Map((DB.clients || []).map(c=>[c.id, c]));
+  const softened = [];
+  a.rows.forEach(r=>{
+    if(r.ok || !r.errs.length || !r.errs.every(e=>SOFT.test(e))) return;
+    if(r.errs.some(e=>/is required and this row is blank/.test(e))) return;
+    const cands = ((r.match && r.match.candidates) || []).map(id=>byIdAll.get(id)).filter(Boolean)
+      .sort((x, y)=>String(x.createdAt || '').localeCompare(String(y.createdAt || '')));
+    if(!r.clientId && cands.length){ r.clientId = cands[0].id; softened.push((r.clientName || cands[0].cmsName) + ' \u2192 ' + (cands[0].cmsName || '') + ' (' + (typeof clientCode === 'function' ? clientCode(cands[0]) : cands[0].id) + ')'); }
+    r.ok = true; r.errs = [];
+  });
   a.rows.forEach(r=>{
     if(!r.ok) return;
     const name = r.clientName || impNormName(r.ident.name || r.client.cmsName || '');
@@ -1778,6 +1795,8 @@ async function maKnownLayout(file, kind){
     && r.errs.every(e=>/is required and this row is blank|is already on row/.test(e));
   const bad = a.rows.filter(r=>!r.ok && !blankLine(r));
   const notes = ['Read as the ' + best.fmt.label];
+  if(softened.length) notes.push(softened.length + ' line' + (softened.length === 1 ? '' : 's') + ' whose name fits more than one BOSS client went to the older record: '
+    + softened.slice(0, 6).join(', ') + (softened.length > 6 ? ' and ' + (softened.length - 6) + ' more' : ''));
   if(merged) notes.push(merged + ' row' + (merged === 1 ? '' : 's') + ' of an investor already in the file (same PAN, or same name and mobile) added to their total');
   if(read.asOn) notes.push('as on ' + fmtDate(read.asOn));
   (w.guessed || []).forEach(g=>notes.push('the column "' + g.header + '" was read as ' + g.forCol));
@@ -1897,7 +1916,16 @@ async function maApplyClients(rows, ctx){
       else {
         const m = impMatchClient({pan: g.pan || '', name: ctx.clientName || g.name, mobile: ctx.clientName ? '' : (g.details.mobile || '')}, live, idx);
         if(m.clientId) client = byId.get(m.clientId) || null;
-        else if(m.how !== 'new') continue;              // two clients share it: left for a person
+        else if(m.how === 'ambiguous'){
+          /* Two records fit. The money still counts: it goes to the older
+             record, and the note on the upload says so. */
+          const c0 = (m.candidates || []).map(id=>byId.get(id)).filter(Boolean)
+            .sort((x, y)=>String(x.createdAt || '').localeCompare(String(y.createdAt || '')))[0];
+          if(!c0) continue;
+          client = c0;
+          (res.toOlder = res.toOlder || []).push((ctx.clientName || g.name) + ' \u2192 ' + (typeof clientCode === 'function' ? clientCode(c0) : c0.id));
+        }
+        else if(m.how !== 'new') continue;
       }
       const fresh = !client;
       if(!client){

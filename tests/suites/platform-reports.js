@@ -66,6 +66,13 @@ const F = {
     ['ZZ SAME NAME', '', '', '', '', '100', '200', '1', '9000000002'],
     ['ZZ SAME NAME', '', '', '', '', '100', '300', '1', '9000000003'],
     ['ZZ SAME NAME', '', '', '', '', '100', '50', '1', '9000000002']])),
+  njdup: b64(xlsx('AUM Report', [
+    ['Investor Wise AUM Report ( As On 12-10-2026 )'],
+    ['Sr. No.', 'Partner/Employee', 'Group', 'Investor', 'AUM(₹)'],
+    ['', '', '', '', 'Equity', 'Debt', 'Hybrid', 'Physical Assets', 'Others', 'Total'],
+    ['1', 'ZZ P', 'ZZ G', 'ZZ REPEAT', '100', '0', '0', '0', '0', '100'],
+    ['2', 'ZZ P', 'ZZ G2', 'ZZ REPEAT', '500', '0', '0', '0', '0', '500'],
+    ['3', 'ZZ P', 'ZZ G3', 'ZZ TWIN PERSON', '1000', '0', '0', '0', '0', '1000']])),
   /* Two halves on the page, a holding whose name wraps under its figures,
      and the two figures under a single "Mkt Value %Assets" caption. */
   pdf: b64(pdfBytes([
@@ -125,8 +132,8 @@ suite(async t => {
 
   await t.step('several SIPs in one folio and scheme are each kept', async () => {
     const r = await read('fwsip', 'finowise-Active-SIP-Report.xlsx', 'sip');
-    if(r.layout !== 'finowise_sip' || r.rows.length !== 2) throw new Error(JSON.stringify(r).slice(0, 500));
-    return '2 SIPs of 3,000 kept, the exact repeat dropped';
+    if(r.layout !== 'finowise_sip' || r.rows.length !== 3) throw new Error(JSON.stringify(r).slice(0, 500));
+    return '3 SIP lines kept, the repeated line counted too';
   });
 
   await t.step('a two-panel PDF factsheet: wrapped names rejoined, figures not run together', async () => {
@@ -150,5 +157,21 @@ suite(async t => {
     if(r.sum !== 2050) throw new Error('read ' + r.sum + ' of 2,050: ' + r.notes);
     if(r.n !== 3 || r.same.join(',') !== '9000000002,9000000003') throw new Error(JSON.stringify(r));
     return '2,050 of 2,050; the owner\'s two lines added together; two ZZ SAME NAME clients told apart by mobile';
+  });
+  await t.step('nothing is dropped as a duplicate: a repeated line and a name two clients share both still count', async () => {
+    const r = await t.eval(async a => {
+      const mk = n => { const c = {id: uid('CMS'), cmsName: n, createdAt: new Date(Date.now() - (n.length * 1000)).toISOString()}; initState('CMS', c); DB.clients.push(c); return c; };
+      const older = mk('ZZ TWIN PERSON X'); older.cmsName = 'ZZ TWIN PERSON'; older.createdAt = '2020-01-01T00:00:00Z';
+      const newer = mk('ZZ TWIN PERSON'); newer.createdAt = '2025-01-01T00:00:00Z';
+      await save('clients');
+      const bin = atob(a); const u = new Uint8Array(bin.length); for(let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i);
+      const out = await maReadFile(new File([u], 'NJ_AUM_REPORT_INVESTOR_WISE.xlsx'), 'aum', '', false);
+      const res = await maApplyClients(out.rows, {create: true, overwrite: false, platform: 'NJ', file: 'n.xlsx'});
+      const twin = out.rows.find(h => /TWIN/.test(h.client_name));
+      return {sum: out.rows.reduce((n, h) => n + h.current_value, 0), twinTo: twin && twin.cid, older: older.id, notes: out.notes.join('; ')};
+    }, F.njdup);
+    if(r.sum !== 1600) throw new Error('read ' + r.sum + ' of 1,600: ' + r.notes);
+    if(r.twinTo !== r.older) throw new Error('the shared name did not go to the older record: ' + JSON.stringify(r));
+    return '1,600 of 1,600; the shared name went to the older record, and the note says so';
   });
 });
