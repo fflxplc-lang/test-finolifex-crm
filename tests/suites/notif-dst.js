@@ -147,4 +147,17 @@ suite(async t => {
     if(r.total !== 1) throw new Error('team filter Total ' + r.total);
     return 'all cards match their lists on All, My and Reassigned; a person filter narrows the Total';
   });
+  await t.step('a screen that breaks says so on the page instead of freezing', async () => {
+    t.expectConsole(/ZZ broken screen/);
+    const r = await t.eval(async () => {
+      setTimeout(() => { throw new Error('ZZ broken screen'); }, 0);
+      await new Promise(r => setTimeout(r, 100));
+      const el = document.getElementById('bossErr');
+      const txt = el ? el.textContent : '';
+      if(el) el.remove();
+      return txt;
+    });
+    if(!/Something went wrong/.test(r) || !/ZZ broken screen/.test(r)) throw new Error(r);
+    return 'shown with the message and a Reload button';
+  });
 });
