@@ -3581,8 +3581,13 @@ function bindPinToCity(){
    When the directory cannot be reached at all, a PIN still fills what
    the firm's own PIN-to-city list knows, and the person is told the
    rest has to be typed. */
+function pinLookupUrl(v){
+  return inPublicMode()
+    ? '/api/public/pincode/' + encodeURIComponent(v) + '?token=' + encodeURIComponent(publicToken)
+    : '/api/lookup/pincode/' + encodeURIComponent(v);
+}
 const LOOKUP_SPECS = {
-  pincode: {kind:'pin', len:6, url:v=>'/api/lookup/pincode/' + encodeURIComponent(v),
+  pincode: {kind:'pin', len:6, url:v=>pinLookupUrl(v),
     fill:r=>({city:r.city, state:r.state, country:r.country || 'India'}),
     found:r=>'Found: ' + [r.city, r.state, r.country || 'India'].filter(Boolean).join(', '),
     offline:v=>{ const row = pinRow(v); return row ? {city:row.label, state:row.state || '', country:'India'} : null; },
@@ -3596,10 +3601,10 @@ const LOOKUP_SPECS = {
      the IFSC fills the bank and branch and then holds them, because they
      are the bank's answer rather than somebody's typing — "Edit" under
      either box lets them be corrected where the directory is wrong. */
-  cmspincode: {kind:'pin', len:6, url:v=>'/api/lookup/pincode/' + encodeURIComponent(v),
-    fill:r=>({mailingCity:r.city, mailingState:r.state}),
-    found:r=>'Found: ' + [r.city, r.state].filter(Boolean).join(', '),
-    offline:v=>{ const row = pinRow(v); return row ? {mailingCity:row.label, mailingState:row.state || ''} : null; },
+  cmspincode: {kind:'pin', len:6, url:v=>pinLookupUrl(v),
+    fill:r=>({mailingCity:r.city, mailingState:r.state, mailingCountry:r.country || 'India'}),
+    found:r=>'Found: ' + [r.city, r.state, r.country || 'India'].filter(Boolean).join(', '),
+    offline:v=>{ const row = pinRow(v); return row ? {mailingCity:row.label, mailingState:row.state || '', mailingCountry:'India'} : null; },
     missing:'PIN code not found. Please check it, or fill in the city and state yourself.'},
   cmsifsc: {kind:'ifsc', len:11, url:v=>'/api/lookup/ifsc/' + encodeURIComponent(v),
     fill:r=>({bankName:r.bank, branchName:r.branch}), lock:['bankName','branchName'],
@@ -3689,9 +3694,111 @@ function bindFieldLookups(){
   if(window._lookupBound) return; window._lookupBound = true;
   document.addEventListener('input', e=>{
     const el = e.target;
-    if(!el || !el.getAttribute || !el.getAttribute('data-lookup')) return;
-    runFieldLookup(el);
+    if(!el || !el.getAttribute) return;
+    if(el.getAttribute('data-lookup')){ runFieldLookup(el); return; }
+    if(pinFieldLike(el)) runPinAutoFill(el);
   }, true);
+}
+/* EVERY PIN BOX FILLS ITS CITY, STATE AND COUNTRY.
+
+   The two boxes above were wired by hand. Every other form — the lead
+   form, a form the firm built in Forms, a client's own link, a row of a
+   table — has a PIN box too, and the firm asked that typing a PIN fill
+   the country, state and city wherever it is asked. So any box that is
+   a PIN (by its key — pin, pincode, zip, postal code — or by its label)
+   is looked up once it holds six digits, and the city, state and country
+   boxes next to it are filled: first the ones named like it (mailingZip
+   → mailingCity, mailingState, mailingCountry), otherwise the one box of
+   each kind in the same row, card or dialog. A dropdown takes the option
+   that names the same place. Boxes stay editable. */
+function pinNorm(s){ return String(s || '').toLowerCase().replace(/[^a-z0-9]/g, ''); }
+function pinLabelOf(el){
+  const wrap = el.closest ? el.closest('.field') : null;
+  const lab = wrap ? wrap.querySelector('label') : null;
+  return lab ? lab.textContent : '';
+}
+function pinFieldLike(el){
+  if(!el || el.tagName !== 'INPUT' || /^(hidden|checkbox|radio|date|email)$/i.test(el.type || '')) return false;
+  const sep = el.getAttribute('data-sep') || '';
+  if(/(^|\.)pin(code)?$/i.test(sep)) return true;
+  const id = pinNorm(el.id || el.name);
+  if(/(pincode|zipcode|zip|postalcode|postcode|pin)$/.test(id) && !/(spin|opin|lpin)$/.test(id)) return true;
+  return /^\s*(mailing\s+|permanent\s+|residential\s+|office\s+)?(pin|pin\s*code|pincode|postal\s*code|zip|zip\s*code)\s*\*?\s*$/i.test(pinLabelOf(el));
+}
+const PIN_TARGET_WORDS = {city:['city','district','town'], state:['state'], country:['country']};
+function pinTargets(el){
+  const out = {};
+  const sep = el.getAttribute('data-sep') || '';
+  if(sep){
+    const base = sep.replace(/pin(code)?$/i, '');
+    Object.entries(PIN_TARGET_WORDS).forEach(([kind, words])=>{
+      for(const w of words){ const n = document.querySelector('[data-sep="' + base + w + '"]'); if(n){ out[kind] = n; break; } }
+    });
+    return out;
+  }
+  const scope = (el.closest && (el.closest('tr') || el.closest('.modal, .public-card, .card, form, #content'))) || document;
+  const boxes = [...scope.querySelectorAll('input, select, textarea')]
+    .filter(b=>b !== el && (b.id || b.name) && !/^(checkbox|radio|button|submit)$/i.test(b.type || ''));
+  const m = String(el.id || el.name || '').match(/^(.*?)(pin_?code|zip_?code|zip|postal_?code|post_?code|pin)$/i);
+  const prefix = pinNorm(m ? m[1] : '');
+  Object.entries(PIN_TARGET_WORDS).forEach(([kind, words])=>{
+    for(const w of words){
+      const named = boxes.find(b=>pinNorm(b.id || b.name) === prefix + w);
+      if(named){ out[kind] = named; return; }
+    }
+    // One box of that kind in the same place, and only one — two would be a guess.
+    const rx = new RegExp('(' + words.join('|') + ')$');
+    const like = boxes.filter(b=>rx.test(pinNorm(b.id || b.name)) && !/(nri|birth|residence|tax)/.test(pinNorm(b.id || b.name)));
+    if(like.length === 1){ out[kind] = like[0]; return; }
+    const byLabel = boxes.filter(b=>new RegExp('^\\s*(mailing\\s+)?(' + words.join('|') + ')\\s*\\*?\\s*$', 'i').test(pinLabelOf(b)));
+    if(byLabel.length === 1) out[kind] = byLabel[0];
+  });
+  return out;
+}
+function pinPut(box, value){
+  if(!box || !value || box.disabled || box.readOnly) return false;
+  if(box.tagName === 'SELECT'){
+    const opt = [...box.options].find(o=>lookupOptionNorm(o.value) === lookupOptionNorm(value) || lookupOptionNorm(o.textContent) === lookupOptionNorm(value));
+    if(!opt) return false;
+    if(box.id && document.getElementById('pickbox_' + box.id) && typeof pickTake === 'function') pickTake(box.id, opt.value);
+    else box.value = opt.value;
+  } else if(box.id && document.getElementById('pickbox_' + box.id) && typeof pickTake === 'function'){
+    const row = ((window._pickRows || {})[box.id] || []).find(o=>lookupOptionNorm(o.label) === lookupOptionNorm(value));
+    if(!row) return false;
+    pickTake(box.id, row.value);
+  } else box.value = value;
+  if(box.getAttribute('data-sep') && typeof seOnInput === 'function') seOnInput(box);
+  box.dispatchEvent(new Event('change', {bubbles:true}));
+  if(typeof showFieldError === 'function') showFieldError(box, '');
+  return true;
+}
+async function pinLookupAnswer(pin){
+  const key = 'pin' + pin;
+  if(lookupCache[key]) return lookupCache[key];
+  let r;
+  try {
+    const url = inPublicMode()
+      ? '/api/public/pincode/' + encodeURIComponent(pin) + '?token=' + encodeURIComponent(publicToken)
+      : '/api/lookup/pincode/' + encodeURIComponent(pin);
+    const res = await fetch(url, {headers: apiHeaders()});
+    r = await res.json().catch(()=>({ok:false}));
+    if(r && (r.ok || r.notFound)) lookupCache[key] = r;
+  } catch(e){ r = {ok:false}; }
+  return r || {ok:false};
+}
+async function runPinAutoFill(el){
+  const pin = String(el.value || '').replace(/\s/g, '');
+  if(!/^[1-9][0-9]{5}$/.test(pin) || el._pinLookedUp === pin) return;
+  el._pinLookedUp = pin;
+  let r = await pinLookupAnswer(pin);
+  if(String(el.value || '').replace(/\s/g, '') !== pin) return;      // typed on since
+  if(!(r && r.ok)){
+    const row = pinRow(pin);
+    if(!row) return;
+    r = {city: row.label, state: row.state || '', country: 'India'};
+  }
+  const t = pinTargets(el);
+  pinPut(t.city, r.city); pinPut(t.state, r.state); pinPut(t.country, r.country || 'India');
 }
 /* ---------------------------------------------------------------------
    FIELD VALIDATION.
@@ -5182,7 +5289,7 @@ const LMS_FIELDS = [
   {k:'city',l:'City',t:'text'},
   {k:'branch',l:'Branch',t:'branch'},
   {k:'state',l:'State',t:'text'},
-  {k:'zipCode',l:'Zip Code',t:'text'},
+  {k:'zipCode',l:'Zip Code',t:'text',ph:'e.g., 560001',h:'Fill in a 6-digit PIN and the city, state and country fill themselves.'},
   {k:'country',l:'Country',t:'text'},
   {k:'productInterest',l:'Product Interest',t:'select',opts:['Mutual Funds','Life Insurance','Health Insurance','General Insurance','PMS','AIF','LAS','Other']},
   {k:'assignedTo',l:'Team Member (Assigned)',t:'team'},
@@ -5274,6 +5381,7 @@ const CMS_FIELDS = {
      h:'Fill this in and the city and state fill themselves.'},
     {k:'mailingCity',l:'Mailing City',t:'text',vk:'place',vm:'Please enter a valid city name.',ph:'e.g., Bengaluru'},
     {k:'mailingState',l:'Mailing State',t:'select',opts:INDIA_STATES_UTS,vm:'Please select a valid state.',ph:'e.g., Karnataka',strictOpts:1},
+    {k:'mailingCountry',l:'Mailing Country',t:'text',vk:'place',vm:'Please enter a valid country name.',ph:'e.g., India'},
     {k:'maritalStatus',l:'Marital Status',t:'select',opts:['Single','Married','Other']},
     {k:'profession',l:'Profession',t:'text',vk:'words',vm:'Please enter a valid profession.',ph:'e.g., Software Engineer',suggest:CMS_PROFESSIONS},
     {k:'annualIncome',l:'Annual Income (₹ INR)',t:'text',money:1,ph:'e.g., 600000',num:{min:0,max:10000000000},
@@ -12809,7 +12917,7 @@ function placeOrderPanelHtml(record, editable){
       <tbody>${lines.map((l,i)=>`<tr><td>${i+1}</td>
         <td>${esc(l.product||'—')}</td><td>${esc(l.platform||'—')}</td>
         <td>${esc(l.productCategory||l.fundCategory||'—')}</td><td>${esc(l.transactionType||'—')}</td>
-        <td>${esc(l.schemeName||'—')}</td>
+        <td>${esc(l.schemeName||'—')}${l.clientRemark ? `<div class="small-note" style="margin:0;color:var(--warn)">Client: \u201c${esc(l.clientRemark)}\u201d</div>` : ''}</td>
         <td style="text-align:right">${money(numVal(l.amount))}</td>
         <td>${esc(l.folioNumber||'—')}</td><td>${esc(l.status||'—')}</td><td>${esc(l.remark||'—')}</td></tr>`).join('')
         || `<tr><td colspan="10" class="small-note">No priced lines on the approved allocation.</td></tr>`}</tbody>
@@ -45740,7 +45848,9 @@ const ALLOC_LINE_KEYS = ['product','platform','productCategory','transactionType
   'schemeId','schemeName','amount','folioNumber','status','remark',
   /* A monthly line says when it starts and how long it runs for, and
      carries both wherever the line itself is carried. */
-  'sipStartDate','sipTenure'];
+  'sipStartDate','sipTenure',
+  /* What the client said about this one scheme on the consent page. */
+  'clientRemark'];
 function allocLineDefaults(seed){
   seed = seed || {};
   return {
@@ -46413,7 +46523,8 @@ function allocSummaryCardHtml(r){
       <div class="section-title" style="font-size:11px">Schemes (${allocSchemes(r).length})</div>
       ${allocSchemes(r).map(l=>`<div class="between alloc-sum-line">
         <span>${esc(l.schemeName)} ${l.fundCategory? `<span class="badge muted">${esc(l.fundCategory)}</span>`:''}</span>
-        <span>${money(numVal(l.amount))}${l.mode==='SIP'?'/mo':''}</span></div>`).join('')}
+        <span>${money(numVal(l.amount))}${l.mode==='SIP'?'/mo':''}</span></div>${l.clientRemark
+          ? `<div class="small-note" style="margin:0 0 6px;color:var(--warn)">Client: \u201c${esc(l.clientRemark)}\u201d</div>` : ''}`).join('')}
       ${r.conclusion? `<div class="section-title" style="font-size:11px">Summary</div>
         <div class="small-note" style="margin:0">${esc(r.conclusion)}</div>`:''}
       ${r.clientRemarks? `<div class="alloc-warn" style="margin-top:10px">Client remarks: ${esc(r.clientRemarks)}</div>`:''}
@@ -47456,6 +47567,31 @@ function riskConsentHtml(record, alloc, cm, pm, cmp, o){
              own page, with the plan; it cannot be given here on their behalf.</div>`}
   </div>`;
 }
+/* SCHEME-WISE CLIENT REMARKS.
+
+   The consent page asks for remarks against each scheme as well as on
+   the whole consent, so a client can say "fine, but not this fund" and
+   the adviser knows which line it is about. Each remark is saved on its
+   scheme line (clientRemark), so it travels with the line: onto the
+   adviser's view of the allocation, onto the execution table, and onto
+   the transaction the line becomes. Earlier remarks on a line are kept in
+   clientRemarkHistory when a revised plan is answered again. */
+function allocSchemeRemarkHtml(r, l, i, o){
+  if(o && o.askSchemeRemarks) return `<div class="field" style="margin-top:10px"><label>Your remarks on this scheme</label>
+      <textarea id="f_schRemark_${esc(r.id)}_${i}" data-scheme-remark="${i}" style="min-height:56px"
+        placeholder="Anything about ${esc(l.schemeName || 'this scheme')} you would like to ask, or see changed (optional)"></textarea></div>`;
+  return l.clientRemark ? `<div class="alloc-warn" style="margin-top:10px"><b>Client\u2019s remark on this scheme:</b> ${esc(l.clientRemark)}${
+    l.clientRemarkAt ? ` <span class="small-note">(${fmtDate(String(l.clientRemarkAt).slice(0,10))})</span>` : ''}</div>` : '';
+}
+function allocSchemeRemarksRead(r){
+  const out = [];
+  allocSchemes(r).forEach((l, i)=>{
+    const box = document.getElementById('f_schRemark_' + r.id + '_' + i);
+    const text = String((box || {}).value || '').trim();
+    if(text) out.push({i, lineId: l.id || '', scheme: l.schemeName || '', remark: text});
+  });
+  return out;
+}
 function allocationDocHtml(r, o){
   o = o || {};
   const c = Object.assign({}, allocRecipientRecord(r));
@@ -47524,6 +47660,7 @@ function allocationDocHtml(r, o){
         ${l.riskLevel? riskometerHtml(l.riskLevel, {small:true, label:'SCHEME RISKOMETER'}) : ''}
         ${l.fundObjective? `<div class="alloc-doc-kicker">FUND OBJECTIVE</div>
           <p class="alloc-doc-p">${esc(l.fundObjective)}</p>`:''}
+        ${allocSchemeRemarkHtml(r, l, i, o)}
       </div>`).join('')}
       ${/* The portfolio reading moved up into the Risk Profile section, where
            it is read beside the client's own rather than forty lines away
@@ -64000,7 +64137,7 @@ function allocConsentDocHtml(r, sub, n, many, done, yes){
   if(done) return head;
   return head + `
     <div class="alloc-consent-section">
-      ${allocationDocHtml(r, {noDisclaimer:true, askRiskConsent:true})}
+      ${allocationDocHtml(r, {noDisclaimer:true, askRiskConsent:true, askSchemeRemarks:true})}
       <div class="field" style="margin-top:16px"><label>Remarks</label>
         <textarea id="f_allocRemarks_${esc(r.id)}" placeholder="What would you like to know, or see changed?"></textarea>
         <div class="small-note" style="margin-top:4px">Needed if you are asking for more information — it is what your relationship manager works from.</div></div>
@@ -64056,14 +64193,23 @@ async function submitAllocationDecision(token, approved, allocationId){
   const box = document.getElementById('f_allocRemarks_' + r.id)
            || document.getElementById('f_allocRemarks');
   const remarks = (box || {}).value || '';
-  if(!approved && !remarks.trim()){
+  const schemeRemarks = allocSchemeRemarksRead(r);
+  if(!approved && !remarks.trim() && !schemeRemarks.length){
     alert('Please tell us what you would like to know, so your relationship manager can answer it.');
     return;
   }
   const sub = {id:uid('DOCSUB'), token, type:'ALLOC', allocationId:r.id, recordId:r.clientId,
-    accepted:approved, remarks, submittedAt:new Date().toISOString(),
+    accepted:approved, remarks, schemeRemarks, submittedAt:new Date().toISOString(),
     disclosureAckAt: r.disclosureAckAt || null, disclosureAckPoints: r.disclosureAckPoints || null};
   DB.docSubmissions.push(sub);
+  schemeRemarks.forEach(x=>{
+    const l = allocSchemes(r)[x.i]; if(!l) return;
+    if(l.clientRemark){
+      l.clientRemarkHistory = l.clientRemarkHistory || [];
+      l.clientRemarkHistory.push({at: l.clientRemarkAt || '', remark: l.clientRemark});
+    }
+    l.clientRemark = x.remark; l.clientRemarkAt = sub.submittedAt;
+  });
   r.clientDecision = approved ? 'Approved' : 'Query';
   r.clientRemarks = remarks;
   if(planAckRequired()){
@@ -64118,7 +64264,8 @@ async function submitAllocationDecision(token, approved, allocationId){
     await onAllocationAccepted(r);
     if(closeLinkIfAllAnswered(link)) await save('docLinks');
   } else {
-    await onAllocationDeclined(r, link, remarks);
+    const perScheme = schemeRemarks.map(x=>(x.scheme || ('Scheme ' + (x.i + 1))) + ': ' + x.remark).join('\n');
+    await onAllocationDeclined(r, link, [remarks.trim(), perScheme].filter(Boolean).join('\n'));
   }
   renderAllocationApprovalPage(link, sub);
 }
@@ -64212,6 +64359,7 @@ async function allocRaiseTransactions(r){
          plan it came from. */
       sipStartDate: l.sipStartDate || '', sipTenure: l.sipTenure || '',
       folioNumber: l.folioNumber || '', remarks: l.remark || '',
+      clientRemark: l.clientRemark || '',
       status: txnStartStatus(), initiatedDate:new Date().toISOString().slice(0,10),
       sourceModule:'Asset Allocation',
       /* The fifth link: a transaction can name the blueprint whose

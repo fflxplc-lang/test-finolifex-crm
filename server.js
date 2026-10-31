@@ -1826,7 +1826,7 @@ app.post('/api/me/2fa/verify', checkApiKey, (req, res) => {
   res.json({ ok: true, enabled: ch.purpose === 'enable' });
 });
 
-app.get('/api/lookup/pincode/:pin', checkApiKey, (req, res) => {
+function pinLookup(req, res) {
   const pin = String(req.params.pin || '');
   if (!/^[1-9][0-9]{5}$/.test(pin)) return res.status(400).json({ ok: false, message: 'A PIN code is 6 digits.' });
   cachedLookup('pin:' + pin, async () => {
@@ -1839,6 +1839,15 @@ app.get('/api/lookup/pincode/:pin', checkApiKey, (req, res) => {
     return { ok: true, pin, city: first.District || first.Block || '', state: first.State || '',
       country: first.Country || 'India', offices: offices.slice(0, 20).map((o) => o && o.Name).filter(Boolean) };
   }, res);
+}
+app.get('/api/lookup/pincode/:pin', checkApiKey, pinLookup);
+/* A client filling their own form types a PIN too, and their city, state
+   and country fill the same way. The link's token is the permission: a
+   PIN is public information, but the lookup is not offered to anyone
+   who does not hold a live link. */
+app.get('/api/public/pincode/:pin', (req, res) => {
+  if (!publicScope(String(req.query.token || ''))) return res.status(404).json({ ok: false, message: 'This link is not valid any more.' });
+  pinLookup(req, res);
 });
 app.get('/api/lookup/ifsc/:code', checkApiKey, (req, res) => {
   const code = String(req.params.code || '').toUpperCase();
