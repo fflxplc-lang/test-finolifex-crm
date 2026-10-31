@@ -10959,14 +10959,18 @@ function blueprintWidget(module, record, opts){
           const alreadySent = t.id==='fwd_dataGatheringSent' && dgStatus(record).bothSent;
           const waitSenior = awaitingSenior && t.id==='fwd_readyForSecondMeeting';
           const waitClientPlan = awaitingClientPlan && t.id==='fwd_dbtUpdated';
+          const execGap = (module==='LMS' && cur==='thirdMeetingDone' && t.id==='fwd_secondMeetingMomSent')
+            ? execPlanGap(record) : '';
+          const waitExec = !!execGap;
           const wait = waitFq || waitIseq || waitOrder || waitCif || waitScore
-                    || waitInput || waitSenior || waitClientPlan || alreadySent;
+                    || waitInput || waitSenior || waitClientPlan || alreadySent || waitExec;
           const why = alreadySent ? (function(){
                          const st = dgStatus(record);
                          return 'Already sent on ' + fmtDate(st.sheetSentAt)
                               + (st.waitingFor.length ? ' — still waiting for ' + st.waitingFor.join(' and ')
                                                       : ' — both are back');
                        })()
+                     : waitExec ? execGap
                      : waitInput ? 'The Data Gathering Form has not been submitted yet — fill it in, or send it to the client, and submit it from the panel above'
                      : waitSenior ? 'This plan is the reporting manager\u2019s to approve, not yours'
                      : waitClientPlan ? 'The minutes and the Final Execution Plan are with the client — the DBT is written the moment they approve them, and the stage moves on by itself'
@@ -10980,7 +10984,8 @@ function blueprintWidget(module, record, opts){
                          ? 'The risk band moved from ' + (iseqMove.from||'—') + ' to ' + (iseqMove.to||'—') + ', so the portfolio has to be looked at'
                          : 'The risk band has not moved, so there is nothing to re-plan')
                                : '';
-          const waitLabel = waitInput ? 'Awaiting the Form…'
+          const waitLabel = waitExec ? (execPlanState(record).submitted ? 'Review the Allocation First…' : 'Submit the Execution Plan First…')
+                     : waitInput ? 'Awaiting the Form…'
                      : waitSenior ? 'With the Reporting Manager…'
                      : waitClientPlan ? 'Awaiting the Client\u2019s Consent…'
                      : waitFq ? 'Awaiting the FQ Result…'
@@ -11165,6 +11170,7 @@ const PLAN_OWNED_STAGES = new Set(['planPrepared','readyForSecondMeeting']);
 function stageIsPlanOwned(module, cur){ return module==='LMS' && PLAN_OWNED_STAGES.has(cur); }
 function stagePanelHtml(module, record, cur, editable){
   if(module==='LMS' && cur==='readyToQualify') return qualifyFqPanelHtml(record, editable);
+  if(module==='LMS' && cur==='thirdMeetingDone') return execPlanPanelHtml(record, editable);
   // That meeting is where the data is taken, so a sheet blueprint that
   // wants it has the sheet reachable from that meeting — the plan is not
   // prepared until after.
@@ -11469,6 +11475,14 @@ async function planModifyAfterDecline(leadId){
     modifiedFor: old.clientRemarks || '', consentStatus: 'Modification in Progress'});
   lead.planRounds = planRoundsOf(lead).concat([round]);
   old.consentStatus = 'Consent Declined';
+  /* The allocation laid down from the Execution Plan moves to the new
+     version with the plan, back with the RM to revise and review again. */
+  const execSheet = allocationForPlanRound(lead.id, old.n);
+  if(execSheet && execSheet.fromExecutionPlan){
+    execSheet.planRound = round.n;
+    delete execSheet.rmReviewedAt; delete execSheet.rmReviewedBy;
+    await save('recommendations');
+  }
   await save('leads');
   await logAudit('LMS', lead.id, 'Plan Modification Started', [
     {field:'Declined version', oldValue:'', newValue: String(old.n)}, {field:'New version', oldValue:'', newValue: String(round.n)},
@@ -11480,6 +11494,9 @@ async function planResubmitForConsent(leadId){
   const round = latestPlanRound(lead);
   if(!round || !round.revisionOf || round.docToken){ alert('There is no modified version waiting to be sent.'); return; }
   if(!round.output){ alert('Prepare the modified plan first.'); return; }
+  const execSt = execPlanState(lead);
+  if(execSt.sheet && execSt.sheet.fromExecutionPlan && !execSt.reviewed){
+    alert('Review the Asset Allocation and mark it reviewed first — it goes to the client with the revised plan.'); return; }
   if(!lead.email){ alert('There is no email address on this lead to send it to.'); return; }
   if(!confirm('Send version ' + round.n + ' to ' + lead.email + ' for consent?')) return;
   round.docToken = await createDocLink(lead.id, 'BLUEPRINT', {planRound: round.n});
@@ -11522,6 +11539,15 @@ function awaitingClientPlanPanelHtml(record, editable){
     <div class="small-note" style="margin:0">Version ${round.n} is the revision of version ${round.revisionOf}${round.modifiedFor ? ', for: “' + esc(round.modifiedFor) + '”' : ''}.
       Change the plan, then resubmit it — the client gets it on a new link.</div>
     ${planConsentHistoryHtml(record)}
+    ${(function(){
+      const st = execPlanState(record);
+      if(!st.sheet || !st.sheet.fromExecutionPlan) return '';
+      return `<div class="small-note" style="margin:8px 0 0">Asset Allocation ${esc(st.sheet.id)} \u2014 ${esc(allocTotalLabel(st.sheet))}:
+        ${st.reviewed ? '<span style="color:var(--ok)">\u2713 reviewed</span>' : '<b>review it again before resubmitting</b>'}.</div>`
+        + (editable ? `<div class="row" style="gap:8px;margin-top:6px">
+          <button class="btn sm" onclick="openRecommendationForm('${esc(st.sheet.id)}')">Review / Edit Asset Allocation</button>
+          ${st.reviewed ? '' : `<button class="btn sm" onclick="markExecAllocReviewed('${esc(record.id)}')">Mark Allocation Reviewed</button>`}</div>` : '');
+    })()}
     ${editable ? `<div class="row" style="gap:8px;margin-top:10px">
       <button class="btn sm ghost" onclick="openPlanBlueprint('${esc(record.id)}')">Open the plan</button>
       <button class="btn sm primary" onclick="planResubmitForConsent('${esc(record.id)}')">Resubmit for Consent</button></div>` : ''}
@@ -45775,10 +45801,154 @@ function allocStatusForPlan(round){
   if(round.clientDecision==='Modify' || round.clientDecision==='Query') return 'Client Query';
   return round.docToken ? 'Sent to Client' : 'Draft';
 }
+/* =====================================================================
+   AFTER THE BLUEPRINT PRESENTATION MEETING: EXECUTION PLAN → DBT →
+   ASSET ALLOCATION → RM REVIEW → CONSENT → TRANSACTION TRACKER.
+
+   The firm's order, one stage at a time, each waiting for the one before:
+
+   1. The senior approves the plan; the Blueprint Presentation Meeting is
+      held with the client.
+   2. The RM submits the Execution Plan: the amount the client agreed to
+      in that meeting.
+   3. Submitting it writes the DBT at once, at that amount, waiting on the
+      client's consent ("Pending from Client Consent").
+   4. …and lays down the first Asset Allocation from the approved plan and
+      the agreed amount.
+   5. The RM reviews that allocation, changes what needs changing, and
+      marks it reviewed.
+   6. Only then do the Minutes of Meeting go — carrying the Execution Plan
+      and the reviewed Asset Allocation, on the client's one consent link.
+   7. Consent raises a transaction for every allocation line in the
+      Transaction Tracker, under the client's own record. A request for
+      changes goes back to the RM, who revises and sends again, as many
+      times as it takes; nothing reaches the tracker before a yes.
+   ===================================================================== */
+function execPlanState(lead){
+  const round = lead ? (approvedPlanRound(lead) || latestPlanRound(lead)) : null;
+  const sheet = round ? allocationForPlanRound(lead.id, round.n) : null;
+  const dbt = lead ? DB.businessEntries.find(b=>!b.deletedAt && b.leadId===lead.id && b.sourceModule==='LMS') : null;
+  return {round, sheet, dbt, submitted: !!(round && round.executionPlan && round.executionPlan.submittedAt),
+          amount: round && round.executionPlan ? numVal(round.executionPlan.amount) : 0,
+          reviewed: !!(sheet && sheet.rmReviewedAt)};
+}
+/* Why the minutes cannot go yet, or '' when they can. A lead with no
+   prepared plan (carried over from before the blueprints) is not held. */
+function execPlanGap(lead){
+  const st = execPlanState(lead);
+  if(!st.round || !st.round.output) return '';
+  if(!st.submitted) return 'Submit the Execution Plan first — the amount the client agreed in the Blueprint Presentation Meeting. It writes the DBT and lays down the Asset Allocation.';
+  if(!st.reviewed) return 'Review the Asset Allocation and mark it reviewed — the minutes carry it to the client for consent.';
+  return '';
+}
+function execPlanPanelHtml(lead, editable){
+  const st = execPlanState(lead);
+  if(!st.round || !st.round.output) return '';
+  const id = esc(lead.id);
+  const tick = (ok, text) => `<div style="margin:3px 0">${ok ? '<span style="color:var(--ok)">\u2713</span>' : '<span style="color:var(--muted)">\u25cb</span>'} ${text}</div>`;
+  return `<div class="stage-panel" id="execPlanPanel">
+    <div class="stage-panel-head"><b>Execution Plan, DBT and Asset Allocation</b>
+      ${st.submitted ? `<span class="badge ok">Agreed ${money(st.amount)}</span>` : `<span class="badge warn">Execution Plan to submit</span>`}</div>
+    ${tick(st.submitted, st.submitted ? 'Execution Plan submitted — ' + money(st.amount) + ' agreed' : 'Execution Plan — the amount agreed in the meeting')}
+    ${tick(!!(st.submitted && st.dbt), st.submitted && st.dbt ? 'DBT ' + esc(st.dbt.id) + ' written at ' + money(numVal(st.dbt.amount)) + ' \u00b7 ' + esc(st.dbt.status || '') : 'DBT — written when the Execution Plan is submitted')}
+    ${tick(!!(st.submitted && st.sheet), st.submitted && st.sheet ? 'Asset Allocation ' + esc(st.sheet.id) + ' \u2014 ' + esc(allocTotalLabel(st.sheet)) : 'Asset Allocation — laid down from the plan when the Execution Plan is submitted')}
+    ${tick(st.reviewed, st.reviewed ? 'Reviewed by ' + esc(teamName(st.sheet.rmReviewedBy)) + ' on ' + fmtDate(String(st.sheet.rmReviewedAt).slice(0,10)) : 'RM review of the Asset Allocation')}
+    ${tick(false, 'Minutes of Meeting, Execution Plan and Asset Allocation to the client for consent')}
+    ${editable ? `<div class="row" style="gap:8px;margin-top:10px;flex-wrap:wrap">
+      <button class="btn sm ${st.submitted ? '' : 'primary'}" onclick="openExecPlanModal('${id}')">${st.submitted ? 'Change the Execution Plan' : 'Submit Execution Plan'}</button>
+      ${st.submitted && st.sheet ? `<button class="btn sm" onclick="openRecommendationForm('${esc(st.sheet.id)}')">Review / Edit Asset Allocation</button>
+        ${st.reviewed ? '' : `<button class="btn sm primary" onclick="markExecAllocReviewed('${id}')">Mark Allocation Reviewed</button>`}` : ''}
+    </div>` : ''}
+  </div>`;
+}
+function openExecPlanModal(leadId){
+  const lead = DB.leads.find(l=>l.id===leadId); if(!lead) return;
+  const st = execPlanState(lead);
+  if(!st.round){ alert('There is no approved plan on this lead yet.'); return; }
+  const suggested = st.amount || planAllocationTotal(st.round) || numVal((st.round.allocation||{}).allocatable) || '';
+  openModal('Execution Plan — ' + leadName(lead.id), `
+    <p style="color:var(--muted);font-size:13px;margin-top:0">What ${esc(leadName(lead.id))} agreed to in the Blueprint
+      Presentation Meeting. Submitting it writes the DBT at this amount, waiting on the client\u2019s consent, and lays down
+      the first Asset Allocation from the approved plan for you to review.</p>
+    <div class="field"><label>Amount agreed by the client (\u20b9) <span class="req">*</span></label>
+      <input type="number" step="any" id="f_execAmount" class="num-in" value="${esc(String(suggested ? Math.round(suggested) : ''))}"></div>
+    <div class="field"><label>Notes from the meeting</label>
+      <textarea id="f_execNotes" placeholder="Anything agreed that the allocation should reflect">${esc((st.round.executionPlan||{}).notes || '')}</textarea></div>`,
+    `<button class="btn" onclick="closeModal()">Cancel</button>
+     <button class="btn primary" onclick="submitExecPlan('${esc(lead.id)}')">Submit Execution Plan</button>`);
+}
+async function submitExecPlan(leadId, amountArg, notesArg){
+  const lead = DB.leads.find(l=>l.id===leadId); if(!lead) return null;
+  const st = execPlanState(lead);
+  if(!st.round){ alert('There is no approved plan on this lead yet.'); return null; }
+  const amount = numVal(amountArg !== undefined ? amountArg : (document.getElementById('f_execAmount')||{}).value);
+  const notes = notesArg !== undefined ? String(notesArg) : String((document.getElementById('f_execNotes')||{}).value || '');
+  if(!(amount > 0)){ alert('Enter the amount the client agreed to.'); return null; }
+  const round = st.round;
+  const before = round.executionPlan ? numVal(round.executionPlan.amount) : 0;
+  round.executionPlan = {amount: String(Math.round(amount)), notes, submittedAt: new Date().toISOString(), by: currentUser};
+  lead.totalExpected = String(Math.round(amount));
+  await save('leads');
+  // 3. the DBT, at the agreed amount, waiting on consent
+  const entry = await upsertLeadDbtEntry(lead, approachFormLabel(round.type) + ' version ' + round.n
+    + ' — Execution Plan agreed with ' + leadName(lead.id) + ' at ' + money(amount));
+  if(entry){
+    entry.amount = String(Math.round(amount));
+    entry.planRound = round.n; entry.planType = round.type;
+    if(!entry.status || entry.status === 'Not Started') entry.status = dbtConsentStatus();
+    await save('businessEntries');
+  }
+  // 4. the first Asset Allocation. A changed amount after the review lays
+  // it down again, because what was reviewed is no longer what was agreed.
+  const sheet = allocationForPlanRound(lead.id, round.n);
+  if(sheet && before && before !== Math.round(amount)){ delete sheet.rmReviewedAt; delete sheet.rmReviewedBy; }
+  const rec = await ensureAllocationFromPlan(lead, round);
+  if(rec){ rec.fromExecutionPlan = true; if(entry) rec.dbtEntryId = entry.id; await save('recommendations'); }
+  await logAudit('LMS', lead.id, 'Execution Plan Submitted', [
+    {field:'Amount agreed', oldValue: before ? money(before) : '', newValue: money(amount)},
+    {field:'DBT', oldValue:'', newValue: entry ? entry.id : '—'},
+    {field:'Asset Allocation', oldValue:'', newValue: rec ? rec.id : '—'}]);
+  await notifyUser(lead.assignedTo, {title: 'Review the Asset Allocation for ' + leadName(lead.id),
+    body: 'The Execution Plan (' + money(amount) + ') wrote the DBT and laid down the allocation. Review it, then send the minutes for consent.',
+    view:'lms', arg: lead.id, kind:'exec-plan'});
+  closeModal();
+  if(typeof render === 'function' && !inPublicMode()) render();
+  return {entry, rec};
+}
+async function markExecAllocReviewed(leadId){
+  const lead = DB.leads.find(l=>l.id===leadId); if(!lead) return;
+  const st = execPlanState(lead);
+  if(!st.sheet){ alert('Submit the Execution Plan first — it lays down the allocation to review.'); return; }
+  if(!allocSchemes(st.sheet).some(l=>numVal(l.amount) > 0)){ alert('The allocation has no amounts on it yet.'); return; }
+  st.sheet.rmReviewedAt = new Date().toISOString();
+  st.sheet.rmReviewedBy = currentUser;
+  await save('recommendations');
+  await logAudit('Recommendations', st.sheet.id, 'Asset Allocation Reviewed by the RM',
+    [{field:'Total', oldValue:'', newValue: allocTotalLabel(st.sheet)}]);
+  render();
+}
 async function ensureAllocationFromPlan(lead, round){
   if(!lead || !round) return null;
-  const lines = ((round.allocation||{}).lines||[]).filter(l=>Number(l.amount)>0);
+  let lines = ((round.allocation||{}).lines||[]).filter(l=>Number(l.amount)>0);
+  /* A blueprint whose plan names no lines still has an agreed amount once
+     the Execution Plan is in: the allocation starts as one line of it, for
+     the RM to split into schemes. */
+  if(!lines.length && round.executionPlan && numVal(round.executionPlan.amount) > 0)
+    lines = [{label: approachFormLabel(round.type), amount: numVal(round.executionPlan.amount), transactionType:'Purchase'}];
   if(!lines.length) return null;
+  /* The plan's lines in the proportions the plan gave them, scaled to the
+     amount the client agreed on the Execution Plan — the last line takes
+     the rupee left over from rounding, so the sheet adds up exactly. */
+  const agreed = round.executionPlan ? Math.round(numVal(round.executionPlan.amount)) : 0;
+  const planned = lines.reduce((x, l)=>x + (Number(l.amount)||0), 0);
+  if(agreed > 0 && planned > 0 && Math.round(planned) !== agreed){
+    let left = agreed;
+    lines = lines.map((l, i)=>{
+      const amt = i === lines.length - 1 ? left : Math.round((Number(l.amount)||0) * agreed / planned);
+      left -= amt;
+      return Object.assign({}, l, {amount: amt});
+    });
+  }
   const schemes = lines.map(l=>Object.assign(newAllocSchemeLine({
       product: l.product, platform: l.platform, productCategory: l.productCategory,
       transactionType: l.transactionType, status: l.status}), {
@@ -45797,8 +45967,13 @@ async function ensureAllocationFromPlan(lead, round){
     validityDays: String(cfg('alloc.validityDays')||30),
     attachments: [], createdAt: new Date().toISOString(),
     createdBy: lead.assignedTo || currentUser};
-  rec.investmentMode = (anySip && anyLump) ? 'Lumpsum + SIP' : anySip ? 'SIP' : 'Lumpsum';
-  rec.schemes = schemes;
+  /* What the RM reviewed is what the client consented to, so laying the
+     allocation down again from the plan (when the consent comes back) must
+     not reach back over it. */
+  if(!(existing && existing.rmReviewedAt)){
+    rec.investmentMode = (anySip && anyLump) ? 'Lumpsum + SIP' : anySip ? 'SIP' : 'Lumpsum';
+    rec.schemes = schemes;
+  }
   // The plan's link is the allocation's link: the client is never asked twice.
   if(round.docToken) rec.clientLinkToken = round.docToken;
   rec.status = allocStatusForPlan(round);
@@ -63854,6 +64029,16 @@ function renderBlueprintApprovalPage(link, existingSub){
         ${planSectionHeadHtml(1, 'Final Execution Plan',
           'What we agreed, event by event and goal by goal — the amounts, and the schemes, funds, products and platforms each one is going into.')}
         ${planExecutionHtml(lead, round, {readOnly:true})}
+        ${(function(){
+          /* The Asset Allocation the RM reviewed after the Execution Plan
+             rides on the same consent: the client reads it here, can say
+             something about each scheme, and their one answer covers it. */
+          const sheet = allocationForPlanRound(lead.id, round.n);
+          if(!sheet || !sheet.fromExecutionPlan || !sheet.rmReviewedAt) return '';
+          return `<div class="section-title" style="margin-top:18px">Your Asset Allocation${round.executionPlan
+              ? ` <span class="small-note">agreed at ${money(numVal(round.executionPlan.amount))}</span>` : ''}</div>
+            <div id="bpAllocDoc">${allocationDocHtml(sheet, {noDisclaimer:true, askSchemeRemarks:true})}</div>`;
+        })()}
 
         ${planSectionHeadHtml(2, 'Disclosure',
           'What we are obliged to tell you about this plan before you approve it.')}
@@ -63938,10 +64123,20 @@ async function submitBlueprintDecision(token, approved, remarksArg){
   // The module's copy of this allocation follows the plan's answer rather
   // than asking for one of its own.
   const sheet = allocationForPlanRound(lead.id, round.n);
+  const schemeRemarks = sheet && inPublicMode() ? allocSchemeRemarksRead(sheet) : [];
   if(sheet){
     sheet.status = allocStatusForPlan(round);
     if(approved) sheet.acceptedAt = round.clientAt;
     sheet.clientDecision = approved ? 'Approved' : 'Query';
+    schemeRemarks.forEach(x=>{
+      const l = allocSchemes(sheet)[x.i]; if(!l) return;
+      if(l.clientRemark){ l.clientRemarkHistory = l.clientRemarkHistory || []; l.clientRemarkHistory.push({at: l.clientRemarkAt || '', remark: l.clientRemark}); }
+      l.clientRemark = x.remark; l.clientRemarkAt = round.clientAt;
+    });
+    if(schemeRemarks.length) sub.schemeRemarks = schemeRemarks;
+    /* Asking for changes sends the reviewed allocation back to the RM:
+       it is reviewed again before the next round goes out. */
+    if(!approved && sheet.fromExecutionPlan){ delete sheet.rmReviewedAt; delete sheet.rmReviewedBy; }
     await save('recommendations');
   }
   // The client is an approver too, and the same trail records them: their name
@@ -63979,6 +64174,13 @@ async function submitBlueprintDecision(token, approved, remarksArg){
   // The business is written down once both halves are in: the meeting has
   // been written up, and the client has said yes.
   if(minutesGone) await dbtFromMinutes(lead.id);
+  /* Consent to an allocation laid down from the Execution Plan goes
+     straight to the Transaction Tracker: a transaction for every line,
+     under the lead (and the client it becomes). */
+  if(approved && sheet && sheet.fromExecutionPlan){
+    try { await allocRaiseTransactions(sheet); }
+    catch(e){ console.error('raising transactions from the consent', e); }
+  }
   if(!approved) await movePlanBackForChanges(lead);
   // On the client's own link this redraws the page as their answer; inside the
   // CRM (an adviser recording an answer given on the phone) it must not.
@@ -64009,7 +64211,9 @@ async function planRestartFromInput(leadId){
 async function createDbtFromApprovedPlan(lead){
   const round = approvedPlanRound(lead) || latestPlanRound(lead);
   if(!round || !round.output) return null;
-  const total = planAllocationTotal(round) || Number(round.allocation && round.allocation.allocatable) || 0;
+  // The amount the client agreed on the Execution Plan, where there is one.
+  const total = (round.executionPlan && numVal(round.executionPlan.amount))
+    || planAllocationTotal(round) || Number(round.allocation && round.allocation.allocatable) || 0;
   lead.totalExpected = String(Math.round(total));
   // The goal first, then what it is going into. A goal split across two
   // schemes used to read as its category twice over — "STC, STC" — which
