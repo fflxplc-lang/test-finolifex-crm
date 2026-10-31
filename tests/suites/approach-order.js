@@ -3,7 +3,7 @@
    The Investment Approach modal offers four blueprints and selects
    none — which one a lead goes on is the adviser's call, made in the
    room. The order it offers them in is the firm's own, and they asked
-   for Goal Based Planning first.
+   for Goal Based Investment first.
 
    Guarded because the order is the kind of thing a later edit
    reshuffles without noticing, and because there are two lists behind
@@ -12,7 +12,7 @@
    and a change to either alone is caught here. */
 const {suite} = require('../lib/harness');
 
-const WANT = ['Goal Based Planning', 'FSL — Financial Success Ladder',
+const WANT = ['Goal Based Investment', 'FSL — Financial Success Ladder',
               'Comprehensive Freedom Blueprint (7 Events)', 'GAB — Golden Age Blueprint'];
 
 suite(async t => {

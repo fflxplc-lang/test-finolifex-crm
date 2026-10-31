@@ -1,6 +1,6 @@
 /* THE FACTS THE FIRM ALREADY HOLDS REACH THE FORM THE PLAN IS WORKED FROM.
 
-   Goal Based Planning has no workbook. Its Section A — the date, the
+   Goal Based Investment has no workbook. Its Section A — the date, the
    name, the mobile, the e-mail, the date of birth, the city — is
    marked clientSkip, because the client's own page asks those same
    facts once at the top, under "Your details". A blueprint that has a

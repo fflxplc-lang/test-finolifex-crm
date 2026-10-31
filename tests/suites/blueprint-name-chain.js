@@ -4,7 +4,7 @@
    it. Until now only the DBT knew: the sheet it opened, the transaction
    that sheet raised and the page the client consented on had all
    forgotten, so an adviser looking at an execution record could not say
-   whether it came out of FSL, GAB, 7 Events or Goal Based Planning.
+   whether it came out of FSL, GAB, 7 Events or Goal Based Investment.
 
    One value, carried rather than re-derived — planType, from the DBT
    onto the allocation and from the allocation onto the transaction — so

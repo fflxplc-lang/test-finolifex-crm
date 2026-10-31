@@ -5,7 +5,7 @@
    at all because the box is easy to skip. It is the target date less
    today, and the firm asked for it to be worked out.
 
-   Three forms raise a goal — CMS Goal Planning, the one a completed
+   Three forms raise a goal — CMS Goal Investment, the one a completed
    DBT offers, and the one a transaction offers once its units are
    allotted — and they were three copies that had already drifted.
    They are one now, which is how all three got this at once. */

@@ -1,6 +1,6 @@
 /* THE INPUT FORM IS OPEN DOWN THE PAGE, NOT SHUT INTO HEADINGS.
 
-   Goal Based Planning's form moved out of a dialog onto a page of its
+   Goal Based Investment's form moved out of a dialog onto a page of its
    own, and arrived there still folded into three headings with a
    question count beside each. A page an adviser works top to bottom
    is read, not navigated: shut, it is the dialog again with more

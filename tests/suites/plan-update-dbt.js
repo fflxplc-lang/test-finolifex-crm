@@ -253,7 +253,7 @@ suite(async t => {
     return 'one column \u2014 ' + r.ths.join(' \u00b7 ');
   });
 
-  t.section('Goal Based Planning, which has no execution page of its own');
+  t.section('Goal Based Investment, which has no execution page of its own');
 
   await t.step('its allocation is the agreed money, and Update DBT writes it down', async () => {
     const r = await t.eval(async ()=>{
@@ -283,7 +283,7 @@ suite(async t => {
               sheets: dbts.map(d=>(allocationForDbt(d.id)||{}).id).filter(Boolean),
               id: l.id, roundN: round.n};
     });
-    if(!r.noBench) throw new Error('Goal Based Planning grew a workbench, so this tests the wrong thing');
+    if(!r.noBench) throw new Error('Goal Based Investment grew a workbench, so this tests the wrong thing');
     if(r.n !== 2) throw new Error(r.n + ' DBTs: ' + r.kinds.join(', '));
     if(r.kinds.join(',') !== 'Lumpsum,SIP') throw new Error('kinds: ' + r.kinds.join(', '));
     if(r.amounts.join(',') !== '12000,600000') throw new Error('amounts: ' + r.amounts.join(', '));

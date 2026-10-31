@@ -51,7 +51,7 @@ suite(async t => {
     })()`));
     if(r.modal) throw new Error('it still came up in a dialog');
     if(r.view !== 'planform') throw new Error('it navigated to "' + r.view + '"');
-    if(!/Goal Based Planning/.test(r.title)) throw new Error('the page is headed "' + r.title + '"');
+    if(!/Goal Based Investment/.test(r.title)) throw new Error('the page is headed "' + r.title + '"');
     if(!r.boxes) throw new Error('the page drew no questions');
     if(!r.onScreen) throw new Error('the form is drawn but does not read as on screen');
     return r.boxes + ' question boxes down a page headed "' + r.title + '"';

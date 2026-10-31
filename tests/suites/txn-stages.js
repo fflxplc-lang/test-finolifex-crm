@@ -175,7 +175,7 @@ suite(async t => {
        copy of the goal, which would be a second source for it. */
     if(r.storedOnTxn.sort().join(',') !== 'goalId,goalMappedAt')
       throw new Error('the transaction stores ' + r.storedOnTxn.join(', ') + ' about the goal');
-    return 'no goal on file → created in CMS Goal Planning and mapped; 100%, and the transaction holds its id, not a copy of it';
+    return 'no goal on file → created in CMS Goal Investment and mapped; 100%, and the transaction holds its id, not a copy of it';
   });
 
   await t.step('with goals on file it offers them, read live from CMS', async () => {

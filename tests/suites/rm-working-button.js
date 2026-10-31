@@ -8,7 +8,7 @@
 
    The two things this has to get right. The button is gone only where
    there is somewhere else to press it: a blueprint with a workbench of
-   its own loses it, Goal Based Planning, which has none, keeps it. And
+   its own loses it, Goal Based Investment, which has none, keeps it. And
    the STEP is untouched — preparing the plan from the workbench still
    moves the lead to Plan Prepared, which is the whole point of taking
    the button away rather than the route. */
@@ -75,9 +75,9 @@ suite(async t => {
         throw new Error(k.toUpperCase() + ' still offers it on the stage: ' + r[k].join(', '));
     });
     if(r.mg.indexOf('Prepare Plan') < 0)
-      throw new Error('Goal Based Planning has no workbench and now has no way to prepare at all: '
+      throw new Error('Goal Based Investment has no workbench and now has no way to prepare at all: '
         + (r.mg.join(', ') || 'nothing offered'));
-    return 'gone for FSL, 7 Events and GAB — kept for Goal Based Planning, which has nowhere else to press it';
+    return 'gone for FSL, 7 Events and GAB — kept for Goal Based Investment, which has nowhere else to press it';
   });
 
   await t.step('and the step itself is still there, wherever the lead stands', async () => {

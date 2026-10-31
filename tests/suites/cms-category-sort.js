@@ -75,16 +75,16 @@ suite(async t => {
         return m ? Number(m[1]) : null;
       };
       const all = visibleRecords(DB.clients, c=>c.rmName, c=>c.branch).filter(c=>!c.deletedAt);
-      return {charlie: n('Charlie'), delta: n('Delta'), alpha: n('Alpha'),
+      return {charlie: n('Charlie'), delta: n('Dormant'), alpha: n('Alpha'),
         other: n('Not a configured tier'), none: n('No category'), total: all.length,
         shown: html};
     });
     if(r.charlie === null || r.delta === null) throw new Error('the category chips are not on the page');
     if(r.charlie < 2) throw new Error('Charlie counts ' + r.charlie + ', so CHARLIE is still being missed');
-    if(r.delta < 2) throw new Error('Delta counts ' + r.delta + ', so DELTA is still being missed');
+    if(r.delta < 2) throw new Error('Dormant counts ' + r.delta + ', so the old DELTA is still being missed');
     if(r.other < 1) throw new Error('an unconfigured category is not counted as one');
     if(r.none < 1) throw new Error('a client with no category is not counted');
-    return 'Charlie ' + r.charlie + ' · Delta ' + r.delta + ' · not a tier ' + r.other
+    return 'Charlie ' + r.charlie + ' · Dormant ' + r.delta + ' · not a tier ' + r.other
       + ' · no category ' + r.none;
   });
 
@@ -149,10 +149,10 @@ suite(async t => {
         oddDropped: (plan.rows[1].dropped[0] || {}).label || '',
         oddWhy: (plan.rows[1].dropped[0] || {}).why || ''};
     }, {FEED});
-    if(r.good !== 'Delta') throw new Error('"DELTA" would import as "' + r.good + '"');
+    if(r.good !== 'Dormant') throw new Error('"DELTA" would import as "' + r.good + '"');
     if(r.oddVerdict !== 'add') throw new Error('an unknown tier took the whole client down');
     if(!/Category/i.test(r.oddDropped)) throw new Error('an unknown tier was imported anyway');
-    return '"DELTA" lands as "Delta"; a tier the firm has never configured is left for correction '
+    return '"DELTA" lands as "Dormant", the tier\'s new name; a tier the firm has never configured is left for correction '
       + 'and the client still imports';
   });
 

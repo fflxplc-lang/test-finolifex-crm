@@ -24,7 +24,7 @@ const SEED = async () => {
   const mk = (i) => {
     const c = {id:uid('CMS'), cmsName:'ZZ Dash ' + i, rmName:currentUser, branch:br,
       kycStatus: i % 2 ? 'Validated' : 'Pending',
-      clientCategory: ['Alpha','Beta','Charlie','Delta'][i % 4],
+      clientCategory: ['Alpha','Beta','Charlie','Dormant'][i % 4],
       createdAt:new Date().toISOString(), createdBy:currentUser};
     initState('CMS', c); DB.clients.push(c);
     return c;
@@ -146,7 +146,7 @@ suite(async t => {
       setMdCut('clients','product');
       return labels;
     });
-    const cats = ['Alpha','Beta','Charlie','Delta'];
+    const cats = ['Alpha','Beta','Charlie','Dormant'];
     if(!r.some(l=>cats.indexOf(l) >= 0)) throw new Error('the category cut shows ' + r.join(', '));
     return 'category cut shows ' + r.join(', ');
   });

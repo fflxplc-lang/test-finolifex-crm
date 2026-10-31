@@ -1,6 +1,6 @@
 /* TWO COLUMNS THAT ARE THE ADVISER'S, AND A SECTION THAT IS NOBODY'S.
 
-   The firm asked for two things on Goal Based Planning.
+   The firm asked for two things on Goal Based Investment.
 
    Inflation % and Expected Returns % are the adviser's to set. A
    client is asked what they want and when, not what rate to price it
@@ -11,7 +11,7 @@
 
    And Financial Freedom / Financial Independence leaves the blueprint
    altogether — the four questions, the fund they priced, its line in
-   the plan table and its own card. Goal Based Planning plans for the
+   the plan table and its own card. Goal Based Investment plans for the
    goals it is given; freedom has a blueprint of its own.
 
    The raw browser, signed in by hand, because the two pages have to

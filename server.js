@@ -3224,6 +3224,16 @@ function validationSetting(kind, what) {
   const v = row && row.value;
   return (typeof v === 'string' && v.trim()) ? v : VALIDATION_DEFAULTS[kind][what];
 }
+/* The same tidying the page does: a space, the country code or a leading
+   0 around ten digits is still that mobile number. */
+function tidyMobile(v) {
+  const s = String(v).trim();
+  if (!/^[+0-9 ()\-.]+$/.test(s)) return s;
+  const d = s.replace(/[^0-9]/g, '');
+  if (d.length === 12 && d.startsWith('91')) return d.slice(2);
+  if (d.length === 11 && d.startsWith('0')) return d.slice(1);
+  return d.length === 10 ? d : s;
+}
 /* { ok, value, message }. A blank passes — whether an answer is required
    is the form's question, not this one's. An unreadable pattern turns the
    check off rather than locking everybody out of their own forms. */
@@ -3233,6 +3243,7 @@ function checkValue(kind, raw) {
   let value = raw === null || raw === undefined ? '' : String(raw);
   if (spec.upper) value = value.toUpperCase();
   if (!value.trim()) return { ok: true, value };
+  if (kind === 'mobile') value = tidyMobile(value);
   let re;
   try { re = new RegExp(validationSetting(kind, 'pattern')); } catch (e) { return { ok: true, value }; }
   return re.test(value) ? { ok: true, value }
@@ -3600,7 +3611,8 @@ function notifyOwnerOfSubmission(link, row) {
   if (!owner || !owner.userId) return;
   // The link carries the form's own name; a link minted before it did falls
   // back to its type, tidied rather than printed raw.
-  const what = (link.formName || String(link.type || 'form').replace(/_/g, ' ')).toString();
+  const what = (link.formName || String(link.type || 'form').replace(/_/g, ' ')).toString()
+    .replace(/Goal Based Planning/g, 'Goal Based Investment'); // renamed; older links carry the old name
   const list = storeList('notifications');
   list.push({
     id: 'NTF-' + Math.random().toString(36).slice(2, 7).toUpperCase() + Date.now().toString().slice(-4),

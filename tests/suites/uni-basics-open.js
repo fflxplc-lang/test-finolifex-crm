@@ -102,7 +102,7 @@ const BASE = 'http://localhost:' + PORT;
       return 'still shut after the page redrew itself';
     });
 
-    /* Goal Based Planning is not on this list on purpose: its client link
+    /* Goal Based Investment is not on this list on purpose: its client link
        draws the plain form page, which has no "Your details" card to open.
        The three that share the unified page are the three checked. */
     await step('the other blueprints on this page open too', async () => {

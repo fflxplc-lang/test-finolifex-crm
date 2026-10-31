@@ -3759,12 +3759,24 @@ function aadhaarCheck(raw){
   if(/^[2-9][0-9]{11}$/.test(d) && verhoeffOk(d)) return {ok:true, value:d.slice(-4)};
   return {ok:false, value:v};
 }
-/* A PAN typed in lower case is the same PAN. Nothing else is rewritten:
-   stripping spaces out of a mobile number would hide the mistake rather
-   than report it, and the brief asks for it to be refused. */
+/* A PAN typed in lower case is the same PAN. A mobile is the same
+   number with a space or two in it, a stray space after it (phones add
+   one when they autofill), or the country code in front: +91 88879 82965
+   is 8887982965. Clients were refused for that while typing a perfectly
+   good number. Anything that is not ten digits once that is taken off is
+   still refused. The server tidies a mobile the same way. */
+function tidyMobile(v){
+  const s = String(v).trim();
+  if(!/^[+0-9 ()\-.]+$/.test(s)) return s;
+  const d = s.replace(/[^0-9]/g, '');
+  if(d.length === 12 && d.startsWith('91')) return d.slice(2);
+  if(d.length === 11 && d.startsWith('0')) return d.slice(1);
+  return d.length === 10 ? d : s;
+}
 function normaliseValue(kind, raw){
   const v = raw===null || raw===undefined ? '' : String(raw);
   const spec = VALIDATION_KINDS[kind];
+  if(kind === 'mobile') return v.trim() ? tidyMobile(v) : v;
   if(spec && spec.upper) return v.toUpperCase().trim();
   return (spec && (spec.re || spec.check)) ? v.trim() : v;
 }
@@ -3812,9 +3824,27 @@ function validationKindOf(f){
 function validationErrors(fields, values){
   const out = [];
   (fields || []).forEach(f=>{
+    const key = f.k !== undefined ? f.k : f.key;
+    /* A table's columns are checked too, row by row — the server reads
+       every mobile inside one, so a bad number there used to come back as
+       "could not be saved" with no word of which row. What passes is
+       stored tidied, the same as the server would store it. */
+    if(f.t === 'table' && Array.isArray((values || {})[key])){
+      values[key].forEach((row, i)=>{
+        if(!row || typeof row !== 'object') return;
+        (f.cols || []).forEach(c=>{
+          const kind = validationKindOf(c); if(!kind) return;
+          const got = checkValue(kind, row[c.k]);
+          if(got.ok){ if(row[c.k] !== undefined && got.value !== row[c.k]) row[c.k] = got.value; }
+          else out.push({k: key, label: (f.rowLabel || 'Row') + ' ' + (i+1) + ', ' + (c.l || c.k), message: got.message});
+        });
+      });
+      return;
+    }
     const kind = validationKindOf(f); if(!kind) return;
-    const got = checkValue(kind, (values || {})[f.k !== undefined ? f.k : f.key]);
-    if(!got.ok) out.push({k: f.k !== undefined ? f.k : f.key, label: f.l || f.label || f.k, message: got.message});
+    const got = checkValue(kind, (values || {})[key]);
+    if(!got.ok) out.push({k: key, label: f.l || f.label || f.k, message: got.message});
+    else if(values && values[key] !== undefined && typeof values[key] === 'string' && got.value !== values[key]) values[key] = got.value;
   });
   return out;
 }
@@ -4858,14 +4888,14 @@ function settingDefs(){
     {key:'arc.categories', module:'ARC', label:'Client Categories', type:'list', group:'Client Categories',
      desc:'Review tiers. Adding one here makes it available on the client record, in ARC rules, filters and reports — no deploy needed.',
      itemLabel:'Category',
-     def:['Alpha','Beta','Charlie','Delta'].map(l=>listItem(l))},
+     def:['Alpha','Beta','Charlie','Dormant'].map(l=>listItem(l))},
     {key:'arc.rules', module:'ARC', label:'Review Frequency Rules', type:'list', group:'Review Frequency Rules',
      desc:'How far ahead the next review is booked when a review meeting is completed. Changing a rule affects FUTURE scheduling only — meetings already booked are left exactly as they are.',
      itemLabel:'Rule', ruleList:true,
      def:[listItem('Alpha',{category:'Alpha', intervalValue:3, intervalUnit:'Months', isAutomatic:true}),
           listItem('Beta',{category:'Beta', intervalValue:6, intervalUnit:'Months', isAutomatic:true}),
           listItem('Charlie',{category:'Charlie', intervalValue:12, intervalUnit:'Months', isAutomatic:true}),
-          listItem('Delta',{category:'Delta', intervalValue:0, intervalUnit:'Months', isAutomatic:false})]},
+          listItem('Dormant',{category:'Dormant', intervalValue:0, intervalUnit:'Months', isAutomatic:false})]},
     {key:'arc.meetingTypes', module:'ARC', label:'Review Meeting Types', type:'list', group:'Meeting Types',
      desc:'Meeting types that count as an annual review and drive the ARC cycle.', itemLabel:'Meeting Type',
      def:[listItem('Annual Review',{isReview:true}), listItem('Portfolio Review',{isReview:true}),
@@ -4997,7 +5027,14 @@ function cfgLabels(key){ return cfgList(key).map(i=>i.label); }
    So a stored value is matched to its configured option the way the
    import matched it, and shown under the spelling the firm configured.
    Nothing on the record is rewritten. */
-const cfgNorm = s => String(s == null ? '' : s).toLowerCase().replace(/[^a-z0-9]/g, '');
+/* Renamed options: the fourth review tier Delta → Dormant, and the
+   allocation source Goal Planning → Goal Investment. A record, a file or
+   a rule still saying the old word means the same option. */
+const CFG_RENAMED = {delta:'dormant', goalplanning:'goalinvestment'};
+const cfgNorm = s => {
+  const v = String(s == null ? '' : s).toLowerCase().replace(/[^a-z0-9]/g, '');
+  return CFG_RENAMED[v] || v;
+};
 function cfgIs(key, value, label){
   const v = cfgNorm(value);
   return !!v && v === cfgNorm(label);
@@ -5098,7 +5135,7 @@ function referralFieldSources(key){
 }
 /* Kept only as the migration source for installs predating configured categories —
    the live list is the arc.categories setting. */
-const LEGACY_CLIENT_CATEGORIES = {'A':'Alpha','B':'Beta','C':'Charlie','D':'Delta'};
+const LEGACY_CLIENT_CATEGORIES = {'A':'Alpha','B':'Beta','C':'Charlie','D':'Dormant'};
 const KYC_STATUSES = ['Not Registered','Registered','On Hold','Validated'];
 const REVIEW_TYPES = ['Portfolio Review','Goal Review','Risk Profile Review','Asset Allocation Review','Insurance Review','SIP Review','Annual ISEQ Review'];
 const TASK_TYPES = ['KYC Update','Nominee Update','Bank Update','Mobile/Email Update','SIP Modification','Redemption Request','Purchase Request','Switch Request','Statement Request','Insurance Service','Document Collection','Follow-up Call','Warm Up Call','Warm Up Meeting','Schedule Intro Meeting','FBP Data Input Meeting','FBP Preparation','FBP Manager Approval','Share CIF Forms','Validate KYC','Create KYC','Prepare Physical KYC Documents','Onboarding Process','Find Root Cause UCC','Mandate Registration Process','Check Mandate Status','Initiate Transaction','Check Investment Status','Share Report to Client','Restart Initiate Transaction','Do Family Mapping','Share Login Credentials','Prepare Review Form','Do Internal Review','Prepare Review Agenda','Schedule Client Meeting','ISEQ Follow-up','SOS Meeting','Review Asset Allocation','C&T Form Follow-up','Meeting Action Point','Resolve Allocation Query','FQ Assessment Follow-up','Client Meeting Request','Query Resolution','Other'];
@@ -5620,7 +5657,7 @@ const ALLOC_PLANS = ['Regular Plan'];
 /* SEBI's riskometer bands, which is what the scheme documents actually print. */
 const ALLOC_RISK_LEVELS = ['Low','Low to Moderate','Moderate','Moderately High','High','Very High'];
 const ALLOC_FUND_CATEGORIES = ['Large Cap','Large & Mid Cap','Mid Cap','Small Cap','Flexi Cap','Multi Cap','Focused','ELSS','Index','Hybrid','Balanced Advantage','Debt','Liquid','Gold','International','Other'];
-const ALLOC_SOURCES = ['Review Meeting','Client Request','Goal Planning','Rebalancing','Fresh Onboarding','Other'];
+const ALLOC_SOURCES = ['Review Meeting','Client Request','Goal Investment','Rebalancing','Fresh Onboarding','Other'];
 /* Where the money is actually placed. The same list the onboarding stage reads:
    an account has to be live on a platform before an order can go through it. */
 /* WHERE THE FIRM ACTUALLY PLACES AN ORDER. This shipped as the
@@ -7009,7 +7046,7 @@ function iseqScoreText(v){
 /* The six blueprints the Investment Approach offers, in the two categories the
    workflow sheet names. Each one has an Input Form (the questions below, held
    in Setup -> Forms like every other form) and an engine that turns those
-   answers into a plan. GAB and Goal Based Planning follow the firm's own
+   answers into a plan. GAB and Goal Based Investment follow the firm's own
    spreadsheets, formula for formula; the rest are built on the same standard
    time-value arithmetic, and their forms are worth checking against these. */
 /* The firm's own name for its own blueprint, in full. "7 Events" is the
@@ -7023,7 +7060,7 @@ const SE_SHORT = '7 Events';
 const APPROACH_FORMS = {
   GAB:        {label:'GAB — Golden Age Blueprint',      approach:'Transformation', engine:'gab',
                blurb:'Retirement income, bucketed by when it is needed.'},
-  MULTIGOAL:  {label:'Goal Based Planning',             approach:'Transformation', engine:'multigoal',
+  MULTIGOAL:  {label:'Goal Based Investment',             approach:'Transformation', engine:'multigoal',
                blurb:'Several goals at once, plus financial freedom.'},
   // 7 Events is a concept of the firm's own, and not a variant of GAB: its
   // input sheet is a workbook rather than a list of questions, so its
@@ -7064,7 +7101,7 @@ const APPROACH_FORMS = {
    list and no fork any more: a lead reaches one of these four, whichever route
    the conversation took.
 
-   The order is the firm's, not an alphabet or a size: Goal Based Planning
+   The order is the firm's, not an alphabet or a size: Goal Based Investment
    first because it fits the most conversations, then the ladder, then the
    seven events, then the Golden Age. The rail lists them the same way
    (BLUEPRINT_RAIL_ORDER), so there is one order for the blueprints and
@@ -7336,7 +7373,7 @@ const BUILTIN_FORMS = {
                  desc:'The onboarding form sent at the CMS CIF stage. Add more CIF formats and the stage will ask which one to send.'},
   GAB:          {name:'GAB — Golden Age Blueprint', category:'Plan', module:'LMS', sheet:'gab',
                  desc:'Fourteen sections of the family\u2019s own figures, and the nine steps the workbook runs over them. What it asks, who it asks and every rate it leans on are in Setup \u2192 GAB.'},
-  MULTIGOAL:    {name:'Goal Based Planning', category:'Plan', module:'LMS',
+  MULTIGOAL:    {name:'Goal Based Investment', category:'Plan', module:'LMS',
                  desc:'Input Form for several goals at once plus financial freedom — suggested for a lead under 50.'},
   INSPIRING:    {name:'FSL — Financial Security Level', category:'Plan', module:'LMS',
                  desc:'Input Form for the one goal that has to be secured, and what securing it takes.'},
@@ -9367,7 +9404,7 @@ async function migrateMultiGoalBlueprint(){
   if(!dropped && !hidden && !added && !marked) return 0;
   DB.config.formTemplates.MULTIGOAL = next;
   await save('config');
-  await logAudit('Forms', 'MULTIGOAL', 'Goal Based Planning brought to the firm\u2019s wording', [
+  await logAudit('Forms', 'MULTIGOAL', 'Goal Based Investment brought to the firm\u2019s wording', [
     {field:'Financial Freedom', oldValue: dropped + ' field(s)', newValue:'removed from the blueprint'},
     {field:'Rates', oldValue:'asked of the client', newValue:'the adviser\u2019s, on RM Working'},
     {field:'Added', oldValue:'', newValue: added + ' question(s) \u2014 Your details and Cashflow'}]);
@@ -9941,7 +9978,7 @@ const BLUEPRINT_LMS = buildLinearBlueprint([
   // blueprint is chosen, because that is when we know what to gather.
   {id:'firstMeetingMomSent', label:'Minutes of Meeting Sent', fwdLabel:'Send Minutes of Meeting'},
   // Stage 10 — the Investment Approach. One list of four blueprints: FSL,
-  // 7 Events, GAB and Goal Based Planning. Whichever is chosen, the lead
+  // 7 Events, GAB and Goal Based Investment. Whichever is chosen, the lead
   // carries straight on down this one spine.
   {id:'investmentApproach', label:'Investment Approach', fwdLabel:'Investment Approach'},
   // ---- the blueprint journey ----
@@ -10879,7 +10916,7 @@ function planIsFinal(record){
 /* CHANGING A PLAN AFTER THE SENIOR HAS APPROVED IT.
 
    An approved plan used to be shut to the adviser: the RM's half of the
-   sheet locked, the rates locked, and on Goal Based Planning the page let
+   sheet locked, the rates locked, and on Goal Based Investment the page let
    you add a goal and then quietly dropped it. Now the adviser presses
    "Edit approved plan" (or simply prepares the plan again) and the round
    reopens for editing. What the senior approved is kept — who, when, the
@@ -12006,6 +12043,36 @@ function rmsMeetingHistoryHtml(record){
 /* Portfolio Review: where the money is, and the goals it is meant to fund.
    The same reading as the firm's portfolio view, on the client this review
    is about. */
+/* THE CLIENT REVIEW REPORT, WHERE A REVIEW IS DONE.
+
+   The report used to open only from the dashboard's client book and the
+   upload page. It is shown here, on the client and on each review, as a
+   card that opens the whole report when clicked — the review workbook
+   filled with the client's latest uploaded holdings, SIPs and the
+   reviewer's notes. Each exported report is listed under it; a row opens
+   (downloads) that report. Who may open it is the same rule as the
+   client: someone who cannot open the client cannot open its report. */
+function reviewReportCardHtml(clientId){
+  const c = DB.clients.find(x=>x.id===clientId);
+  if(!c) return `<div class="empty">This review is not attached to a client.</div>`;
+  if(typeof ReviewReport === 'undefined') return `<div class="empty">The review report is not available on this page.</div>`;
+  if(typeof recordOpenToMe === 'function' && !recordOpenToMe('CMS', c))
+    return `<div class="empty">You do not have access to this client\u2019s review report.</div>`;
+  const list = ReviewReport.reports(c.id) || [];
+  const last = list[0];
+  const holdings = (DB.platformHoldings||[]).filter(h=>!h.deletedAt && h.clientId===c.id);
+  const asOf = holdings.map(h=>h.asOf||'').filter(Boolean).sort().slice(-1)[0] || '';
+  return `<div class="card prof-card row-clickable" id="rrCard" role="button" tabindex="0" style="cursor:pointer"
+      onclick="ReviewReport.open('${esc(c.id)}')" onkeydown="if(event.key==='Enter')ReviewReport.open('${esc(c.id)}')">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
+        <div><div class="section-title" style="margin:0">Client Review Report</div>
+          <div class="small-note" style="margin:4px 0 0">${esc(clientDisplayName(c))} \u00b7 ${holdings.length
+            ? holdings.length + ' holding' + (holdings.length===1?'':'s') + (asOf ? ', data as on ' + fmtDate(asOf) : '')
+            : 'no platform data uploaded yet'}${last ? ' \u00b7 last exported ' + fmtDate(String(last.at).slice(0,10)) : ''}</div></div>
+        <span class="btn primary">Open full report \u203a</span>
+      </div></div>
+    <div class="card prof-card">${ReviewReport.previousHtml(c.id)}</div>`;
+}
 function rmsPortfolioTabHtml(record){
   const client = DB.clients.find(c=>c.id===record.clientId);
   if(!client) return `<div class="empty">This review is not attached to a client.</div>`;
@@ -14301,7 +14368,7 @@ async function migrateWarmCallsOutOfMeetings(){
    are locked: the wording is editable, the key is not, because a plan
    built on a renamed field is a plan built on nothing.
 
-   The GAB and Goal Based Planning engines follow the firm's spreadsheets exactly —
+   The GAB and Goal Based Investment engines follow the firm's spreadsheets exactly —
    the same NPV, the same buckets, the same FV/PV/PMT. The other four use
    the same arithmetic on their own inputs.
    ===================================================================== */
@@ -14603,10 +14670,10 @@ function computeGabPlan(a){
     allocationGuide: buckets.map(b=>({label:b.label, assetClass:b.assetClass, amount:b.recommended})),
   };
 }
-/* -------------------------------------------------- Goal Based Planning */
+/* -------------------------------------------------- Goal Based Investment */
 /* Financial Freedom came off this blueprint at the firm's asking —
    the questions, the fund it priced, its line in the table and its
-   own card. Goal Based Planning plans for the goals it is given and
+   own card. Goal Based Investment plans for the goals it is given and
    nothing else; freedom has a blueprint of its own. Life expectancy
    went with it, having been asked for only to work out how many years
    of freedom to fund. */
@@ -14711,7 +14778,7 @@ function computeIncomePlan(a){
    7 EVENTS — THE ENGINE.
 
    A faithful port of the firm's "7 Events" workbook: Input → Asset
-   Mapping → Goal Planning → Freedom Blueprint → Execution Plan. The cell
+   Mapping → Goal Investment → Freedom Blueprint → Execution Plan. The cell
    references in the comments point at the workbook, and the arithmetic is
    Excel's own FV / PV / PMT so a figure here can be checked against a
    figure there.
@@ -14788,7 +14855,7 @@ const SE_ENGINE = (function () {
     if (days < 0) return null;
     return Math.floor(days / 365.25);
   }
-  function matrix(G, type, years) { // Goal Planning V188:AE190 lookup, now a configured grid
+  function matrix(G, type, years) { // Goal Investment V188:AE190 lookup, now a configured grid
     if (isBlank(type) || !ok(years)) return '';
     var t = String(type).trim().toUpperCase();
     var row = (G.matrix || []).filter(function (r) { return String(r.code || '').toUpperCase() === t; })[0];
@@ -14797,7 +14864,7 @@ const SE_ENGINE = (function () {
     return (row.cells || [])[u] || '';
   }
 
-  /* ---------- existing-investment block (Goal Planning J:R per goal, 3 sub-rows) ---------- */
+  /* ---------- existing-investment block (Goal Investment J:R per goal, 3 sub-rows) ---------- */
   function invFV(inv, years) { // =IFERROR(FV(P/Q, E*Q, -N, -M, 1), 0)
     var q = n(inv.mode), p = n(inv.roi);
     if (!(q > 0) || !ok(years)) return 0;
@@ -16222,11 +16289,11 @@ function seMissing(who, ctx, opts){
    Five steps in the order the firm works them, and each one opens only
    when the step before it is done:
 
-     Input  →  Asset Mapping  →  Goal Planning  →  Blueprint · Execution
+     Input  →  Asset Mapping  →  Goal Investment  →  Blueprint · Execution
 
-   Asset Mapping comes before Goal Planning on purpose: what is left after
+   Asset Mapping comes before Goal Investment on purpose: what is left after
    the family's existing assets have been pointed at their goals is the
-   only thing Goal Planning has to plan for. Preparation is the last step,
+   only thing Goal Investment has to plan for. Preparation is the last step,
    and from there the plan goes to the Immediate Senior for approval
    through the same gate every other blueprint uses — there is no
    self-approval here.
@@ -19221,7 +19288,7 @@ function sevenEventsPdfBody(b, h, record, round){
   /* ---- 4. goal planning, goal by goal ----------------------------- */
   const goals = d.goals || [];
   if(goals.length){
-    b.push({t:'band', text:'Goal planning',
+    b.push({t:'band', text:'Goal investment',
       sub:'Every goal the plan carries, what it costs, what the family’s own assets already put against it, and how far that gets them.'});
     const byKey = {}; (d.bpGoals||[]).forEach(g=>{ byKey[g.name] = g; });
     const mapped = {}; (cover||[]).forEach(g=>{ mapped[g.key] = g; });
@@ -21602,7 +21669,7 @@ async function planRaiseDbtHierarchy(record, round){
 }
 /* UPDATE DBT FOR A BLUEPRINT WITH NO WORKBENCH OF ITS OWN.
 
-   Goal Based Planning has no Required Execution Plan page to agree two
+   Goal Based Investment has no Required Execution Plan page to agree two
    figures on — its plan is read on the plan output, and what the family
    is committing to is the allocation underneath it. So the agreed money
    is that allocation, split the way the rest of BOSS splits it: the
@@ -26359,7 +26426,7 @@ function openLeadFormFill(leadId, type){
 /* =====================================================================
    THE INPUT FORM OF A BLUEPRINT WITH NO WORKBOOK, ON A PAGE.
 
-   Goal Based Planning's questions came up in a dialog: three headings
+   Goal Based Investment's questions came up in a dialog: three headings
    to open one at a time, a box the size of the questions rather than
    the page, and Cancel and Save at the foot of it. Every other
    blueprint opens its Input Form as a page, and the firm asked for
@@ -26452,7 +26519,7 @@ const PLAN_FORM_STEPS = [['input','Input Form'], ['plan','RM Working'],
    The ladder has had one of these since there was a ladder: after the
    senior signs the advice off, the family are sat down with, and what
    they actually agree to is typed against what the plan asked for.
-   Goal Based Planning had nowhere to do that. Its allocation grid sat
+   Goal Based Investment had nowhere to do that. Its allocation grid sat
    on the Plan Output page instead, which asked an adviser to place
    money into schemes on the page where the advice was still being read
    and sent up for approval.
@@ -27313,18 +27380,19 @@ async function submitSendReport(module, recordId, transitionId){
     label:'Investment Report Sent to Client', refId: (r&&r.id)||'', attachments,
     extraDetails: [{field:'Order Reference', oldValue:'', newValue: record.transactionOrderRef||'—'}],
   });
-  // "Only after the report has been sent" — a failed send leaves the client at
-  // Unit Allotted, where the work still is.
-  if(!result.sent){
-    alert(mailResultNote(result, 'The report') + '\n\nThe client stays at Unit Allotted until it goes out. Fix the address or the email connector in Setup → Connections and send it again.');
-    return;
-  }
-  record.reportSentAt = new Date().toISOString();
+  /* Email is not what the workflow waits on. With the connector off, or a
+     send that failed, the client still moves on: the letter is in the mail
+     log as Held / Not Sent / Failed, so it can go by hand, and the adviser
+     is told once. Holding the client at Unit Allotted over a switched-off
+     connector left them stuck there. */
+  if(result.sent) record.reportSentAt = new Date().toISOString();
+  else record.reportNotSentAt = new Date().toISOString();
   record.reportAttachmentNames = attachments.map(a=>a.filename);
   await save('clients');
   resetComposeAttachments();
   closeModal();
   await doTransition(module, recordId, transitionId);
+  if(!result.sent) alert(mailResultNote(result, 'The report') + '\n\nThe client has moved on anyway. The letter is in the mail log, so you can send it by hand or again once email is working.');
 }
 /* One action point, as a row: what has to happen, by when, and who owns it.
    Every filled row becomes a real service task on that person's list, which is
@@ -28671,16 +28739,19 @@ async function submitInsuranceStep(recordId, stepId){
     const extra = {Revision: noted.insRevisionReason || '', Amount: insMoney(noted.insRenewalAmount),
       PaidOn: noted.insRenewalPaidOn ? fmtDate(noted.insRenewalPaidOn) : '', ReceiptRef: noted.insRenewalReceiptRef ? ' (receipt ' + noted.insRenewalReceiptRef + ')' : ''};
     const result = await insSendMail(r, st.mail, mailTo, extra, attachments);
-    if(!result.sent){
-      alert(mailResultNote(result, st.mail.what) + '\n\nWhat you entered is saved; the stage has not moved. Fix the address or the email connector and press the step again — or untick “Email the client” if it went another way.');
-      return;
-    }
-    noted._mailed = mailTo;
+    /* A letter that did not go does not hold the stage: it is in the mail
+       log to send by hand, and the adviser is told once the step has moved. */
+    if(result.sent) noted._mailed = mailTo;
+    else window._insMailNote = mailResultNote(result, st.mail.what);
     if(attachments.length && typeof resetComposeAttachments === 'function') resetComposeAttachments();
   }
   window._insNoted = noted;
   closeModal();
   await doTransition('CMS', recordId, stepId);
+  if(window._insMailNote){
+    const note = window._insMailNote; window._insMailNote = '';
+    alert(note + '\n\nThe step has moved on anyway. The letter is in the mail log, so you can send it by hand or again once email is working.');
+  }
 }
 async function insSendMail(r, mail, to, extra, attachments){
   const tpl = mailTemplateOf(mail.template);
@@ -30937,7 +31008,7 @@ function viewFqTests(){ return viewFormsModule('fqtests'); }
    though, not a tab on something else, so it has a module of its own —
    and one sub-module per blueprint, because the four do not share a
    methodology and never should. 7 Events is not a variant of GAB; FSL's
-   ladder is not Goal Based Planning's goals. Each keeps its own engine,
+   ladder is not Goal Based Investment's goals. Each keeps its own engine,
    its own sheet, its own pages and its own vocabulary. What they share is
    the shape of the journey, and that is all this module knows about them.
 
@@ -30957,7 +31028,7 @@ const BLUEPRINT_VIEW_PREFIX = 'bp:';
 /* Short names for the rail — the registry's labels carry their long form
    ("GAB — Golden Age Blueprint"), which is right on a page and too long in
    a sidebar. */
-const BLUEPRINT_SHORT = {SEVENEVENTS:'7 Events', GAB:'GAB · Golden Age', FSL:'FSL · Success Ladder', MULTIGOAL:'Goal Based Planning'};
+const BLUEPRINT_SHORT = {SEVENEVENTS:'7 Events', GAB:'GAB · Golden Age', FSL:'FSL · Success Ladder', MULTIGOAL:'Goal Based Investment'};
 const BLUEPRINT_ICON  = {SEVENEVENTS:'🗓️', GAB:'🌅', FSL:'🪜', MULTIGOAL:'🎯'};
 /* The order the firm reads them in, which is the order the chooser offers
    them in: one order for the blueprints, wherever they are listed, so the
@@ -33557,6 +33628,7 @@ async function loadAll(){
   }
   await migrateAwayFromLevelsAndIncentives();
   await migrateToConfiguredModules();
+  await migrateDeltaToDormant();
   applyTheme(DB.config.company.theme);
   applySidebarStyle(DB.config.company.sidebarStyle);
 }
@@ -33626,6 +33698,46 @@ async function migrateAwayFromLevelsAndIncentives(){
   });
   if(leadHit) await save('leads');
 }
+/* Delta → Dormant. The tier list and its review rule are renamed where
+   the firm saved its own copy, and every client and review that says
+   Delta now says Dormant. Writes only when something still says Delta. */
+async function migrateDeltaToDormant(){
+  const isDelta = v => typeof v === 'string' && /^\s*delta\s*$/i.test(v);
+  let setHit = false;
+  ['arc.categories','arc.rules'].forEach(key=>{
+    const rec = DB.settings && DB.settings[key];
+    if(!rec || !Array.isArray(rec.value)) return;
+    rec.value.forEach(it=>{
+      if(!it) return;
+      if(isDelta(it.label)){ it.label = 'Dormant'; setHit = true; }
+      if(isDelta(it.category)){ it.category = 'Dormant'; setHit = true; }
+    });
+  });
+  if(setHit){
+    DB.settingsAudit.push({id:uid('SAU'), at:new Date().toISOString(), by:'system', key:'arc.categories', module:'ARC',
+      label:'Client Categories', oldValue:'Delta', newValue:'Dormant', note:'The review tier Delta was renamed Dormant.'});
+    await save('settings'); await save('settingsAudit');
+  }
+  /* Goal Planning → Goal Investment, the allocation source. */
+  const gp = DB.settings && DB.settings['alloc.sources'];
+  if(gp && Array.isArray(gp.value) && gp.value.some(it=>it && /^\s*goal planning\s*$/i.test(it.label))){
+    gp.value.forEach(it=>{ if(it && /^\s*goal planning\s*$/i.test(it.label)) it.label = 'Goal Investment'; });
+    await save('settings');
+  }
+  if((DB.recommendations||[]).some(r=>r && /^\s*goal planning\s*$/i.test(r.source))){
+    DB.recommendations.forEach(r=>{ if(r && /^\s*goal planning\s*$/i.test(r.source)) r.source = 'Goal Investment'; });
+    await save('recommendations');
+  }
+  for(const store of ['clients','reviews']){
+    let hit = false;
+    (DB[store] || []).forEach(r=>{
+      if(!r) return;
+      if(isDelta(r.clientCategory)){ r.clientCategory = 'Dormant'; hit = true; }
+      if(isDelta(r.category)){ r.category = 'Dormant'; hit = true; }
+    });
+    if(hit) await save(store);
+  }
+}
 /* One-time move onto the configuration engine. Nothing historical is rewritten except
    the client-category CODE, which is renamed to the configured label so the same tier
    means the same thing everywhere. Meetings, tasks and activities are untouched. */
@@ -33638,7 +33750,7 @@ async function migrateToConfiguredModules(){
   if(clientsChanged){
     await save('clients');
     DB.settingsAudit.push({id:uid('SAU'), at:new Date().toISOString(), by:'system', key:'arc.categories', module:'ARC',
-      label:'Client Categories', oldValue:'A, B, C, D', newValue:'Alpha, Beta, Charlie, Delta',
+      label:'Client Categories', oldValue:'A, B, C, D', newValue:'Alpha, Beta, Charlie, Dormant',
       note:'Migration: existing client category codes renamed to the configured review tiers.'});
     await save('settingsAudit');
   }
@@ -39990,7 +40102,7 @@ function viewLeadDetail(id){
       if(tab==='plan'){
         const type = leadApproachForm(l);
         if(!type) return `<div class="card prof-card"><div class="section-title" style="margin-top:0">Investment Plan</div>
-          <div class="empty" style="padding:22px">No approach chosen yet. The Investment Approach stage picks the blueprint — FSL, the Comprehensive Freedom Blueprint (7 Events), GAB or Goal Based Planning — and opens its Input Form.</div></div>`;
+          <div class="empty" style="padding:22px">No approach chosen yet. The Investment Approach stage picks the blueprint — FSL, the Comprehensive Freedom Blueprint (7 Events), GAB or Goal Based Investment — and opens its Input Form.</div></div>`;
         const tfields = DB.config.formTemplates[type] || [];
         const data = leadFormData(l, type);
         const questionFields = tfields.filter(f=>!FORM_LAYOUT_TYPES.includes(f.t));
@@ -41987,7 +42099,7 @@ function clientPlanSummary(c){
 
    So the goals come out of the client's own blueprint. Each engine names
    them differently — 7 Events has its Freedom Blueprint goal table, GAB and
-   Goal Based Planning a list of goals, FSL the rungs of its ladder — so
+   Goal Based Investment a list of goals, FSL the rungs of its ladder — so
    they are read into one shape here and shown as goals like any other. They
    carry a stable id built from the plan and the goal's own name, so a folio
    tagged to one stays tagged across reloads.
@@ -42027,7 +42139,7 @@ function blueprintGoalsOf(c){
   };
   // 7 Events — the Freedom Blueprint's own goal table: the future cost of each
   (o.bpGoals||[]).forEach(g=>add(g.name, g.fc, g.year));
-  // GAB and Goal Based Planning — a list of goals, each with what it grows to
+  // GAB and Goal Based Investment — a list of goals, each with what it grows to
   (o.goals||[]).forEach(g=>add(g.name || g.goal, g.fv !== undefined ? g.fv
     : (g.futureValue !== undefined ? g.futureValue : g.amount), g.year, g.years));
   // FSL — the rungs of the ladder, each with what reaching it comes to
@@ -42150,14 +42262,14 @@ function viewClientDetail(id){
         ${lexiSignalsCard(c)}
         ${stepperHtml('CMS', c, CMS_PRIMARY_PATH)}${blueprintWidget('CMS', c, {compact:1, onlyIfChoice:1})}`,
     },
-    tabs:[['overview','Overview'],['portfolio','Portfolio'],['goals','Goals'],['transactions','Transactions'],
+    tabs:[['overview','Overview'],['portfolio','Portfolio'],['report','Review Report'],['goals','Goals'],['transactions','Transactions'],
           ['risk','Risk & Reco'],['engagement','Engagement'],['mail','Sent Mail'],['comms','Communications'],['documents','Documents']]
           .concat(c.convertedFromLeadId? [['lms','LMS Journey']] : []),
     timeline:{module:'CMS', recordId:id, history:c.blueprintHistory, opts:{clientId:id}, stateKey:'_clientTlBack'},
     body: tab => ({
       overview: cpOverview, portfolio: cpPortfolio, goals: cpGoals, transactions: cpTransactions,
       risk: cpRiskReco, engagement: cpEngagement, comms: cpComms, documents: cpDocuments,
-      mail: cpSentMail, lms: cpLmsJourney,
+      mail: cpSentMail, lms: cpLmsJourney, report: x=>reviewReportCardHtml(x.id),
     }[tab] || cpOverview)(c),
   });
 }
@@ -43006,7 +43118,7 @@ function goalHorizonPaint(){
 }
 /* THE GOAL'S OWN QUESTIONS, ASKED THE SAME WAY WHEREVER IT IS RAISED.
 
-   There were three copies of this form — CMS Goal Planning, the one a
+   There were three copies of this form — CMS Goal Investment, the one a
    completed DBT offers, and the one a transaction offers when its
    units are allotted — and they had already drifted: two still drew a
    bare <select> for Priority. One form now, so a change to what a goal
@@ -43844,11 +43956,12 @@ function viewReviewDetail(id){
        business, the action points, the tasks, the SOP and the insights),
        Portfolio Review, Mails, Referrals, and the whole meeting history. */
     tabs:[['overview','Overview'],['internal','Internal Review'],['portfolio','Portfolio Review'],
-          ['mail','Mails'],['referrals','Referrals'],['history','RMS History']],
+          ['report','Review Report'],['mail','Mails'],['referrals','Referrals'],['history','RMS History']],
     timeline:{module:'RMS', recordId:id, history:r.blueprintHistory, stateKey:'_rmsTlBack'},
     body: tab => {
       if(tab==='internal') return rmsInternalTabHtml(r);
       if(tab==='portfolio') return rmsPortfolioTabHtml(r);
+      if(tab==='report') return reviewReportCardHtml(cid);
       if(tab==='mail') return rmsMailTabHtml(r);
       if(tab==='mom') return r.meetingSummary
         ? profCard('Minutes of Meeting', [['Summary', esc(r.meetingSummary)], ['Action Points', momActionPointsHtml(r)],
@@ -48292,7 +48405,7 @@ async function runArcCycle(meeting, opts){
   await automationRan('arcCycle', 'Next '+category+' review booked for '+fmtDate(nextDate), client.id);
   return {created:true, meeting:next, reason:`Next ${category} review booked for ${fmtDate(nextDate)} (${rule.intervalValue} ${rule.intervalUnit} on).`};
 }
-/* Schedule a review by hand — Delta clients, a cancelled cycle somebody wants to restart,
+/* Schedule a review by hand — Dormant clients, a cancelled cycle somebody wants to restart,
    or simply booking one early. */
 function openArcScheduleForm(clientId, fromMeetingId){
   const client = DB.clients.find(c=>c.id===clientId);
@@ -48599,7 +48712,7 @@ function openArcPickClient(){
           .sort((a,b)=>a.label.localeCompare(b.label)), '', 'Select\u2026', 'clients',
           null, {always:true})}
     </div>
-    <div class="small-note" style="margin-top:0">Reviews normally book themselves when the previous one is completed. Use this for a Delta client, or to book one early.</div>
+    <div class="small-note" style="margin-top:0">Reviews normally book themselves when the previous one is completed. Use this for a Dormant client, or to book one early.</div>
   `, `<button class="btn" onclick="closeModal()">Cancel</button><button class="btn primary" onclick="(function(){var v=document.getElementById('f_arcClient').value; if(!v){alert('Pick a client.');return;} closeModal(); openArcScheduleForm(v);})()">Continue</button>`);
 }
 /* One review, with its chain and the actions that move it along. */
@@ -51227,7 +51340,7 @@ async function txnMarkRejected(id){
   closeModal();
   render();
 }
-/* ---- goal mapping, against CMS Goal Planning and nothing else ----
+/* ---- goal mapping, against CMS Goal Investment and nothing else ----
    The goals a transaction may be mapped to are the client's goals in
    CMS, read live through clientGoals() — the same function the client
    profile draws its Goals tab from, which also folds in the goals the
@@ -51253,10 +51366,10 @@ function openTxnGoalMap(id){
         ${pickFieldHtml('f_txnGoal', goals.map(g=>({value:g.id,
             label: g.name + (g.target ? ' — target ' + inr(numVal(g.target)) : '')})),
           t.goalId || '', 'Select…', 'goals', null, {always:true})}</div>
-      <div class="small-note">These are ${esc(who)}’s goals in CMS Goal Planning. Not one of them?
+      <div class="small-note">These are ${esc(who)}’s goals in CMS Goal Investment. Not one of them?
         <a href="javascript:void(0)" style="color:var(--info)" onclick="openTxnNewGoal('${esc(id)}')">Create a new goal</a>.</div>
     ` : `
-      <div class="empty" style="padding:18px">${esc(who)} has no goals in CMS Goal Planning yet.</div>
+      <div class="empty" style="padding:18px">${esc(who)} has no goals in CMS Goal Investment yet.</div>
       <button class="btn primary" onclick="openTxnNewGoal('${esc(id)}')">+ Create the first goal</button>
     `}
   `, `<button class="btn" onclick="closeModal()">Not now</button>
@@ -51284,7 +51397,7 @@ async function saveTxnGoalMap(id){
 function openTxnNewGoal(id){
   const t = DB.transactions.find(x=>x.id === id); if(!t) return;
   openModal('New goal for ' + esc(clientName(t.clientId)), `
-    <p style="color:var(--muted);font-size:13px;margin-top:0">This is saved in CMS Goal Planning on
+    <p style="color:var(--muted);font-size:13px;margin-top:0">This is saved in CMS Goal Investment on
       ${esc(clientName(t.clientId))}’s profile, and mapped to this transaction once it is made.</p>
     ${goalFieldsHtml()}
   `, `<button class="btn" onclick="openTxnGoalMap('${esc(id)}')">Back</button>
@@ -58341,7 +58454,7 @@ const ANALYTICS_SOURCES = {
   clients: {label:'Clients', perm:'CMS', list:()=>DB.clients||[], owner:r=>r.assignedTo, branch:r=>r.branch, dims:[
     {id:'kyc', label:'KYC Status', words:['kyc'], value:r=>r.kycStatus},
     {id:'risk', label:'Risk Profile', words:['risk','iseq'], value:r=>r.riskProfile || r.iseqCategory},
-    {id:'goals', label:'Goal Planning', words:['goal','goals','planning'], value:r=>(typeof clientGoals==='function' && clientGoals(r).length) ? 'Goals mapped' : 'No goals mapped'},
+    {id:'goals', label:'Goal Investment', words:['goal','goals','planning'], value:r=>(typeof clientGoals==='function' && clientGoals(r).length) ? 'Goals mapped' : 'No goals mapped'},
     {id:'nominee', label:'Nominee Data', words:['nominee','nomination'], value:r=>analyticsYesNo(r.firstNomineeName, 'Nominee registered', 'No nominee')},
     {id:'mandate', label:'Mandate Status', words:['mandate','nach'], value:r=>r.mandateStatus},
     {id:'iin', label:'IIN Status', words:['iin','ucc','activation','activated'], value:r=>!String(r.canIinNo||r.uccNo||'').trim() ? 'No IIN' : (/^yes$/i.test(String(r.accountActivated||'')) ? 'IIN active' : (/^no$/i.test(String(r.accountActivated||'')) ? 'IIN not active' : 'IIN, activation not recorded'))},
@@ -74894,7 +75007,7 @@ const MAIL_TEMPLATE_DEFS = [
    when:'Sent when the blueprint chosen is FSL.',
    vars:['Name','Form','Blueprint','Link','ISEQ','Forms','RMName','FirmName']},
   {group:'Forms', key:'dataGatheringSendMultigoal', label:'Data gathering form — Goal-Based Blueprint',
-   when:'Sent when the blueprint chosen is Goal Based Planning.',
+   when:'Sent when the blueprint chosen is Goal Based Investment.',
    vars:['Name','Form','Blueprint','Link','ISEQ','Forms','RMName','FirmName']},
   {group:'Forms', key:'fqSend', label:'FQ assessment link',
    when:'Sent from a lead\u2019s qualification stage, and by the Send Form button \u2014 both routes send this one letter. Qualify stays disabled until the result comes back.',
@@ -78194,7 +78307,7 @@ async function submitComposeMail(module, recordId){
 const FORM_SUBMODULES = [
   {id:'CIF',  label:'CIF',  desc:'Client Information Forms — every format the firm onboards with.'},
   {id:'ISEQ', label:'ISEQ', desc:'Investor Suitability questionnaires — the risk profile and its points.'},
-  {id:'Plan', label:'Plans', desc:'The input sheets behind the blueprints — FSL, GAB and Goal Based Planning, whose questions are written here, and the Comprehensive Freedom Blueprint (7 Events), whose sections are set up in Setup → 7 Events. The three sheets retired with the Transaction route are listed too, so plans already written on them still read.'},
+  {id:'Plan', label:'Plans', desc:'The input sheets behind the blueprints — FSL, GAB and Goal Based Investment, whose questions are written here, and the Comprehensive Freedom Blueprint (7 Events), whose sections are set up in Setup → 7 Events. The three sheets retired with the Transaction route are listed too, so plans already written on them still read.'},
   {id:'FQ',   label:'FQ Assessment', desc:'The firm\'s Financial Quotient assessment — written four times over, once per life stage: twelve questions across four quadrants, answered before the lead is qualified. Edited in Setup → FQ Assessment.'},
   {id:'C&T',  label:'C&T',  desc:'The C&T form sent at the RMS review — its references open as leads in LMS.'},
 ];
